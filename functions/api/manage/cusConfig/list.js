@@ -12,49 +12,32 @@ export async function onRequest(context) {
 
     // 解析 URL 中的参数
     let start = parseInt(url.searchParams.get('start'), 10) || 0;
-    let count = parseInt(url.searchParams.get('count'), 10) || 50;
-    let sum = url.searchParams.get('sum') || false;
+    let count = parseInt(url.searchParams.get('count'), 10) || 10;
 
-    // count 为 -1 时，返回所有数据
-    if (count === -1) {
-        const allRecords = await getAllRecords(env);
-        // sum 参数为 true 时，只返回数据总数
-        if (sum === 'true') {
-            return new Response(JSON.stringify(
-                {
-                    sum: allRecords.length
-                }
-            ), {
-                headers: { "Content-Type": "application/json" }
-            });
-        } else {
-            return new Response(JSON.stringify(allRecords), {
-                headers: { "Content-Type": "application/json" }
-            });
-        }
-    }
-
-    // 倒序返回指定数量的数据
-    
     start = Math.max(0, start);  // start 不能小于 0
     count = Math.max(1, count);  // count 不能小于 1
 
     let allRecords = [];
-    
+
     allRecords = await getAllRecords(env);
 
-    // 按照 metadata 中的时间戳倒序排序
-    allRecords.sort((a, b) => {
-        return b.metadata.TimeStamp - a.metadata.TimeStamp;
+    // 按照 IP 分组
+    const dealedData = await dealByIP(allRecords);
+
+    // 按照分组中的count倒序排序
+    dealedData.sort((a, b) => {
+        return b.count - a.count;
     });
 
-    const resultRecords = allRecords.slice(start, start + count);
+    const resultRecords = dealedData.slice(start, start + count);
 
     // 只返回 `count` 条数据
     return new Response(JSON.stringify(resultRecords), {
         headers: { "Content-Type": "application/json" }
     });
+    
 }
+
 
 async function getAllRecords(env) {
     let recordsFetched = 0;
@@ -78,4 +61,21 @@ async function getAllRecords(env) {
     }
 
     return allRecords;
+}
+
+async function dealByIP(data) {
+    let dealedData = [];
+    let ipSet = new Set();
+
+    data.forEach(item => {
+        if (item.metadata?.UploadIP) {
+            ipSet.add(item.metadata.UploadIP);
+        }
+    });
+    ipSet.forEach(ip => {
+        let ipData = data.filter(item => item.metadata?.UploadIP === ip);
+        let count = ipData.length;
+        dealedData.push({ip, count, data: ipData});
+    });
+    return dealedData;
 }
