@@ -16,9 +16,13 @@ export async function onRequest(context) {  // Contents of context object
         data, // arbitrary space for passing data between middlewares
     } = context;
 
+    let fileId = '';
     try {
-        // 解码params.id
-        params.id = decodeURIComponent(params.id);
+        // 解码params.path
+        params.path = decodeURIComponent(params.path);
+        // 从path中提取文件ID
+        fileId = params.path.split(',').join('/');
+
     } catch (e) {
         return new Response('Error: Decode Image ID Failed', { status: 400 });
     }
@@ -29,13 +33,13 @@ export async function onRequest(context) {  // Contents of context object
     whiteListMode = securityConfig.access.whiteListMode;
     
     const url = new URL(request.url);
-    let Referer = request.headers.get('Referer');
+    let Referer = request.headers.get('Referer')
     if (Referer) {
         try {
             let refererUrl = new URL(Referer);
             if (allowedDomains && allowedDomains.trim() !== '') {
-                let allowedDomainsList = allowedDomains.split(',');
-                let isAllowed = allowedDomainsList.some(domain => {
+                const domains = allowedDomains.split(',');
+                let isAllowed = domains.some(domain => {
                     let domainPattern = new RegExp(`(^|\\.)${domain.replace('.', '\\.')}$`); // Escape dot in domain
                     return domainPattern.test(refererUrl.hostname);
                 });
@@ -51,10 +55,16 @@ export async function onRequest(context) {  // Contents of context object
     if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") {
         return new Response('Error: Please configure KV database', { status: 500 });
     }
-    const imgRecord = await env.img_url.getWithMetadata(params.id);
-    // 如果meatdata不存在，只可能是之前未设置KV，且存储在Telegraph上的图片，那么在后面获取时会返回404错误，此处不用处理
+    const imgRecord = await env.img_url.getWithMetadata(fileId);
+    if (!imgRecord) {
+        return new Response('Error: Image Not Found', { status: 404 });
+    }
+    // 如果metadata不存在，只可能是之前未设置KV，且存储在Telegraph上的图片
+    if (!imgRecord.metadata) {
+        imgRecord.metadata = {};
+    }
     
-    const fileName = imgRecord.metadata?.FileName || params.id;
+    const fileName = imgRecord.metadata?.FileName || fileId;
     const encodedFileName = encodeURIComponent(fileName);
     const fileType = imgRecord.metadata?.FileType || null;
     
@@ -63,9 +73,7 @@ export async function onRequest(context) {  // Contents of context object
     if (accessRes.status !== 200) {
         return accessRes; // 如果不可访问，直接返回
     }
-
-
-
+    
     // Cloudflare R2渠道
     if (imgRecord.metadata?.Channel === 'CloudflareR2') {
         // 检查是否配置了R2
@@ -74,7 +82,7 @@ export async function onRequest(context) {  // Contents of context object
         }
         
         const R2DataBase = env.img_r2;
-        const object = await R2DataBase.get(params.id);
+        const object = await R2DataBase.get(fileId);
 
         if (object === null) {
             return new Response('Error: Failed to fetch image', { status: 500 });
@@ -102,7 +110,6 @@ export async function onRequest(context) {  // Contents of context object
 
         return newRes;
     }
-
 
     // S3渠道
     if (imgRecord.metadata?.Channel === "S3") {
@@ -151,20 +158,17 @@ export async function onRequest(context) {  // Contents of context object
         }
     }
 
-
-
     // 外链渠道
     if (imgRecord.metadata?.Channel === 'External') {
         // 直接重定向到外链
         return Response.redirect(imgRecord.metadata?.ExternalLink, 302);
     }
     
-    
     // Telegram及Telegraph渠道
     let TgFileID = ''; // Tg的file_id
     if (imgRecord.metadata?.Channel === 'Telegram') {
         // id为file_id + ext
-        TgFileID = params.id.split('.')[0];
+        TgFileID = fileId.split('.')[0];
     } else if (imgRecord.metadata?.Channel === 'TelegramNew') {
         // id为unique_id + file_name
         TgFileID = imgRecord.metadata?.TgFileId;
@@ -174,7 +178,6 @@ export async function onRequest(context) {  // Contents of context object
     } else {
         // 旧版telegraph
     }
-
     // 构建目标 URL
     if (isTgChannel(imgRecord)) {
         // 获取TG图片真实地址
@@ -187,14 +190,12 @@ export async function onRequest(context) {  // Contents of context object
     } else {
         targetUrl = 'https://telegra.ph/' + url.pathname + url.search;
     }
-
     const response = await getFileContent(request);
     if (response === null) {
         return new Response('Error: Failed to fetch image', { status: 500 });
     } else if (response.status === 404) {
         return await return404(url);
     }
-    
     try {
         const headers = new Headers(response.headers);
         headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
@@ -208,13 +209,11 @@ export async function onRequest(context) {  // Contents of context object
         } else {
             headers.set('Cache-Control', 'public, max-age=604800');
         }
-
         const newRes =  new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
             headers,
         });
-
         if (response.ok) {
             return newRes;
         }
