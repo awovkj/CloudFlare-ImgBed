@@ -1,6 +1,6 @@
 /* ======= 客户端分块上传处理 ======= */
 import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId } from './uploadTools';
-import { TelegramAPI } from './telegramAPI';
+import { TelegramAPI } from '../utils/telegramAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 
 // 初始化分块上传

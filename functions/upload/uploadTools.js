@@ -1,5 +1,5 @@
-import { fetchSecurityConfig } from "./sysConfig";
-import { purgeCFCache } from "./purgeCache";
+import { fetchSecurityConfig } from "../utils/sysConfig";
+import { purgeCFCache } from "../utils/purgeCache";
 
 // 统一的响应创建函数
 export function createResponse(body, options = {}) {

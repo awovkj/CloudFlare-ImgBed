@@ -1,10 +1,10 @@
-import { userAuthCheck, UnauthorizedResponse } from "./utils/userAuth";
-import { fetchUploadConfig, fetchSecurityConfig } from "./utils/sysConfig";
+import { userAuthCheck, UnauthorizedResponse } from "../utils/userAuth";
+import { fetchUploadConfig, fetchSecurityConfig } from "../utils/sysConfig";
 import { createResponse, getUploadIp, getIPAddress, isExtValid, 
-        moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId } from "./utils/uploadTools";
-import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram } from "./utils/chunkUpload";
-import { handleChunkMerge, checkMergeStatus } from "./utils/chunkMerge";
-import { TelegramAPI } from "./utils/telegramAPI";
+        moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId } from "./uploadTools";
+import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram } from "./chunkUpload";
+import { handleChunkMerge, checkMergeStatus } from "./chunkMerge";
+import { TelegramAPI } from "../utils/telegramAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 
@@ -71,7 +71,7 @@ export async function onRequest(context) {  // Contents of context object
 
 
 // 通用文件上传处理函数
-export async function processFileUpload(context, formdata = null) {
+async function processFileUpload(context, formdata = null) {
     const { request, env, url } = context;
 
     // 解析表单数据
