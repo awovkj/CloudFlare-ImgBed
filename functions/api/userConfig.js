@@ -1,6 +1,6 @@
-import { fetchPageConfig } from "./utils/sysConfig";
+import { fetchPageConfig } from "../utils/sysConfig";
 
-export async function onRequestGet(context) {
+export async function onRequest(context) {
     const { request, env, params, waitUntil, next, data } = context;
     const PageConfig = await fetchPageConfig(env);
     const userConfigList = PageConfig.config;
