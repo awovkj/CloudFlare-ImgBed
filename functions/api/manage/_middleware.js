@@ -117,6 +117,11 @@ async function authentication(context) {
     });
   }
 
+  const pathname = new URL(context.request.url).pathname;
+  if (pathname === '/api/manage/stats') {
+    return context.next();
+  }
+
   // 读取安全配置
   securityConfig = await fetchSecurityConfig(context.env);
   basicUser = securityConfig.auth.admin.adminUsername
