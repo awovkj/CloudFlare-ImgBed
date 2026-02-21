@@ -132,12 +132,12 @@
 - 构建 Worker：`npm run build:worker`
 - 部署 Worker：`npm run deploy:worker`
 
-首次使用前请修改 `wrangler.worker.toml` 中的绑定：
+首次使用前请修改 `wrangler.toml` 中的绑定：
 
 - `kv_namespaces.id` / `preview_id` 改为你的 KV Namespace ID
 - `r2_buckets.bucket_name` 改为你的 R2 Bucket 名称
 
-如果还需要绑定 D1、AI 等资源，可继续在 `wrangler.worker.toml` 追加对应 binding。
+如果还需要绑定 D1、AI 等资源，可继续在 `wrangler.toml` 追加对应 binding。
 
 # 4. Tips
 

@@ -121,12 +121,12 @@ This project runs on Pages Functions by default, and is also adapted for single-
 - Build Worker bundle: `npm run build:worker`
 - Deploy Worker: `npm run deploy:worker`
 
-Before first deployment, update bindings in `wrangler.worker.toml`:
+Before first deployment, update bindings in `wrangler.toml`:
 
 - Replace `kv_namespaces.id` / `preview_id` with your KV Namespace IDs
 - Replace `r2_buckets.bucket_name` with your R2 bucket name
 
-If you need D1/AI or other resources, add the corresponding bindings to `wrangler.worker.toml`.
+If you need D1/AI or other resources, add the corresponding bindings to `wrangler.toml`.
 
 # 4. Tips
 
