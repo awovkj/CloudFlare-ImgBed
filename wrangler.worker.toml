@@ -1,0 +1,14 @@
+name = "cloudflare-imgbed-worker"
+main = ".wrangler-worker-build/index.js"
+compatibility_date = "2026-02-21"
+
+assets = { directory = ".", binding = "ASSETS" }
+
+[[kv_namespaces]]
+binding = "img_url"
+id = "00000000000000000000000000000000"
+preview_id = "00000000000000000000000000000000"
+
+[[r2_buckets]]
+binding = "img_r2"
+bucket_name = "imgbed"

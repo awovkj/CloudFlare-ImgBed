@@ -124,6 +124,21 @@
 
 </details>
 
+# 3.1 Cloudflare Workers 搭建
+
+项目默认可直接跑在 Pages Functions，同时已适配为单 Worker 部署方式。
+
+- 本地开发（Workers 模式）：`npm run dev:worker`
+- 构建 Worker：`npm run build:worker`
+- 部署 Worker：`npm run deploy:worker`
+
+首次使用前请修改 `wrangler.worker.toml` 中的绑定：
+
+- `kv_namespaces.id` / `preview_id` 改为你的 KV Namespace ID
+- `r2_buckets.bucket_name` 改为你的 R2 Bucket 名称
+
+如果还需要绑定 D1、AI 等资源，可继续在 `wrangler.worker.toml` 追加对应 binding。
+
 # 4. Tips
 
 - **前端开源**：参见[MarSeventh/Sanyue-ImgHub](https://github.com/MarSeventh/Sanyue-ImgHub)项目。
@@ -155,4 +170,3 @@
   <a href="https://www.cloudflare.com"><img src="static/readme/cloudflare-logo.png" alt="Cloudflare Logo" height="25"></a> <a href="https://edgeone.ai/?from=github"><img src="https://edgeone.ai/media/34fe3a45-492d-4ea4-ae5d-ea1087ca7b4b.png" alt="Tencent Logo" height="25"></a>
 
 - **[速维云](https://www.svyun.com/recommend/AELZ0UeMz8K11Zg7pEXC)**：提供云计算服务资源支持
-

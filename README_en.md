@@ -113,6 +113,21 @@ Provides detailed deployment documentation, feature docs, development plans, upd
 
 </details>
 
+# 3.1 Cloudflare Workers Setup
+
+This project runs on Pages Functions by default, and is also adapted for single-Worker deployment.
+
+- Local development (Workers mode): `npm run dev:worker`
+- Build Worker bundle: `npm run build:worker`
+- Deploy Worker: `npm run deploy:worker`
+
+Before first deployment, update bindings in `wrangler.worker.toml`:
+
+- Replace `kv_namespaces.id` / `preview_id` with your KV Namespace IDs
+- Replace `r2_buckets.bucket_name` with your R2 bucket name
+
+If you need D1/AI or other resources, add the corresponding bindings to `wrangler.worker.toml`.
+
 # 4. Tips
 
 - Frontend is open source, see [MarSeventh/Sanyue-ImgHub](https://github.com/MarSeventh/Sanyue-ImgHub).

@@ -1,4 +1,5 @@
 .wrangler/*
+.wrangler-worker-build/
 data/*
 node_modules
 wrangler.toml
