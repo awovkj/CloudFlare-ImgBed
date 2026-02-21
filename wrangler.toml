@@ -1,4 +1,4 @@
-name = "cloudflare-imgbed-worker"
+name = "cfbed"
 main = ".wrangler-worker-build/index.js"
 compatibility_date = "2026-02-21"
 
