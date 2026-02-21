@@ -277,6 +277,7 @@
 
     <script>
         let charts = {};
+        let statsAbortController = null;
 
         // 生成随机颜色
         function generateColors(count) {
@@ -340,12 +341,20 @@
             const error = document.getElementById('error');
             const content = document.getElementById('content');
 
+            if (statsAbortController) {
+                statsAbortController.abort();
+            }
+            statsAbortController = new AbortController();
+
             loading.style.display = 'block';
             error.style.display = 'none';
             content.style.display = 'none';
 
             try {
-                const response = await fetch('/api/manage/stats');
+                const response = await fetch('/api/manage/stats', {
+                    signal: statsAbortController.signal,
+                    cache: 'no-store'
+                });
                 if (!response.ok) {
                     throw new Error('获取数据失败');
                 }
@@ -359,7 +368,7 @@
                 document.getElementById('avgSize').textContent = avgSize + ' MB';
 
                 // 限制显示前10项
-                const topFileTypes = stats.fileTypesList.slice(0, 10);
+                const topFileTypes = stats.fileTypesList.filter(item => item.count > 0).slice(0, 10);
                 const topChannels = stats.channelsList;
 
                 // 创建文件类型图表
@@ -401,11 +410,12 @@
                 tbody.innerHTML = '';
                 stats.fileTypesList.forEach(item => {
                     const row = tbody.insertRow();
+                    const avgTypeSize = item.count > 0 ? (item.size / item.count).toFixed(2) : '0.00';
                     row.innerHTML = `
                         <td><span class="badge">${item.ext.toUpperCase()}</span></td>
                         <td>${item.count.toLocaleString()}</td>
                         <td>${item.size.toLocaleString()}</td>
-                        <td>${(item.size / item.count).toFixed(2)}</td>
+                        <td>${avgTypeSize}</td>
                     `;
                 });
 
@@ -413,10 +423,15 @@
                 content.style.display = 'block';
 
             } catch (err) {
+                if (err.name === 'AbortError') {
+                    return;
+                }
                 console.error('Error loading stats:', err);
                 loading.style.display = 'none';
-                error.textContent = '加载数据失败: ' + err.message;
+                error.textContent = '加载数据失败: ' + (err.message || '未知错误');
                 error.style.display = 'block';
+            } finally {
+                statsAbortController = null;
             }
         }
 

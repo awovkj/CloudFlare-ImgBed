@@ -1,5 +1,32 @@
 import { getDatabase } from '../../utils/databaseAdapter.js';
 
+const STATS_CACHE_TTL_MS = 30000;
+let cachedStats = null;
+let cachedAt = 0;
+
+function shouldSkipKey(name) {
+    return name.startsWith('manage@') ||
+        name.startsWith('chunk_') ||
+        name.startsWith('index_') ||
+        name.startsWith('operation_');
+}
+
+function extractFileExtension(fileName, fileType) {
+    const dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex !== -1 && dotIndex < fileName.length - 1) {
+        return fileName.substring(dotIndex + 1).toLowerCase();
+    }
+
+    if (fileType.includes('/')) {
+        const mimeExt = fileType.split('/').pop();
+        if (mimeExt && mimeExt !== fileType) {
+            return mimeExt.toLowerCase();
+        }
+    }
+
+    return 'unknown';
+}
+
 // CORS 跨域响应头
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -11,10 +38,31 @@ const corsHeaders = {
 export async function onRequest(context) {
     const { request, env } = context;
 
+    if (request.method !== 'GET' && request.method !== 'OPTIONS') {
+        return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+            status: 405,
+            headers: {
+                'Content-Type': 'application/json',
+                ...corsHeaders
+            }
+        });
+    }
+
     // 处理 OPTIONS 请求
     if (request.method === 'OPTIONS') {
         return new Response(null, {
             headers: corsHeaders
+        });
+    }
+
+    const now = Date.now();
+    if (cachedStats && now - cachedAt < STATS_CACHE_TTL_MS) {
+        return new Response(cachedStats, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'public, max-age=15, stale-while-revalidate=15',
+                ...corsHeaders
+            }
         });
     }
 
@@ -26,8 +74,7 @@ export async function onRequest(context) {
             totalFiles: 0,
             totalSize: 0, // MB
             fileTypes: {}, // { ext: { count, size } }
-            channels: {}, // { channel: { count, size } }
-            recentFiles: []
+            channels: {} // { channel: { count, size } }
         };
 
         let cursor = null;
@@ -48,10 +95,7 @@ export async function onRequest(context) {
 
             for (const item of response.keys) {
                 // 跳过管理相关的键
-                if (item.name.startsWith('manage@') || 
-                    item.name.startsWith('chunk_') ||
-                    item.name.startsWith('index_') ||
-                    item.name.startsWith('operation_')) {
+                if (shouldSkipKey(item.name)) {
                     continue;
                 }
 
@@ -65,20 +109,7 @@ export async function onRequest(context) {
                 const fileName = metadata.FileName || item.name;
                 const fileType = metadata.FileType || 'unknown';
                 const channel = metadata.Channel || 'Unknown';
-
-                // 获取文件扩展名
-                let ext = 'unknown';
-                if (fileName.includes('.')) {
-                    ext = fileName.split('.').pop().toLowerCase();
-                }
-
-                // 如果扩展名不明确，尝试从 MIME 类型获取
-                if (ext === 'unknown' && fileType.includes('/')) {
-                    const mimeExt = fileType.split('/').pop();
-                    if (mimeExt && mimeExt !== fileType) {
-                        ext = mimeExt.toLowerCase();
-                    }
-                }
+                const ext = extractFileExtension(fileName, fileType);
 
                 // 统计总数
                 stats.totalFiles++;
@@ -125,9 +156,14 @@ export async function onRequest(context) {
         // 格式化总大小
         stats.totalSize = parseFloat(stats.totalSize.toFixed(2));
 
-        return new Response(JSON.stringify(stats), {
+        const responseBody = JSON.stringify(stats);
+        cachedStats = responseBody;
+        cachedAt = now;
+
+        return new Response(responseBody, {
             headers: {
                 'Content-Type': 'application/json',
+                'Cache-Control': 'public, max-age=15, stale-while-revalidate=15',
                 ...corsHeaders
             }
         });

@@ -151,12 +151,24 @@ export async function handleChunkUpload(context) {
             expirationTtl: 3600 // 1小时过期
         });
 
-        // 同步上传分块到存储端，添加超时保护
-        await uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel);
+        const uploadTask = uploadChunkToStorageWithTimeout(
+            context,
+            chunkIndex,
+            totalChunks,
+            uploadId,
+            originalFileName,
+            originalFileType,
+            uploadChannel
+        );
+        if (typeof waitUntil === 'function') {
+            waitUntil(uploadTask);
+        } else {
+            await uploadTask;
+        }
 
         return createResponse(JSON.stringify({
             success: true,
-            message: `Chunk ${chunkIndex + 1}/${totalChunks} received and being uploaded`,
+            message: `Chunk ${chunkIndex + 1}/${totalChunks} received`,
             uploadId,
             chunkIndex
         }), {
@@ -450,11 +462,11 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
             s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
         }
 
-        console.log(`Uploading S3 chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
-
         if (!s3Channel) {
             return { success: false, error: 'No S3 channel provided' };
         }
+
+        console.log(`Uploading S3 chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
 
         const { endpoint, pathStyle, accessKeyId, secretAccessKey, bucketName, region } = s3Channel;
 
@@ -570,11 +582,11 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
             tgChannel = selectConsistentChannel(tgChannels, uploadId, tgSettings.loadBalance.enabled);
         }
 
-        console.log(`Uploading Telegram chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${tgChannel.name || 'default'}`);
-
         if (!tgChannel) {
             return { success: false, error: 'No Telegram channel provided' };
         }
+
+        console.log(`Uploading Telegram chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${tgChannel.name || 'default'}`);
 
         const tgBotToken = tgChannel.botToken;
         const tgChatId = tgChannel.chatId;
@@ -634,11 +646,11 @@ async function uploadSingleChunkToDiscord(context, chunkData, chunkIndex, totalC
             discordChannel = selectConsistentChannel(discordChannels, uploadId, discordSettings.loadBalance?.enabled);
         }
 
-        console.log(`Uploading Discord chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${discordChannel.name || 'default'}`);
-
         if (!discordChannel) {
             return { success: false, error: 'No Discord channel provided' };
         }
+
+        console.log(`Uploading Discord chunk ${chunkIndex} for uploadId: ${uploadId}, selected channel: ${discordChannel.name || 'default'}`);
 
         const botToken = discordChannel.botToken;
         const channelId = discordChannel.channelId;
@@ -761,15 +773,17 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
         console.log(`Processing batch ${Math.floor(i / batchSize) + 1}: chunks ${batch.map(c => c.index).join(', ')}`);
 
         // 创建并发控制的重试任务
-        const retryTasks = batch.map(async (chunk) => {
-            return retrySingleChunk(context, chunk, uploadChannel, maxRetries, retryTimeout);
+        const retryTaskFactories = batch.map((chunk) => {
+            return () => retrySingleChunk(context, chunk, uploadChannel, maxRetries, retryTimeout);
         });
 
         // 限制并发数量
         const batchResults = [];
-        for (let j = 0; j < retryTasks.length; j += maxConcurrency) {
-            const concurrentTasks = retryTasks.slice(j, j + maxConcurrency);
-            const concurrentResults = await Promise.allSettled(concurrentTasks);
+        for (let j = 0; j < retryTaskFactories.length; j += maxConcurrency) {
+            const concurrentTaskFactories = retryTaskFactories.slice(j, j + maxConcurrency);
+            const concurrentResults = await Promise.allSettled(
+                concurrentTaskFactories.map(taskFactory => taskFactory())
+            );
 
             for (const result of concurrentResults) {
                 if (result.status === 'fulfilled') {
@@ -1010,76 +1024,77 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 
     const db = getDatabase(env);
 
-    for (let i = 0; i < totalChunks; i++) {
-        const chunkKey = `chunk_${uploadId}_${i.toString().padStart(3, '0')}`;
-        try {
-            const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
-            if (chunkRecord && chunkRecord.metadata) {
-                let status = chunkRecord.metadata.status || 'unknown';
+    const CHUNK_STATUS_CONCURRENCY = 8;
+    for (let offset = 0; offset < totalChunks; offset += CHUNK_STATUS_CONCURRENCY) {
+        const indices = [];
+        for (let i = offset; i < Math.min(offset + CHUNK_STATUS_CONCURRENCY, totalChunks); i++) {
+            indices.push(i);
+        }
 
-                // 检查上传超时：如果状态是 uploading 但超过了超时阈值，标记为超时
-                if (status === 'uploading' && chunkRecord.metadata.timeoutThreshold && currentTime > chunkRecord.metadata.timeoutThreshold) {
-                    status = 'timeout';
+        const batchResults = await Promise.all(indices.map(async (i) => {
+            const chunkKey = `chunk_${uploadId}_${i.toString().padStart(3, '0')}`;
+            try {
+                const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
+                if (chunkRecord && chunkRecord.metadata) {
+                    let status = chunkRecord.metadata.status || 'unknown';
 
-                    // 更新状态为超时
-                    const timeoutMetadata = {
-                        ...chunkRecord.metadata,
-                        status: 'timeout',
-                        error: 'Upload timeout detected',
-                        timeoutDetectedTime: currentTime
+                    if (status === 'uploading' && chunkRecord.metadata.timeoutThreshold && currentTime > chunkRecord.metadata.timeoutThreshold) {
+                        status = 'timeout';
+
+                        const timeoutMetadata = {
+                            ...chunkRecord.metadata,
+                            status: 'timeout',
+                            error: 'Upload timeout detected',
+                            timeoutDetectedTime: currentTime
+                        };
+
+                        await db.put(chunkKey, chunkRecord.value, {
+                            metadata: timeoutMetadata,
+                            expirationTtl: 3600
+                        }).catch(err => console.warn(`Failed to update timeout status for chunk ${i}:`, err));
+                    }
+
+                    const hasData = status === 'completed'
+                        ? false
+                        : Boolean(chunkRecord.value && chunkRecord.value.byteLength > 0);
+
+                    return {
+                        index: i,
+                        key: chunkKey,
+                        status: status,
+                        uploadResult: chunkRecord.metadata.uploadResult,
+                        error: chunkRecord.metadata.error,
+                        hasData: hasData,
+                        chunkSize: chunkRecord.metadata.chunkSize,
+                        uploadTime: chunkRecord.metadata.uploadTime,
+                        uploadStartTime: chunkRecord.metadata.uploadStartTime,
+                        timeoutThreshold: chunkRecord.metadata.timeoutThreshold,
+                        uploadChannel: chunkRecord.metadata.uploadChannel,
+                        isTimeout: status === 'timeout'
                     };
-
-                    await db.put(chunkKey, chunkRecord.value, {
-                        metadata: timeoutMetadata,
-                        expirationTtl: 3600
-                    }).catch(err => console.warn(`Failed to update timeout status for chunk ${i}:`, err));
                 }
 
-                let hasData = false;
-                if (status === 'completed') {
-                    // 已完成的分块，不存储原始数据
-                    hasData = false;
-                } else if (status === 'uploading' || status === 'failed' || status === 'timeout') {
-                    // 正在上传、失败或超时的分块通过原始数据判断
-                    hasData = (chunkRecord.value && chunkRecord.value.byteLength > 0);
-                } else {
-                    // 其他状态也检查是否有数据
-                    hasData = (chunkRecord.value && chunkRecord.value.byteLength > 0);
-                }
-
-                chunkStatuses.push({
-                    index: i,
-                    key: chunkKey,
-                    status: status,
-                    uploadResult: chunkRecord.metadata.uploadResult,
-                    error: chunkRecord.metadata.error,
-                    hasData: hasData,
-                    chunkSize: chunkRecord.metadata.chunkSize,
-                    uploadTime: chunkRecord.metadata.uploadTime,
-                    uploadStartTime: chunkRecord.metadata.uploadStartTime,
-                    timeoutThreshold: chunkRecord.metadata.timeoutThreshold,
-                    uploadChannel: chunkRecord.metadata.uploadChannel,
-                    isTimeout: status === 'timeout'
-                });
-            } else {
-                chunkStatuses.push({
+                return {
                     index: i,
                     key: chunkKey,
                     status: 'missing',
                     hasData: false
-                });
+                };
+            } catch (error) {
+                return {
+                    index: i,
+                    key: chunkKey,
+                    status: 'error',
+                    error: error.message,
+                    hasData: false
+                };
             }
-        } catch (error) {
-            chunkStatuses.push({
-                index: i,
-                key: chunkKey,
-                status: 'error',
-                error: error.message,
-                hasData: false
-            });
-        }
+        }));
+
+        chunkStatuses.push(...batchResults);
     }
 
+    chunkStatuses.sort((a, b) => a.index - b.index);
     return chunkStatuses;
 }
 
@@ -1193,6 +1208,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
             const chunkInfo = await uploadChunkToTelegramWithRetry(
                 tgBotToken,
                 tgChatId,
+                '',
                 chunkBlob,
                 chunkFileName,
                 i,

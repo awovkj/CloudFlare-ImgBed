@@ -395,6 +395,7 @@
     class FileStatsWidget {
         constructor(containerId) {
             this.container = document.getElementById(containerId);
+            this.currentAbortController = null;
             if (!this.container) {
                 console.error('File stats widget container not found:', containerId);
                 return;
@@ -431,17 +432,21 @@
 
             window.addEventListener('popstate', checkRoute);
 
-            const originalPushState = history.pushState;
-            history.pushState = function(...args) {
-                originalPushState.apply(this, args);
-                setTimeout(checkRoute, 0);
-            };
+            if (!window.__fileStatsHistoryPatched) {
+                const originalPushState = history.pushState;
+                history.pushState = function(...args) {
+                    originalPushState.apply(this, args);
+                    setTimeout(checkRoute, 0);
+                };
 
-            const originalReplaceState = history.replaceState;
-            history.replaceState = function(...args) {
-                originalReplaceState.apply(this, args);
-                setTimeout(checkRoute, 0);
-            };
+                const originalReplaceState = history.replaceState;
+                history.replaceState = function(...args) {
+                    originalReplaceState.apply(this, args);
+                    setTimeout(checkRoute, 0);
+                };
+
+                window.__fileStatsHistoryPatched = true;
+            }
         }
 
         init() {
@@ -450,8 +455,18 @@
         }
 
         async loadStats() {
+            if (this.currentAbortController) {
+                this.currentAbortController.abort();
+            }
+
+            const controller = new AbortController();
+            this.currentAbortController = controller;
+
             try {
-                const response = await fetch('/api/manage/stats');
+                const response = await fetch('/api/manage/stats', {
+                    signal: controller.signal,
+                    cache: 'no-store'
+                });
                 if (!response.ok) {
                     throw new Error('获取数据失败');
                 }
@@ -459,17 +474,24 @@
                 const stats = await response.json();
                 this.renderStats(stats);
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    return;
+                }
+
                 console.error('Error loading stats:', error);
                 this.container.innerHTML = `
                     <h3>📊 存储统计</h3>
-                    <div class="file-stats-error">加载失败: ${error.message}</div>
+                    <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
                     <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats()">重试</button>
                 `;
+            } finally {
+                if (this.currentAbortController === controller) {
+                    this.currentAbortController = null;
+                }
             }
         }
 
         renderStats(stats) {
-            const avgSize = stats.totalFiles > 0 ? (stats.totalSize / stats.totalFiles).toFixed(2) : 0;
             const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 10);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
@@ -478,8 +500,6 @@
                 '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
                 '#dfe6e9', '#fd79a8', '#a29bfe', '#6c5ce7', '#00b894'
             ];
-
-            const pieChartSVG = this.createPieChart(topTypes, colors);
 
             this.container.innerHTML = `
                 <h3>📊 存储统计</h3>
@@ -525,47 +545,13 @@
             `;
         }
 
-        createPieChart(types, colors) {
-            const total = types.reduce((sum, type) => sum + type.count, 0);
-            let currentAngle = 0;
-            const size = 100;
-            const center = size / 2;
-            const radius = 38;
-
-            const paths = types.map((type, index) => {
-                const percentage = type.count / total;
-                const angle = percentage * 360;
-                const startAngle = currentAngle;
-                const endAngle = currentAngle + angle;
-
-                const startRad = (startAngle - 90) * Math.PI / 180;
-                const endRad = (endAngle - 90) * Math.PI / 180;
-
-                const x1 = center + radius * Math.cos(startRad);
-                const y1 = center + radius * Math.sin(startRad);
-                const x2 = center + radius * Math.cos(endRad);
-                const y2 = center + radius * Math.sin(endRad);
-
-                const largeArcFlag = angle > 180 ? 1 : 0;
-
-                const pathData = percentage === 1 
-                    ? `M ${center} ${center - radius} A ${radius} ${radius} 0 1 1 ${center} ${center + radius} A ${radius} ${radius} 0 1 1 ${center} ${center - radius}`
-                    : `M ${center} ${center} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
-
-                currentAngle = endAngle;
-
-                return `<path d="${pathData}" fill="${colors[index]}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>`;
-            }).join('');
-
-            const centerText = `<text x="${center}" y="${center + 5}" text-anchor="middle" fill="white" font-size="13" font-weight="800">${this.formatNumber(total)}</text>`;
-
-            return `
-                <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-                    ${paths}
-                    <circle cx="${center}" cy="${center}" r="24" fill="rgba(64, 158, 255, 0.88)"/>
-                    ${centerText}
-                </svg>
-            `;
+        escapeHtml(text) {
+            return String(text || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
         }
 
         formatNumber(num) {

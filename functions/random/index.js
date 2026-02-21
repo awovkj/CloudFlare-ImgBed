@@ -60,32 +60,7 @@ export async function onRequest(context) {
     }
 
     // 调用randomFileList接口，读取KV数据库中的所有记录
-    let allRecords = await getRandomFileList(context, requestUrl, dir);
-
-    // 筛选出符合fileType要求的记录
-    allRecords = allRecords.filter(item => { return fileType.some(type => item.FileType?.includes(type)) });
-
-    // 根据图片方向筛选
-    if (orientation && allRecords.length > 0) {
-        const SQUARE_THRESHOLD = 0.1; // 宽高比差异小于10%视为方图
-        allRecords = allRecords.filter(item => {
-            // 如果没有尺寸信息，跳过该记录
-            if (!item.Width || !item.Height) return false;
-
-            const ratio = item.Width / item.Height;
-            switch (orientation) {
-                case 'landscape': // 横图：宽 > 高
-                    return ratio > (1 + SQUARE_THRESHOLD);
-                case 'portrait': // 竖图：高 > 宽
-                    return ratio < (1 - SQUARE_THRESHOLD);
-                case 'square': // 方图：宽 ≈ 高
-                    return ratio >= (1 - SQUARE_THRESHOLD) && ratio <= (1 + SQUARE_THRESHOLD);
-                default:
-                    return true;
-            }
-        });
-    }
-
+    let allRecords = await getRandomFileList(context, requestUrl, dir, fileType, orientation);
 
     if (allRecords.length == 0) {
         return new Response(JSON.stringify({}), { status: 200 });
@@ -107,12 +82,22 @@ export async function onRequest(context) {
         if (randomType == 'img') {
             // Return an image response
             randomUrl = requestUrl.origin + randomPath;
-            let contentType = 'image/jpeg';
-            return new Response(await fetch(randomUrl).then(res => {
-                contentType = res.headers.get('content-type');
-                return res.blob();
-            }), {
-                headers: contentType ? { 'Content-Type': contentType } : { 'Content-Type': 'image/jpeg' },
+            const upstreamRes = await fetch(randomUrl);
+            if (!upstreamRes.ok) {
+                return new Response(JSON.stringify({ error: 'Failed to fetch random file' }), { status: 502 });
+            }
+
+            const headers = new Headers();
+            const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
+            headers.set('Content-Type', contentType);
+
+            const contentLength = upstreamRes.headers.get('content-length');
+            if (contentLength) {
+                headers.set('Content-Length', contentLength);
+            }
+
+            return new Response(upstreamRes.body, {
+                headers,
                 status: 200
             });
         }
@@ -125,15 +110,29 @@ export async function onRequest(context) {
     }
 }
 
-async function getRandomFileList(context, url, dir) {
+async function getRandomFileList(context, url, dir, fileTypes = ['image'], orientation = '') {
+    const normalizedTypes = Array.isArray(fileTypes) ? fileTypes.filter(Boolean) : ['image'];
+    const readIndexTypeFilters = normalizedTypes.filter(type =>
+        type === 'image' || type === 'video' || type === 'audio' || type === 'other'
+    );
+
+    const typeKey = normalizedTypes.slice().sort().join(',');
+    const cacheKey = `${url.origin}/api/randomFileList?dir=${dir}&content=${typeKey}&orientation=${orientation}`;
+
     // 检查缓存中是否有记录，有则直接返回
     const cache = caches.default;
-    const cacheRes = await cache.match(`${url.origin}/api/randomFileList?dir=${dir}`);
+    const cacheRes = await cache.match(cacheKey);
     if (cacheRes) {
         return JSON.parse(await cacheRes.text());
     }
 
-    let allRecords = await readIndex(context, { directory: dir, count: -1, includeSubdirFiles: true, accessStatus: 'normal' });
+    let allRecords = await readIndex(context, {
+        directory: dir,
+        count: -1,
+        includeSubdirFiles: true,
+        accessStatus: 'normal',
+        fileType: readIndexTypeFilters
+    });
 
     // 仅保留记录的name和metadata中的必要字段
     allRecords = allRecords.files?.map(item => {
@@ -145,8 +144,31 @@ async function getRandomFileList(context, url, dir) {
         }
     });
 
+    allRecords = allRecords.filter(item => {
+        return normalizedTypes.some(type => item.FileType?.includes(type));
+    });
+
+    if (orientation && allRecords.length > 0) {
+        const SQUARE_THRESHOLD = 0.1;
+        allRecords = allRecords.filter(item => {
+            if (!item.Width || !item.Height) return false;
+
+            const ratio = item.Width / item.Height;
+            switch (orientation) {
+                case 'landscape':
+                    return ratio > (1 + SQUARE_THRESHOLD);
+                case 'portrait':
+                    return ratio < (1 - SQUARE_THRESHOLD);
+                case 'square':
+                    return ratio >= (1 - SQUARE_THRESHOLD) && ratio <= (1 + SQUARE_THRESHOLD);
+                default:
+                    return true;
+            }
+        });
+    }
+
     // 缓存结果，缓存时间为24小时
-    await cache.put(`${url.origin}/api/randomFileList?dir=${dir}`, new Response(JSON.stringify(allRecords), {
+    await cache.put(cacheKey, new Response(JSON.stringify(allRecords), {
         headers: {
             "Content-Type": "application/json",
         }

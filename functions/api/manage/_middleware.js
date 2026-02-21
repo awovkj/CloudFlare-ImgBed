@@ -6,6 +6,8 @@ import { getDatabase } from "../../utils/databaseAdapter.js";
 let securityConfig = {}
 let basicUser = ""
 let basicPass = ""
+let securityConfigLoadedAt = 0
+const SECURITY_CONFIG_TTL_MS = 5000
 
 async function errorHandling(context) {
   try {
@@ -17,6 +19,9 @@ async function errorHandling(context) {
 
 function basicAuthentication(request) {
   const Authorization = request.headers.get('Authorization');
+  if (!Authorization) {
+    return BadRequestException('Missing authorization header.');
+  }
 
   const [scheme, encoded] = Authorization.split(' ');
 
@@ -122,10 +127,13 @@ async function authentication(context) {
     return context.next();
   }
 
-  // 读取安全配置
-  securityConfig = await fetchSecurityConfig(context.env);
-  basicUser = securityConfig.auth.admin.adminUsername
-  basicPass = securityConfig.auth.admin.adminPassword
+  const now = Date.now();
+  if (now - securityConfigLoadedAt > SECURITY_CONFIG_TTL_MS) {
+    securityConfig = await fetchSecurityConfig(context.env);
+    basicUser = securityConfig?.auth?.admin?.adminUsername || ""
+    basicPass = securityConfig?.auth?.admin?.adminPassword || ""
+    securityConfigLoadedAt = now;
+  }
 
   if (typeof basicUser == "undefined" || basicUser == null || basicUser == "") {
     // 无需身份验证
@@ -136,7 +144,6 @@ async function authentication(context) {
       // 首先尝试使用API Token验证
 
       // 根据请求的 url 判断所需权限
-      const pathname = new URL(context.request.url).pathname;
       const requiredPermission = extractRequiredPermission(pathname);
 
       const db = getDatabase(context.env);

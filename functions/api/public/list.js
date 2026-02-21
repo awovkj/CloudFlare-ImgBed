@@ -55,7 +55,43 @@ function isAllowedDirectory(dir, allowedDirs) {
  * @param {boolean} recursive - 是否递归
  * @returns {Promise<Object>} 文件列表和目录列表，包含 fromCache 字段
  */
-async function getPublicFileList(context, url, dir, recursive) {
+async function getPublicFileList(context, url, dir, recursive, options = {}) {
+    const { start = 0, count = 50, search = '', fileType = '' } = options;
+    const hasAdvancedFilter = Boolean(search || fileType);
+
+    if (hasAdvancedFilter) {
+        const typeFilters = fileType ? [fileType] : [];
+        const result = await readIndex(context, {
+            directory: dir,
+            search,
+            start,
+            count,
+            includeSubdirFiles: recursive,
+            accessStatus: 'normal',
+            fileType: typeFilters
+        });
+
+        if (!result.success) {
+            return { files: [], directories: [], totalCount: 0, fromCache: false };
+        }
+
+        const files = (result.files || []).map(file => ({
+            id: file.id,
+            metadata: {
+                FileType: file.metadata?.FileType,
+                TimeStamp: file.metadata?.TimeStamp,
+                FileSize: file.metadata?.FileSize,
+            }
+        }));
+
+        return {
+            files,
+            directories: result.directories || [],
+            totalCount: result.totalCount || 0,
+            fromCache: false,
+        };
+    }
+
     // 构建缓存键（目录格式去掉末尾的/，与清除缓存时的格式一致）
     const cacheDir = dir.replace(/\/$/, '');
     const cacheKey = `${url.origin}/api/publicFileList?dir=${cacheDir}&recursive=${recursive}`;
@@ -180,50 +216,25 @@ export async function onRequest(context) {
         const count = parseInt(url.searchParams.get('count'), 10) || 50;
 
         // 获取文件列表（带缓存）
-        const cachedData = await getPublicFileList(context, url, dir, recursive);
+        const cachedData = await getPublicFileList(context, url, dir, recursive, {
+            start,
+            count,
+            search,
+            fileType
+        });
 
         // 过滤子目录，只返回允许的目录
         const filteredDirectories = cachedData.directories.filter(subDir => {
             return isAllowedDirectory(subDir, allowedDirs);
         });
 
-        // 文件类型过滤辅助函数
-        const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif'];
-        const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv', 'avi', '3gp', 'mpeg', 'mpg', 'flv', 'wmv', 'ts', 'rmvb'];
-        const audioExts = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'ape', 'opus'];
-
-        const getFileExt = (name) => (name.split('.').pop() || '').toLowerCase();
-        const isImageFile = (name) => imageExts.includes(getFileExt(name));
-        const isVideoFile = (name) => videoExts.includes(getFileExt(name));
-        const isAudioFile = (name) => audioExts.includes(getFileExt(name));
-
         let filteredFiles = cachedData.files;
+        let filteredTotalCount = cachedData.totalCount;
 
-        // 搜索过滤
-        if (search) {
-            filteredFiles = filteredFiles.filter(file => {
-                return file.id.toLowerCase().includes(search);
-            });
+        if (!search && !fileType) {
+            filteredFiles = filteredFiles.slice(start, start + count);
+            filteredTotalCount = cachedData.totalCount;
         }
-
-        // 按文件类型过滤
-        if (fileType) {
-            filteredFiles = filteredFiles.filter(file => {
-                const name = file.id;
-                switch (fileType) {
-                    case 'image': return isImageFile(name);
-                    case 'video': return isVideoFile(name);
-                    case 'audio': return isAudioFile(name);
-                    case 'other': return !isImageFile(name) && !isVideoFile(name) && !isAudioFile(name);
-                    default: return true;
-                }
-            });
-        }
-
-        // 计算过滤后的总数和分页
-        const filteredTotalCount = filteredFiles.length;
-        // 过滤后再分页
-        filteredFiles = filteredFiles.slice(start, start + count);
 
         // 转换文件格式
         const safeFiles = filteredFiles.map(file => ({
@@ -234,7 +245,7 @@ export async function onRequest(context) {
         return new Response(JSON.stringify({
             files: safeFiles,
             directories: filteredDirectories,
-            totalCount: (search || fileType) ? filteredTotalCount : cachedData.totalCount,
+            totalCount: filteredTotalCount,
             returnedCount: safeFiles.length,
             allowedDirs: allowedDirs, // 返回允许的目录列表供前端使用
             fromCache: cachedData.fromCache,

@@ -47,6 +47,12 @@ const INDEX_CHUNK_SIZE_D1 = 500; // D1 数据库分块大小
 const INDEX_CHUNK_SIZE_KV = 5000; // KV 存储分块大小
 const KV_LIST_LIMIT = 1000; // 数据库列出批量大小
 const BATCH_SIZE = 10; // 批量处理大小
+const INDEX_MEMORY_CACHE_TTL_MS = 5000;
+
+let indexMemoryCache = {
+    value: null,
+    expiresAt: 0
+};
 
 /**
  * 根据数据库类型获取索引分块大小
@@ -1344,9 +1350,17 @@ export async function deleteAllOperations(context) {
 async function getIndex(context) {
     const { waitUntil } = context;
     try {
+        if (indexMemoryCache.value && indexMemoryCache.expiresAt > Date.now()) {
+            return indexMemoryCache.value;
+        }
+
         // 首先尝试加载分块索引
         const index = await loadChunkedIndex(context);
         if (index.success) {
+            indexMemoryCache = {
+                value: index,
+                expiresAt: Date.now() + INDEX_MEMORY_CACHE_TTL_MS
+            };
             return index;
         } else {
             // 如果加载失败，触发重建索引
@@ -1512,6 +1526,17 @@ async function saveChunkedIndex(context, index) {
         });
         
         await Promise.all(savePromises);
+
+        indexMemoryCache = {
+            value: {
+                files,
+                lastUpdated: index.lastUpdated,
+                totalCount: index.totalCount,
+                lastOperationId: index.lastOperationId,
+                success: true
+            },
+            expiresAt: Date.now() + INDEX_MEMORY_CACHE_TTL_MS
+        };
         
         console.log(`Saved chunked index: ${chunks.length} chunks, ${files.length} total files, ${totalSizeMB.toFixed(2)} MB`);
         return true;
@@ -1660,6 +1685,11 @@ export async function clearChunkedIndex(context, onlyNonUsed = false) {
         }
 
         await Promise.all(deletePromises);
+
+        indexMemoryCache = {
+            value: null,
+            expiresAt: 0
+        };
         
         console.log(`Chunked index cleanup completed. Attempted to delete ${chunkCount} chunks.`);
         return true;

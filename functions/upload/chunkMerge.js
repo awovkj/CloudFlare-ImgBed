@@ -157,16 +157,13 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             Tags: []
         };
 
-        // 收集所有已上传的分块信息
-        const chunkStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+        let chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
+            maxWaitMs: 30000,
+            intervalMs: 2000
+        });
         let completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
-        let uploadingChunks = chunkStatuses.filter(chunk =>
-            chunk.status === 'uploading' ||
-            chunk.status === 'retrying'
-        );
         let failedChunks = chunkStatuses.filter(chunk =>
-            chunk.status === 'failed' ||
-            chunk.status === 'timeout'
+            chunk.status === 'failed' || chunk.status === 'timeout'
         );
 
         // 统计不同状态的分块
@@ -182,17 +179,17 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             console.log(`Retrying ${failedChunks.length} failed chunks...`);
             // 同步重试（await）
             await retryFailedChunks(context, failedChunks, uploadChannel);
-        }
 
-        // 重新检查状态
-        const updatedStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
-        completedChunks = updatedStatuses.filter(chunk => chunk.status === 'completed');
+            chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
+                maxWaitMs: 45000,
+                intervalMs: 2000
+            });
+            completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
+        }
 
         // 最终检查是否所有分块都完成
         if (completedChunks.length !== totalChunks) {
-            // 获取最新的状态信息
-            const finalStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
-            const finalStatusSummary = finalStatuses.reduce((acc, chunk) => {
+            const finalStatusSummary = chunkStatuses.reduce((acc, chunk) => {
                 acc[chunk.status] = (acc[chunk.status] || 0) + 1;
                 return acc;
             }, {});
@@ -222,6 +219,28 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             error: error.message
         };
     }
+}
+
+async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
+    const maxWaitMs = options.maxWaitMs || 30000;
+    const intervalMs = options.intervalMs || 2000;
+    const startedAt = Date.now();
+
+    let statuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+    while (Date.now() - startedAt < maxWaitMs) {
+        const inProgressCount = statuses.filter(chunk =>
+            chunk.status === 'uploading' || chunk.status === 'retrying'
+        ).length;
+
+        if (inProgressCount === 0) {
+            return statuses;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+        statuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+    }
+
+    return statuses;
 }
 
 // 合并R2分块信息
@@ -322,6 +341,10 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
         }
         if (!s3Channel) {
             s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
+        }
+
+        if (!s3Channel) {
+            throw new Error('No S3 channel provided');
         }
 
         console.log(`Merging S3 chunks for uploadId: ${uploadId}, selected channel: ${s3Channel.name || 'default'}`);
@@ -435,6 +458,10 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
             tgChannel = selectConsistentChannel(tgChannels, uploadId, tgSettings.loadBalance.enabled);
         }
 
+        if (!tgChannel) {
+            throw new Error('No Telegram channel provided');
+        }
+
         console.log(`Merging Telegram chunks for uploadId: ${uploadId}, selected channel: ${tgChannel.name || 'default'}`);
 
         const tgBotToken = tgChannel.botToken;
@@ -515,6 +542,10 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
         }
         if (!discordChannel) {
             discordChannel = selectConsistentChannel(discordChannels, uploadId, discordSettings.loadBalance?.enabled);
+        }
+
+        if (!discordChannel) {
+            throw new Error('No Discord channel provided');
         }
 
         console.log(`Merging Discord chunks for uploadId: ${uploadId}, selected channel: ${discordChannel.name || 'default'}`);
