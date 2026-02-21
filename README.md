@@ -132,10 +132,10 @@
 - 构建 Worker：`npm run build:worker`
 - 部署 Worker：`npm run deploy:worker`
 
-首次使用前请修改 `wrangler.toml` 中的绑定：
+首次使用前请在 Cloudflare Worker 后台绑定资源（与代码中的绑定名保持一致）：
 
-- `kv_namespaces.id` / `preview_id` 改为你的 KV Namespace ID
-- `r2_buckets.bucket_name` 改为你的 R2 Bucket 名称
+- KV 绑定名：`img_url`
+- R2 绑定名：`img_r2`
 
 如果还需要绑定 D1、AI 等资源，可继续在 `wrangler.toml` 追加对应 binding。
 
