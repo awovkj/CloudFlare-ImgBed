@@ -2,7 +2,7 @@ name = "cloudflare-imgbed-worker"
 main = ".wrangler-worker-build/index.js"
 compatibility_date = "2026-02-21"
 
-assets = { directory = ".", binding = "ASSETS" }
+assets = { directory = ".wrangler-assets", binding = "ASSETS" }
 
 [[kv_namespaces]]
 binding = "img_url"
