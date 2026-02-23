@@ -76,7 +76,7 @@
 ## 关于切换到 Telegram 渠道的通知
 
 
-> 由于telegraph图床被滥用，该项目上传渠道已切换至Telegram Channel，请**更新至最新版（更新方式见第3.1章最后一节）**，按照文档中的部署要求**设置`TG_BOT_TOKEN`和`TG_CHAT_ID`**，否则将无法正常使用上传功能。
+> 由于telegraph图床被滥用，该项目上传渠道已切换至Telegram Channel，请**更新至最新版**，按照文档中的部署要求**设置`TG_BOT_TOKEN`和`TG_CHAT_ID`**，否则将无法正常使用上传功能。
 >
 > 此外，目前**KV数据库为必须配置**，如果以前未配置请按照文档说明配置。
 >
@@ -123,21 +123,6 @@
 
 
 </details>
-
-# 3.1 Cloudflare Workers 搭建
-
-项目默认可直接跑在 Pages Functions，同时已适配为单 Worker 部署方式。
-
-- 本地开发（Workers 模式）：`npm run dev:worker`
-- 构建 Worker：`npm run build:worker`
-- 部署 Worker：`npm run deploy:worker`
-
-首次使用前请在 Cloudflare Worker 后台绑定资源（与代码中的绑定名保持一致）：
-
-- KV 绑定名：`img_url`
-- R2 绑定名：`img_r2`
-
-如果还需要绑定 D1、AI 等资源，可继续在 `wrangler.toml` 追加对应 binding。
 
 # 4. Tips
 

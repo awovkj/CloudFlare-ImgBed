@@ -66,7 +66,7 @@
 
 ## Notification About Switching to Telegram Channel
 
-> Due to abuse of the telegraph image hosting, the upload channel has switched to Telegram Channel. Please **update to the latest version (see the last section of chapter 3.1 for update instructions)** and set `TG_BOT_TOKEN` and `TG_CHAT_ID` according to the deployment requirements in the documentation, otherwise upload functionality will not work.
+> Due to abuse of the telegraph image hosting, the upload channel has switched to Telegram Channel. Please **update to the latest version** and set `TG_BOT_TOKEN` and `TG_CHAT_ID` according to the deployment requirements in the documentation, otherwise upload functionality will not work.
 >
 > Also, the **KV database is now mandatory**; if not configured before, please configure it as per the documentation.
 >
@@ -112,21 +112,6 @@ Provides detailed deployment documentation, feature docs, development plans, upd
 
 
 </details>
-
-# 3.1 Cloudflare Workers Setup
-
-This project runs on Pages Functions by default, and is also adapted for single-Worker deployment.
-
-- Local development (Workers mode): `npm run dev:worker`
-- Build Worker bundle: `npm run build:worker`
-- Deploy Worker: `npm run deploy:worker`
-
-Before first deployment, bind resources in the Cloudflare Worker dashboard (using the same binding names as the code):
-
-- KV binding name: `img_url`
-- R2 binding name: `img_r2`
-
-If you need D1/AI or other resources, add the corresponding bindings to `wrangler.toml`.
 
 # 4. Tips
 
