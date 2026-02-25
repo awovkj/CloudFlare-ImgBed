@@ -1128,43 +1128,46 @@ function applyMoveOperation(index, data) {
 function applyBatchAddOperation(index, data) {
     const { files, options } = data;
     const { skipExisting = false } = options || {};
-    
+
     let addedCount = 0;
     let updatedCount = 0;
-    
-    // 创建现有文件ID的映射以提高查找效率
+
+    // 创建现有文件 ID 的映射以提高查找效率
     const existingFilesMap = new Map();
     index.files.forEach((file, idx) => {
         existingFilesMap.set(file.id, idx);
     });
-    
+
+    // 分离更新和新增操作，将新增文件收集后批量处理，避免 O(n²) 复杂度
+    const filesToAdd = [];
+
     for (const fileData of files) {
         const { fileId, metadata } = fileData;
         const fileItem = {
             id: fileId,
             metadata: metadata || {}
         };
-        
+
         const existingIndex = existingFilesMap.get(fileId);
-        
+
         if (existingIndex !== undefined) {
             if (!skipExisting) {
-                // 更新现有文件
+                // 直接更新现有文件，不需要重建 Map
                 index.files[existingIndex] = fileItem;
                 updatedCount++;
             }
         } else {
-            // 添加新文件
-            insertFileInOrder(index.files, fileItem);
-            // 更新映射
-            index.files.forEach((file, idx) => {
-                existingFilesMap.set(file.id, idx);
-            });
-            
-            addedCount++;
+            // 收集新增文件，延迟插入
+            filesToAdd.push(fileItem);
         }
     }
-    
+
+    // 批量插入新文件
+    for (const fileItem of filesToAdd) {
+        insertFileInOrder(index.files, fileItem);
+        addedCount++;
+    }
+
     return { addedCount, updatedCount };
 }
 

@@ -294,7 +294,7 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
     // 图像审查，采用R2的publicUrl
     const R2PublicUrl = r2Channel.publicUrl;
     let moderateUrl = `${R2PublicUrl}/${fullId}`;
-    metadata.Label = await moderateContent(env, moderateUrl);
+    metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
 
     // 写入数据库
     try {
@@ -414,7 +414,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
 
             const moderateUrl = `https://${url.hostname}/file/${fullId}`;
             await purgeCDNCache(env, moderateUrl, url);
-            metadata.Label = await moderateContent(env, moderateUrl);
+            metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
         }
 
         // 写入数据库
@@ -539,7 +539,7 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
         // 图像审查（使用代理域名或官方域名）
         const moderateDomain = tgProxyUrl ? `https://${tgProxyUrl}` : 'https://api.telegram.org';
         const moderateUrl = `${moderateDomain}/file/bot${tgBotToken}/${filePath}`;
-        metadata.Label = await moderateContent(env, moderateUrl);
+        metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
 
         // 更新metadata，写入KV数据库
         try {
@@ -681,7 +681,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
         if (discordChannel.proxyUrl) {
             moderateUrl = fileInfo.url.replace('https://cdn.discordapp.com', `https://${discordChannel.proxyUrl}`);
         }
-        metadata.Label = await moderateContent(env, moderateUrl);
+        metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
 
         // 写入 KV 数据库
         try {
@@ -788,7 +788,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         if (uploadModerate && uploadModerate.enabled) {
             if (!hfChannel.isPrivate) {
                 // 公开仓库：直接通过公开URL访问进行审查，只写入1次KV
-                metadata.Label = await moderateContent(env, result.fileUrl);
+                metadata.Label = await moderateContent(env, result.fileUrl, context.securityConfig);
             } else {
                 // 私有仓库：先写入KV，再通过自己的域名访问进行审查
                 try {
@@ -799,7 +799,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
                 
                 const moderateUrl = `https://${context.url.hostname}/file/${fullId}`;
                 await purgeCDNCache(env, moderateUrl, context.url);
-                metadata.Label = await moderateContent(env, moderateUrl);
+                metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
             }
         }
 

@@ -22,35 +22,33 @@ async function filterChannelsByQuota(context, channels) {
     const indexMeta = await getIndexMeta(context);
     const channelStats = indexMeta.channelStats || {};
 
-    const result = [];
-    for (const channel of channels) {
+    // 并行检查所有渠道的配额状态
+    const results = await Promise.all(channels.map(async (channel) => {
         // 未启用容量限制，直接通过
         if (!channel.quota?.enabled || !channel.quota?.limitGB) {
-            result.push(channel);
-            continue;
+            return channel;
         }
 
         try {
-            // 从索引元数据中获取该渠道的容量统计
             const stats = channelStats[channel.name] || { usedMB: 0, fileCount: 0 };
-
             const usedGB = stats.usedMB / 1024;
             const limitGB = channel.quota.limitGB;
             const threshold = channel.quota.threshold || 95;
 
-            // 未超过阈值，渠道可用
             if ((usedGB / limitGB) * 100 < threshold) {
-                result.push(channel);
+                return channel;
             } else {
                 console.log(`Channel ${channel.name} quota exceeded: ${usedGB.toFixed(2)}GB / ${limitGB}GB (${threshold}% threshold)`);
+                return null; // 超过阈値时返回 null
             }
         } catch (error) {
             console.error(`Failed to check quota for channel ${channel.name}:`, error);
-            // 检查失败时保守处理，允许使用该渠道
-            result.push(channel);
+            return channel; // 检查失败时保守处理，允许使用该渠道
         }
-    }
-    return result;
+    }));
+
+    // 过滤掉 null（超额渠道）
+    return results.filter(Boolean);
 }
 
 export async function fetchUploadConfig(env, context = null) {

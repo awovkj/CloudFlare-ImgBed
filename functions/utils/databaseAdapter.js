@@ -1,9 +1,8 @@
-/**
- * 数据库适配器
- * 提供统一的接口，可以在KV和D1之间切换
- */
-
 import { D1Database } from './d1Database.js';
+
+// 模块级适配器缓存：Cloudflare Workers 在同一 isolate 内复用模块，但不同请求可能使用不同 env。
+// 使用 WeakMap 以 env 对象为键，避免持有强引用导致内存泄漏。
+const adapterCache = new WeakMap();
 
 /**
  * 创建数据库适配器
@@ -146,10 +145,16 @@ class KVAdapter {
  * @returns {Object} 数据库实例
  */
 export function getDatabase(env) {
-    var adapter = createDatabaseAdapter(env);
+    // 先查缓存
+    const cached = adapterCache.get(env);
+    if (cached) return cached;
+
+    const adapter = createDatabaseAdapter(env);
     if (!adapter) {
         throw new Error('Database not configured. Please configure D1 database (env.img_d1) or KV storage (env.img_url).');
     }
+
+    adapterCache.set(env, adapter);
     return adapter;
 }
 

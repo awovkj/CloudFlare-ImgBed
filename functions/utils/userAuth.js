@@ -11,14 +11,17 @@ import { getDatabase } from './databaseAdapter.js';
  * @return {Promise<boolean>} 返回是否认证通过
  */
 export async function userAuthCheck(env, url, request, requiredPermission = null) {
-    // 首先使用Token验证
-    const tokenValidation = await validateApiToken(request, getDatabase(env), requiredPermission);
+    // 并行发起 Token 验证和传统认证配置读取，单次 I/O 往返
+    const [tokenValidation, securityConfig] = await Promise.all([
+        validateApiToken(request, getDatabase(env), requiredPermission).catch(() => ({ valid: false })),
+        fetchSecurityConfig(env).catch(() => ({ auth: { user: { authCode: '' } } }))
+    ]);
+
     if (tokenValidation.valid) {
         return true;
     }
-        
-    // Token验证失败，继续尝试传统认证方式
-    const securityConfig = await fetchSecurityConfig(env);
+
+    // Token 验证失败，继续尝试传统认证方式
     const rightAuthCode = securityConfig.auth.user.authCode;
 
     // 优先从请求 URL 参数获取 authCode

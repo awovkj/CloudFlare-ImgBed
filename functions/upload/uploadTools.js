@@ -72,13 +72,28 @@ export function sanitizeFileName(fileName) {
 }
 
 // 检查文件扩展名是否有效
+// 使用 Set 代替 Array.includes，并清除重复条目：O(1) 查找 vs O(n)
+const VALID_EXTENSIONS = new Set([
+    'jpeg', 'jpg', 'png', 'gif', 'webp', 'ico', 'svg', 'bmp', 'tiff',
+    'mp4', 'mov', 'avi', 'mkv', 'webm',
+    'mp3', 'ogg', 'wav', 'flac', 'aac', 'opus',
+    'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf',
+    'txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'ts',
+    'go', 'java', 'php', 'py', 'rb', 'sh', 'bat', 'cmd',
+    'ps1', 'psm1', 'psd', 'ai', 'sketch', 'fig', 'eps',
+    'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz',
+    'apk', 'crx', 'xpi', 'deb', 'rpm',
+    'exe', 'msi', 'dmg',
+    'ttf', 'otf', 'woff', 'woff2', 'eot',
+    'jar', 'war', 'ear',
+    'iso', 'img', 'vdi', 'ova', 'ovf', 'qcow2', 'vmdk', 'vhd', 'vhdx', 'pvm', 'dsk', 'hdd',
+    'bin', 'cue', 'mds', 'mdf', 'nrg', 'ccd', 'cif', 'c2d', 'daa',
+    'b6t', 'b5t', 'bwt', 'isz', 'cdi', 'flp', 'uif', 'xdi', 'sdi',
+    'torrent',
+]);
+
 export function isExtValid(fileExt) {
-    return ['jpeg', 'jpg', 'png', 'gif', 'webp',
-        'mp4', 'mp3', 'ogg',
-        'mp3', 'wav', 'flac', 'aac', 'opus',
-        'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf',
-        'txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'ts', 'go', 'java', 'php', 'py', 'rb', 'sh', 'bat', 'cmd', 'ps1', 'psm1', 'psd', 'ai', 'sketch', 'fig', 'svg', 'eps', 'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'apk', 'exe', 'msi', 'dmg', 'iso', 'torrent', 'webp', 'ico', 'svg', 'ttf', 'otf', 'woff', 'woff2', 'eot', 'apk', 'crx', 'xpi', 'deb', 'rpm', 'jar', 'war', 'ear', 'img', 'iso', 'vdi', 'ova', 'ovf', 'qcow2', 'vmdk', 'vhd', 'vhdx', 'pvm', 'dsk', 'hdd', 'bin', 'cue', 'mds', 'mdf', 'nrg', 'ccd', 'cif', 'c2d', 'daa', 'b6t', 'b5t', 'bwt', 'isz', 'isz', 'cdi', 'flp', 'uif', 'xdi', 'sdi'
-    ].includes(fileExt);
+    return VALID_EXTENSIONS.has(fileExt);
 }
 
 /**
@@ -174,8 +189,11 @@ export function getImageDimensions(buffer, fileType) {
 }
 
 // 图像审查
-export async function moderateContent(env, url) {
-    const securityConfig = await fetchSecurityConfig(env);
+// securityConfig 参数可选，提供时跳过数据库读取（避免重复 I/O）
+export async function moderateContent(env, url, securityConfig = null) {
+    if (!securityConfig) {
+        securityConfig = await fetchSecurityConfig(env);
+    }
     const uploadModerate = securityConfig.upload.moderate;
 
     const enableModerate = uploadModerate && uploadModerate.enabled;
@@ -209,7 +227,6 @@ export async function moderateContent(env, url) {
                 }
             } catch (error) {
                 console.error('Moderate Error:', error);
-                // 将不带审查的图片写入数据库
                 label = "None";
             }
         }
@@ -218,7 +235,7 @@ export async function moderateContent(env, url) {
 
     // nsfw 渠道
     if (uploadModerate.channel === 'nsfwjs') {
-        const nsfwApiPath = securityConfig.upload.moderate.nsfwApiPath;
+        const nsfwApiPath = uploadModerate.nsfwApiPath;
 
         try {
             const fetchResponse = await fetch(`${nsfwApiPath}?url=${encodeURIComponent(url)}`);
@@ -237,7 +254,6 @@ export async function moderateContent(env, url) {
             }
         } catch (error) {
             console.error('Moderate Error:', error);
-            // 将不带审查的图片写入数据库
             label = "None";
         }
 
