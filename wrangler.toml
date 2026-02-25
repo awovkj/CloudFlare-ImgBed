@@ -8,18 +8,25 @@ main               = "src/worker.js"
 compatibility_date = "2025-01-01"
 workers_dev        = true
 
-# keep_vars = true 确保在 Dashboard 手动添加的绑定不会被 wrangler deploy 覆盖掉
-# 文档：https://developers.cloudflare.com/workers/wrangler/configuration/#source-of-truth
+# Dashboard 手动配置的绑定不会被下次部署覆盖
 keep_vars = true
+
+# =============================================================================
+# 构建步骤：将静态资源复制到 .wrangler-assets/
+# wrangler deploy 和 wrangler versions upload 执行前自动运行
+# 文档：https://developers.cloudflare.com/workers/wrangler/custom-builds/
+# =============================================================================
+[build]
+command = "node scripts/copy-assets.mjs"
 
 # =============================================================================
 # 静态资源
 # 文档：https://developers.cloudflare.com/workers/static-assets/
 # =============================================================================
 [assets]
-directory          = "."
+directory          = ".wrangler-assets"   # 由 [build] 自动准备
 binding            = "ASSETS"
-not_found_handling = "none"
+not_found_handling = "single-page-application"
 
 # 以下路径交给 Worker 处理，其余直接走静态资源 CDN
 run_worker_first = [
