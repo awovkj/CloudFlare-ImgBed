@@ -1,0 +1,271 @@
+/**
+ * CloudFlare-ImgBed — Cloudflare Workers 入口
+ *
+ * 职责：
+ *  1. 将 Cloudflare Workers fetch(request, env, ctx) 适配为 Pages Functions context 对象
+ *  2. 复用全部 functions/ 业务逻辑，无需改动任何业务代码
+ *  3. 静态资源通过 env.ASSETS.fetch() 转发给 [assets] 绑定处理
+ *
+ * 路由表（与 wrangler.toml run_worker_first 保持一致）：
+ *  POST /upload/*         → functions/upload/index.js
+ *  GET  /file/*           → functions/file/[[path]].js
+ *  *    /api/*            → functions/api/**
+ *  GET  /random/*         → functions/random/index.js
+ *  *    /dav/*            → functions/dav/[[path]].js
+ *  其他                   → env.ASSETS（静态资源）
+ */
+
+// ── 业务模块导入（直接复用 functions/ 目录，路径相对于本文件）──────────────────
+
+// upload
+import { onRequest as onUploadRequest }       from '../functions/upload/index.js';
+import { onRequest as onChunkUploadRequest }   from '../functions/upload/chunkUpload.js';
+import { onRequest as onChunkMergeRequest }    from '../functions/upload/chunkMerge.js';
+import { errorHandling, telemetryData, checkDatabaseConfig } from '../functions/utils/middleware.js';
+
+// file
+import { onRequest as onFileRequest }          from '../functions/file/[[path]].js';
+
+// api — 顶层
+import { onRequest as onLoginRequest }         from '../functions/api/login.js';
+import { onRequest as onUserConfigRequest }    from '../functions/api/userConfig.js';
+import { onRequest as onChannelsRequest }      from '../functions/api/channels.js';
+import { onRequest as onFetchResRequest }      from '../functions/api/fetchRes.js';
+import { onRequest as onPublicListRequest }    from '../functions/api/public/list.js';
+import { onRequest as onBingWallpaperRequest } from '../functions/api/bing/wallpaper/index.js';
+import { onRequest as onHfGetUploadUrlRequest }from '../functions/api/huggingface/getUploadUrl.js';
+import { onRequest as onHfCommitRequest }      from '../functions/api/huggingface/commitUpload.js';
+
+// api/manage — 子路由
+import { onRequest as onManageMiddleware }     from '../functions/api/manage/_middleware.js';
+import { onRequest as onManageLoginRequest }   from '../functions/api/manage/login.js';
+import { onRequest as onManageLogoutRequest }  from '../functions/api/manage/logout.js';
+import { onRequest as onManageListRequest }    from '../functions/api/manage/list.js';
+import { onRequest as onManageStatsRequest }   from '../functions/api/manage/stats.js';
+import { onRequest as onManageQuotaRequest }   from '../functions/api/manage/quota.js';
+import { onRequest as onManageCheckRequest }   from '../functions/api/manage/check.js';
+import { onRequest as onManageApiTokens }      from '../functions/api/manage/apiTokens.js';
+import { onRequest as onManageDeleteRequest }  from '../functions/api/manage/delete/[[path]].js';
+import { onRequest as onManageBlockRequest }   from '../functions/api/manage/block/[[path]].js';
+import { onRequest as onManageWhiteRequest }   from '../functions/api/manage/white/[[path]].js';
+import { onRequest as onManageMetadataRequest }from '../functions/api/manage/metadata/[[path]].js';
+import { onRequest as onManageMoveRequest }    from '../functions/api/manage/move/[[path]].js';
+import { onRequest as onManageRenameRequest }  from '../functions/api/manage/rename/[[path]].js';
+import { onRequest as onManageTagsRequest }    from '../functions/api/manage/tags/[[path]].js';
+import { onRequest as onManageTagsAutoRequest }from '../functions/api/manage/tags/autocomplete.js';
+import { onRequest as onManageTagsBatchRequest}from '../functions/api/manage/tags/batch.js';
+import { onRequest as onManageSysConfigSecurity } from '../functions/api/manage/sysConfig/security.js';
+import { onRequest as onManageSysConfigUpload }   from '../functions/api/manage/sysConfig/upload.js';
+import { onRequest as onManageSysConfigOthers }   from '../functions/api/manage/sysConfig/others.js';
+import { onRequest as onManageSysConfigPage }     from '../functions/api/manage/sysConfig/page.js';
+import { onRequest as onManageCusConfigList }      from '../functions/api/manage/cusConfig/list.js';
+import { onRequest as onManageCusConfigBlockIp }   from '../functions/api/manage/cusConfig/blockip.js';
+import { onRequest as onManageCusConfigBlockIpList}from '../functions/api/manage/cusConfig/blockipList.js';
+import { onRequest as onManageCusConfigWhiteIp }   from '../functions/api/manage/cusConfig/whiteip.js';
+import { onRequest as onManageBatchList }          from '../functions/api/manage/batch/list.js';
+import { onRequest as onManageBatchSettings }      from '../functions/api/manage/batch/settings.js';
+import { onRequest as onManageBatchIndexChunk }    from '../functions/api/manage/batch/index/chunk.js';
+import { onRequest as onManageBatchIndexConfig }   from '../functions/api/manage/batch/index/config.js';
+import { onRequest as onManageBatchIndexFinalize } from '../functions/api/manage/batch/index/finalize.js';
+import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage/batch/restore/chunk.js';
+
+// random
+import { onRequest as onRandomRequest }        from '../functions/random/index.js';
+
+// dav
+import { onRequest as onDavRequest }           from '../functions/dav/[[path]].js';
+
+// ── Pages Functions 适配层 ────────────────────────────────────────────────────
+
+/**
+ * 将 Workers 原生参数构造为 Pages Functions context 对象。
+ * 所有 functions/ 模块期望接收这个 context。
+ *
+ * @param {Request}  request
+ * @param {object}   env
+ * @param {object}   ctx         - ExecutionContext (waitUntil, passThroughOnException)
+ * @param {object}   [params]    - URL 路径参数，如 { path: "foo/bar.jpg" }
+ * @param {object}   [data]      - 跨中间件共享数据
+ * @param {Function} [nextFn]    - context.next() 实现
+ */
+function makeContext(request, env, ctx, params = {}, data = {}, nextFn = null) {
+    return {
+        request,
+        env,
+        params,
+        data,
+        waitUntil: ctx.waitUntil.bind(ctx),
+        passThroughOnException: ctx.passThroughOnException?.bind(ctx),
+        next: nextFn ?? (() => new Response('Not Found', { status: 404 })),
+    };
+}
+
+/**
+ * 执行 Pages Functions 风格的中间件链。
+ * 每个中间件收到 context，调用 context.next() 进入下一层。
+ *
+ * middlewares 格式：
+ *  - 单个函数：直接执行
+ *  - 数组（export const onRequest = [fn1, fn2]）：链式执行
+ *
+ * @param {Request}   request
+ * @param {object}    env
+ * @param {object}    ctx
+ * @param {object}    params
+ * @param {Function|Function[]} middlewares  - 中间件链（最后一个为终止处理器）
+ */
+async function runMiddlewareChain(request, env, ctx, params, middlewares) {
+    const chain = Array.isArray(middlewares) ? middlewares : [middlewares];
+    const data = {};
+
+    let index = 0;
+
+    async function dispatch() {
+        if (index >= chain.length) {
+            return new Response('Not Found', { status: 404 });
+        }
+        const current = chain[index++];
+        const context = makeContext(request, env, ctx, params, data, dispatch);
+        return current(context);
+    }
+
+    return dispatch();
+}
+
+// ── 路由表 ────────────────────────────────────────────────────────────────────
+//
+// 格式：[pattern, params-extractor, middlewares]
+//
+//  pattern          : 用于匹配 pathname 的正则
+//  params-extractor : (match) => object  — 从正则捕获组提取 context.params
+//  middlewares      : 函数 or 数组（Pages Functions _middleware + handler）
+//
+// 注意：顺序即优先级，第一个匹配的路由生效。
+
+// /upload 路由中间件链（对应 functions/upload/_middleware.js + index.js）
+const uploadMiddleware = [checkDatabaseConfig, errorHandling, telemetryData, onUploadRequest];
+
+// /api/manage 路由中间件链（对应 functions/api/_middleware.js + manage/_middleware.js + handler）
+function apiManageChain(handler) {
+    // api/_middleware: checkDatabaseConfig
+    // api/manage/_middleware: checkDatabaseConfig + errorHandling + authentication
+    // handler 本身
+    return [...(Array.isArray(onManageMiddleware) ? onManageMiddleware : [onManageMiddleware]), handler];
+}
+
+// /file 路由中间件链
+const fileMiddleware = [checkDatabaseConfig, onFileRequest];
+
+// /dav 路由中间件链
+const davMiddleware = [checkDatabaseConfig, onDavRequest];
+
+// /random 路由中间件链
+const randomMiddleware = [checkDatabaseConfig, onRandomRequest];
+
+const ROUTES = [
+    // ── /upload ──────────────────────────────────────────────────────────────
+    {
+        pattern: /^\/upload(\/.*)?$/,
+        params: () => ({}),
+        middlewares: uploadMiddleware,
+    },
+
+    // ── /file/<path> ─────────────────────────────────────────────────────────
+    {
+        pattern: /^\/file\/(.+)$/,
+        params: (m) => ({ path: m[1] }),
+        middlewares: fileMiddleware,
+    },
+
+    // ── /random ───────────────────────────────────────────────────────────────
+    {
+        pattern: /^\/random(\/.*)?$/,
+        params: () => ({}),
+        middlewares: randomMiddleware,
+    },
+
+    // ── /dav ─────────────────────────────────────────────────────────────────
+    {
+        pattern: /^\/dav(\/.*)?$/,
+        params: (m) => ({ path: m[1]?.slice(1) ?? '' }),
+        middlewares: davMiddleware,
+    },
+
+    // ── /api/manage — 具体路由（顺序敏感：长路径在前）───────────────────────
+    { pattern: /^\/api\/manage\/login$/,                  params: () => ({}), middlewares: apiManageChain(onManageLoginRequest) },
+    { pattern: /^\/api\/manage\/logout$/,                 params: () => ({}), middlewares: apiManageChain(onManageLogoutRequest) },
+    { pattern: /^\/api\/manage\/stats$/,                  params: () => ({}), middlewares: apiManageChain(onManageStatsRequest) },
+    { pattern: /^\/api\/manage\/quota$/,                  params: () => ({}), middlewares: apiManageChain(onManageQuotaRequest) },
+    { pattern: /^\/api\/manage\/check$/,                  params: () => ({}), middlewares: apiManageChain(onManageCheckRequest) },
+    { pattern: /^\/api\/manage\/list$/,                   params: () => ({}), middlewares: apiManageChain(onManageListRequest) },
+    { pattern: /^\/api\/manage\/apiTokens$/,              params: () => ({}), middlewares: apiManageChain(onManageApiTokens) },
+    { pattern: /^\/api\/manage\/delete\/(.*)$/,           params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageDeleteRequest) },
+    { pattern: /^\/api\/manage\/block\/(.*)$/,            params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageBlockRequest) },
+    { pattern: /^\/api\/manage\/white\/(.*)$/,            params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageWhiteRequest) },
+    { pattern: /^\/api\/manage\/metadata\/(.*)$/,         params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageMetadataRequest) },
+    { pattern: /^\/api\/manage\/move\/(.*)$/,             params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageMoveRequest) },
+    { pattern: /^\/api\/manage\/rename\/(.*)$/,           params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageRenameRequest) },
+    { pattern: /^\/api\/manage\/tags\/autocomplete$/,     params: () => ({}), middlewares: apiManageChain(onManageTagsAutoRequest) },
+    { pattern: /^\/api\/manage\/tags\/batch$/,            params: () => ({}), middlewares: apiManageChain(onManageTagsBatchRequest) },
+    { pattern: /^\/api\/manage\/tags\/(.*)$/,             params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageTagsRequest) },
+    { pattern: /^\/api\/manage\/sysConfig\/security$/,    params: () => ({}), middlewares: apiManageChain(onManageSysConfigSecurity) },
+    { pattern: /^\/api\/manage\/sysConfig\/upload$/,      params: () => ({}), middlewares: apiManageChain(onManageSysConfigUpload) },
+    { pattern: /^\/api\/manage\/sysConfig\/others$/,      params: () => ({}), middlewares: apiManageChain(onManageSysConfigOthers) },
+    { pattern: /^\/api\/manage\/sysConfig\/page$/,        params: () => ({}), middlewares: apiManageChain(onManageSysConfigPage) },
+    { pattern: /^\/api\/manage\/cusConfig\/list$/,        params: () => ({}), middlewares: apiManageChain(onManageCusConfigList) },
+    { pattern: /^\/api\/manage\/cusConfig\/blockip$/,     params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIp) },
+    { pattern: /^\/api\/manage\/cusConfig\/blockipList$/, params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIpList) },
+    { pattern: /^\/api\/manage\/cusConfig\/whiteip$/,     params: () => ({}), middlewares: apiManageChain(onManageCusConfigWhiteIp) },
+    { pattern: /^\/api\/manage\/batch\/list$/,            params: () => ({}), middlewares: apiManageChain(onManageBatchList) },
+    { pattern: /^\/api\/manage\/batch\/settings$/,        params: () => ({}), middlewares: apiManageChain(onManageBatchSettings) },
+    { pattern: /^\/api\/manage\/batch\/index\/chunk$/,    params: () => ({}), middlewares: apiManageChain(onManageBatchIndexChunk) },
+    { pattern: /^\/api\/manage\/batch\/index\/config$/,   params: () => ({}), middlewares: apiManageChain(onManageBatchIndexConfig) },
+    { pattern: /^\/api\/manage\/batch\/index\/finalize$/, params: () => ({}), middlewares: apiManageChain(onManageBatchIndexFinalize) },
+    { pattern: /^\/api\/manage\/batch\/restore\/chunk$/,  params: () => ({}), middlewares: apiManageChain(onManageBatchRestoreChunk) },
+
+    // ── /api — 顶层路由 ──────────────────────────────────────────────────────
+    { pattern: /^\/api\/login$/,                          params: () => ({}), middlewares: [checkDatabaseConfig, onLoginRequest] },
+    { pattern: /^\/api\/userConfig$/,                     params: () => ({}), middlewares: [checkDatabaseConfig, onUserConfigRequest] },
+    { pattern: /^\/api\/channels$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onChannelsRequest] },
+    { pattern: /^\/api\/fetchRes$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onFetchResRequest] },
+    { pattern: /^\/api\/public\/list$/,                   params: () => ({}), middlewares: [checkDatabaseConfig, onPublicListRequest] },
+    { pattern: /^\/api\/bing\/wallpaper$/,                params: () => ({}), middlewares: [checkDatabaseConfig, onBingWallpaperRequest] },
+    { pattern: /^\/api\/huggingface\/getUploadUrl$/,      params: () => ({}), middlewares: [checkDatabaseConfig, onHfGetUploadUrlRequest] },
+    { pattern: /^\/api\/huggingface\/commitUpload$/,      params: () => ({}), middlewares: [checkDatabaseConfig, onHfCommitRequest] },
+];
+
+// ── Worker 主入口 ─────────────────────────────────────────────────────────────
+
+export default {
+    /**
+     * @param {Request}          request
+     * @param {object}           env     - 包含 img_url / img_r2 / img_d1 / ASSETS 绑定
+     * @param {ExecutionContext}  ctx
+     */
+    async fetch(request, env, ctx) {
+        const url = new URL(request.url);
+        const pathname = url.pathname;
+
+        // 遍历路由表，找到第一个匹配的规则
+        for (const route of ROUTES) {
+            const match = pathname.match(route.pattern);
+            if (match) {
+                const params = route.params(match);
+                try {
+                    return await runMiddlewareChain(request, env, ctx, params, route.middlewares);
+                } catch (err) {
+                    console.error(`[worker] Error handling ${pathname}:`, err);
+                    return new Response(`Internal Server Error: ${err.message}`, { status: 500 });
+                }
+            }
+        }
+
+        // 无动态路由匹配 → 转发给静态资源绑定
+        // env.ASSETS 由 wrangler.toml [assets] binding = "ASSETS" 提供
+        if (env.ASSETS) {
+            return env.ASSETS.fetch(request);
+        }
+
+        return new Response('Not Found', { status: 404 });
+    },
+};

@@ -1,0 +1,104 @@
+# =============================================================================
+# CloudFlare-ImgBed — Cloudflare Workers 部署配置
+# 文档：https://developers.cloudflare.com/workers/wrangler/configuration/
+# =============================================================================
+
+name               = "cloudflare-imgbed"
+main               = "src/worker.js"
+compatibility_date = "2025-01-01"
+workers_dev        = true
+
+# keep_vars = true 确保在 Dashboard 手动添加的绑定不会被 wrangler deploy 覆盖掉
+# 文档：https://developers.cloudflare.com/workers/wrangler/configuration/#source-of-truth
+keep_vars = true
+
+# =============================================================================
+# 静态资源
+# 文档：https://developers.cloudflare.com/workers/static-assets/
+# =============================================================================
+[assets]
+directory          = ".wrangler-assets"
+binding            = "ASSETS"
+not_found_handling = "none"
+
+# 以下路径交给 Worker 处理，其余直接走静态资源 CDN
+run_worker_first = [
+  "/upload/*",
+  "/file/*",
+  "/api/*",
+  "/random/*",
+  "/dav/*",
+]
+
+# =============================================================================
+# KV 命名空间绑定
+#
+# 方案 A（推荐，Wrangler ≥ 4.45.0）：省略 id，首次 wrangler deploy 时
+#   Cloudflare 自动创建 KV Namespace 并写回 id。
+#   文档：https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning
+#
+# 方案 B（Wrangler < 4.45.0 或仪表板绑定）：
+#   在 Cloudflare Dashboard → Workers & Pages → 你的 Worker
+#   → Settings → Bindings → Add → KV Namespace
+#   变量名填 img_url，选择已有的 KV Namespace，保存即可。
+#   搭配顶部 keep_vars = true 防止下次部署时被覆盖。
+# =============================================================================
+[[kv_namespaces]]
+binding = "img_url"
+# id 字段省略 → Wrangler ≥ 4.45.0 自动 Provisioning
+# 若使用旧版 Wrangler，请取消注释并填入真实 ID：
+# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# =============================================================================
+# R2 存储桶绑定（可选）
+#
+# 方案 A：省略 bucket_name，首次部署时自动创建
+# 方案 B：仪表板 → Settings → Bindings → Add → R2 Bucket，变量名 img_r2
+# =============================================================================
+[[r2_buckets]]
+binding = "img_r2"
+# bucket_name 省略 → 自动 Provisioning
+# 若使用旧版 Wrangler，请取消注释：
+# bucket_name = "your-r2-bucket-name"
+
+# =============================================================================
+# D1 数据库绑定（可选，与 KV 二选一）
+#
+# 启用方式：取消注释，省略 database_id 即可自动创建；
+# 或在仪表板 → Settings → Bindings → Add → D1 Database，变量名 img_d1
+# =============================================================================
+# [[d1_databases]]
+# binding       = "img_d1"
+# database_name = "imgbed-db"
+# database_id   省略 → 自动 Provisioning
+
+# =============================================================================
+# 可选：自定义域名（取消注释并填入你的域名）
+# workers_dev = false
+# [[routes]]
+# pattern       = "img.yourdomain.com"
+# custom_domain = true
+# =============================================================================
+
+# =============================================================================
+# 可选：环境变量（明文，密钥请用 wrangler secret put）
+# =============================================================================
+# [vars]
+# dev_mode = "false"
+
+# =============================================================================
+# 开发环境（wrangler dev --env dev）
+# =============================================================================
+[env.dev]
+name      = "cloudflare-imgbed-dev"
+keep_vars = true
+
+[[env.dev.kv_namespaces]]
+binding = "img_url"
+
+[[env.dev.r2_buckets]]
+binding = "img_r2"
+
+# [[env.dev.d1_databases]]
+# binding       = "img_d1"
+# database_name = "imgbed-db-dev"
