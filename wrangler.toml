@@ -17,7 +17,7 @@ keep_vars = true
 # 文档：https://developers.cloudflare.com/workers/static-assets/
 # =============================================================================
 [assets]
-directory          = ".wrangler-assets"
+directory          = "."
 binding            = "ASSETS"
 not_found_handling = "none"
 

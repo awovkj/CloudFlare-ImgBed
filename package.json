@@ -5,6 +5,8 @@
 
     "start": "npx wrangler pages dev ./ --kv \"img_url\" --r2 \"img_r2\" --ip 0.0.0.0 --port 8080 --persist-to ./data",
 
+    "build:worker": "wrangler deploy --dry-run --outdir .wrangler-worker-build",
+
     "worker:dev": "wrangler dev --port 8788 --persist-to ./data",
     "worker:deploy": "wrangler deploy",
     "worker:deploy:dev": "wrangler deploy --env dev",

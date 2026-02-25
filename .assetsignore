@@ -1,7 +1,6 @@
 # Cloudflare Workers 静态资源排除列表
+# assets.directory = "." 时生效，排除以下文件/目录不上传为静态资源
 # 文档：https://developers.cloudflare.com/workers/static-assets/configuration/#assetsignore
-#
-# 以下文件/目录不应被上传为静态资源
 
 # Worker 源码
 src/
@@ -13,6 +12,7 @@ functions/
 node_modules/
 .wrangler/
 .wrangler-worker-build/
+.wrangler-assets/
 
 # 开发数据
 data/
@@ -21,10 +21,13 @@ data/
 wrangler.toml
 package.json
 package-lock.json
+.assetsignore
+.gitignore
+.dockerignore
+
+# Docker
 Dockerfile
 docker-compose.yml
-.dockerignore
-.gitignore
 
 # 文档
 README.md
@@ -34,3 +37,10 @@ LICENSE
 # Git
 .git/
 .github/
+
+# IDE
+.kiro/
+.vscode/
+
+# 压缩文件（已有 index.html，无需上传 .gz）
+*.gz
