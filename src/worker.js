@@ -18,23 +18,24 @@
 // ── 业务模块导入（直接复用 functions/ 目录，路径相对于本文件）──────────────────
 
 // upload
-import { onRequest as onUploadRequest }       from '../functions/upload/index.js';
-import { onRequest as onChunkUploadRequest }   from '../functions/upload/chunkUpload.js';
-import { onRequest as onChunkMergeRequest }    from '../functions/upload/chunkMerge.js';
+import { onRequest as onUploadRequest }        from '../functions/upload/index.js';
+// chunkUpload.js / chunkMerge.js 是工具函数库，无 onRequest，
+// 已被 upload/index.js 内部调用，不在此单独注册路由。
 import { errorHandling, telemetryData, checkDatabaseConfig } from '../functions/utils/middleware.js';
 
 // file
-import { onRequest as onFileRequest }          from '../functions/file/[[path]].js';
+import { onRequest as onFileRequest }           from '../functions/file/[[path]].js';
 
-// api — 顶层
-import { onRequest as onLoginRequest }         from '../functions/api/login.js';
-import { onRequest as onUserConfigRequest }    from '../functions/api/userConfig.js';
-import { onRequest as onChannelsRequest }      from '../functions/api/channels.js';
-import { onRequest as onFetchResRequest }      from '../functions/api/fetchRes.js';
-import { onRequest as onPublicListRequest }    from '../functions/api/public/list.js';
-import { onRequest as onBingWallpaperRequest } from '../functions/api/bing/wallpaper/index.js';
-import { onRequest as onHfGetUploadUrlRequest }from '../functions/api/huggingface/getUploadUrl.js';
-import { onRequest as onHfCommitRequest }      from '../functions/api/huggingface/commitUpload.js';
+// api 顶层
+// login.js / huggingface/*.js 只导出 onRequestPost（Pages Functions HTTP 方法约定）
+import { onRequestPost as onLoginPost }         from '../functions/api/login.js';
+import { onRequest as onUserConfigRequest }     from '../functions/api/userConfig.js';
+import { onRequest as onChannelsRequest }       from '../functions/api/channels.js';
+import { onRequest as onFetchResRequest }       from '../functions/api/fetchRes.js';
+import { onRequest as onPublicListRequest }     from '../functions/api/public/list.js';
+import { onRequest as onBingWallpaperRequest }  from '../functions/api/bing/wallpaper/index.js';
+import { onRequestPost as onHfGetUploadUrlPost }from '../functions/api/huggingface/getUploadUrl.js';
+import { onRequestPost as onHfCommitPost }      from '../functions/api/huggingface/commitUpload.js';
 
 // api/manage — 子路由
 import { onRequest as onManageMiddleware }     from '../functions/api/manage/_middleware.js';
@@ -77,17 +78,7 @@ import { onRequest as onDavRequest }           from '../functions/dav/[[path]].j
 
 // ── Pages Functions 适配层 ────────────────────────────────────────────────────
 
-/**
- * 将 Workers 原生参数构造为 Pages Functions context 对象。
- * 所有 functions/ 模块期望接收这个 context。
- *
- * @param {Request}  request
- * @param {object}   env
- * @param {object}   ctx         - ExecutionContext (waitUntil, passThroughOnException)
- * @param {object}   [params]    - URL 路径参数，如 { path: "foo/bar.jpg" }
- * @param {object}   [data]      - 跨中间件共享数据
- * @param {Function} [nextFn]    - context.next() 实现
- */
+/** 构造 Pages Functions context 对象 */
 function makeContext(request, env, ctx, params = {}, data = {}, nextFn = null) {
     return {
         request,
@@ -100,24 +91,10 @@ function makeContext(request, env, ctx, params = {}, data = {}, nextFn = null) {
     };
 }
 
-/**
- * 执行 Pages Functions 风格的中间件链。
- * 每个中间件收到 context，调用 context.next() 进入下一层。
- *
- * middlewares 格式：
- *  - 单个函数：直接执行
- *  - 数组（export const onRequest = [fn1, fn2]）：链式执行
- *
- * @param {Request}   request
- * @param {object}    env
- * @param {object}    ctx
- * @param {object}    params
- * @param {Function|Function[]} middlewares  - 中间件链（最后一个为终止处理器）
- */
+/** 执行 Pages Functions 风格的中间件链 */
 async function runMiddlewareChain(request, env, ctx, params, middlewares) {
     const chain = Array.isArray(middlewares) ? middlewares : [middlewares];
     const data = {};
-
     let index = 0;
 
     async function dispatch() {
@@ -132,6 +109,29 @@ async function runMiddlewareChain(request, env, ctx, params, middlewares) {
     return dispatch();
 }
 
+/**
+ * 将只导出 onRequestPost 的处理器包装为支持 OPTIONS 预检的通用处理器。
+ * Pages Functions 中 onRequestPost 只处理 POST，Workers 里需要手动处理其他方法。
+ */
+function postOnly(handler) {
+    return async function(context) {
+        if (context.request.method === 'OPTIONS') {
+            return new Response(null, {
+                status: 204,
+                headers: {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                    'Access-Control-Max-Age': '86400',
+                },
+            });
+        }
+        if (context.request.method !== 'POST') {
+            return new Response('Method Not Allowed', { status: 405 });
+        }
+        return handler(context);
+    };
+}
 // ── 路由表 ────────────────────────────────────────────────────────────────────
 //
 // 格式：[pattern, params-extractor, middlewares]
@@ -224,14 +224,15 @@ const ROUTES = [
     { pattern: /^\/api\/manage\/batch\/restore\/chunk$/,  params: () => ({}), middlewares: apiManageChain(onManageBatchRestoreChunk) },
 
     // ── /api — 顶层路由 ──────────────────────────────────────────────────────
-    { pattern: /^\/api\/login$/,                          params: () => ({}), middlewares: [checkDatabaseConfig, onLoginRequest] },
+    // login / huggingface 只有 onRequestPost，用 postOnly() 包装
+    { pattern: /^\/api\/login$/,                          params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onLoginPost)] },
     { pattern: /^\/api\/userConfig$/,                     params: () => ({}), middlewares: [checkDatabaseConfig, onUserConfigRequest] },
     { pattern: /^\/api\/channels$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onChannelsRequest] },
     { pattern: /^\/api\/fetchRes$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onFetchResRequest] },
     { pattern: /^\/api\/public\/list$/,                   params: () => ({}), middlewares: [checkDatabaseConfig, onPublicListRequest] },
     { pattern: /^\/api\/bing\/wallpaper$/,                params: () => ({}), middlewares: [checkDatabaseConfig, onBingWallpaperRequest] },
-    { pattern: /^\/api\/huggingface\/getUploadUrl$/,      params: () => ({}), middlewares: [checkDatabaseConfig, onHfGetUploadUrlRequest] },
-    { pattern: /^\/api\/huggingface\/commitUpload$/,      params: () => ({}), middlewares: [checkDatabaseConfig, onHfCommitRequest] },
+    { pattern: /^\/api\/huggingface\/getUploadUrl$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)] },
+    { pattern: /^\/api\/huggingface\/commitUpload$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfCommitPost)] },
 ];
 
 // ── Worker 主入口 ─────────────────────────────────────────────────────────────
