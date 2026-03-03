@@ -1,0 +1,57 @@
+
+ ⛅️ wrangler 4.53.0 (update available 4.69.0)
+─────────────────────────────────────────────
+✨ Compiled Worker successfully
+[custom build] Running: node scripts/copy-assets.mjs
+[custom build] ✓ Copied 13 entries to .wrangler-assets/
+[custom build] 
+Your Worker has access to the following bindings:
+Binding                    Resource          Mode
+env.img_url (img_url)      KV Namespace      local
+env.img_r2                 R2 Bucket         local
+env.ASSETS                 Assets            local
+
+The file src changed, restarting build...
+[custom build] Running: node scripts/copy-assets.mjs
+[custom build] ✓ Copied 13 entries to .wrangler-assets/
+[custom build] 
+⎔ Starting local server...
+[wrangler:info] Ready on http://0.0.0.0:8080
+[wrangler:info] - http://172.26.0.1:8080
+[wrangler:info] - http://10.67.147.246:8080
+[wrangler:info] - http://127.0.0.1:8080
+[wrangler:info] GET / 200 OK (21ms)
+[wrangler:info] GET / 200 OK (5ms)
+[wrangler:info] GET /js/chunk-vendors.75bb1397.js 200 OK (7ms)
+[wrangler:info] GET /js/app.f1037a91.js 200 OK (8ms)
+[wrangler:info] GET /css/chunk-vendors.4363ed49.css 200 OK (6ms)
+[wrangler:info] GET /css/app.75711fde.css 200 OK (4ms)
+[wrangler:info] GET /js/file-stats-widget.js 200 OK (3ms)
+[wrangler:info] GET /api/userConfig 200 OK (34ms)
+[wrangler:info] GET /api/manage/stats 200 OK (48ms)
+[wrangler:info] GET /logo.png 200 OK (4ms)
+[wrangler:info] POST /api/login 200 OK (11ms)
+[wrangler:info] GET /logo.png 304 Not Modified (4ms)
+[wrangler:info] GET /css/275.f2e6c8a9.css 200 OK (7ms)
+[wrangler:info] GET /css/274.16f7958f.css 200 OK (11ms)
+[wrangler:info] GET /js/600.3d796c41.js 200 OK (15ms)
+[wrangler:info] GET /js/274.9b7364f3.js 200 OK (12ms)
+[wrangler:info] GET /img/logo.e8dbfa27.png 200 OK (4ms)
+[wrangler:info] GET /api/channels 200 OK (5ms)
+[wrangler:info] GET /fonts/Righteous.207a66c3.woff2 200 OK (4ms)
+[wrangler:info] GET / 304 Not Modified (14ms)
+[wrangler:info] GET /js/chunk-vendors.75bb1397.js 304 Not Modified (5ms)
+[wrangler:info] GET /js/app.f1037a91.js 304 Not Modified (11ms)
+[wrangler:info] GET /css/chunk-vendors.4363ed49.css 304 Not Modified (9ms)
+[wrangler:info] GET /css/app.75711fde.css 304 Not Modified (10ms)
+[wrangler:info] GET /js/file-stats-widget.js 304 Not Modified (8ms)
+[wrangler:info] GET /api/userConfig 200 OK (15ms)
+[wrangler:info] GET /api/manage/stats 200 OK (17ms)
+[wrangler:info] GET /js/600.3d796c41.js 304 Not Modified (4ms)
+[wrangler:info] GET /css/275.f2e6c8a9.css 304 Not Modified (5ms)
+[wrangler:info] GET /css/274.16f7958f.css 304 Not Modified (7ms)
+[wrangler:info] GET /js/274.9b7364f3.js 304 Not Modified (10ms)
+[wrangler:info] GET /img/logo.e8dbfa27.png 304 Not Modified (9ms)
+[wrangler:info] GET /api/channels 200 OK (11ms)
+[wrangler:info] GET /fonts/Righteous.207a66c3.woff2 304 Not Modified (5ms)
+^C
