@@ -396,6 +396,10 @@
         constructor(containerId) {
             this.container = document.getElementById(containerId);
             this.currentAbortController = null;
+            this.inflightPromise = null;
+            this.cacheKey = 'file-stats-widget-cache-v1';
+            this.cacheTTL = 60 * 1000;
+            this.backgroundRefreshThreshold = 15 * 1000;
             if (!this.container) {
                 console.error('File stats widget container not found:', containerId);
                 return;
@@ -454,44 +458,151 @@
             this.updateVisibility();
         }
 
-        async loadStats() {
-            if (this.currentAbortController) {
+        getCache() {
+            try {
+                const raw = localStorage.getItem(this.cacheKey);
+                if (!raw) {
+                    return null;
+                }
+
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed.timestamp !== 'number' || !parsed.data) {
+                    return null;
+                }
+
+                return parsed;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        setCache(stats) {
+            try {
+                localStorage.setItem(this.cacheKey, JSON.stringify({
+                    timestamp: Date.now(),
+                    data: stats
+                }));
+            } catch (error) {
+                return;
+            }
+        }
+
+        normalizeStats(rawStats) {
+            const stats = rawStats && typeof rawStats === 'object' ? rawStats : {};
+            const totalFiles = Number(stats.totalFiles) || 0;
+            const totalSize = Number(stats.totalSize) || 0;
+
+            const fileTypesList = Array.isArray(stats.fileTypesList)
+                ? stats.fileTypesList
+                    .map((item) => ({
+                        ext: String(item && item.ext ? item.ext : 'unknown'),
+                        count: Number(item && item.count) || 0,
+                        size: Number(item && item.size) || 0
+                    }))
+                    .filter((item) => item.count > 0 || item.size > 0)
+                : [];
+
+            return {
+                totalFiles,
+                totalSize,
+                fileTypesList
+            };
+        }
+
+        isFreshCache(cache) {
+            if (!cache || typeof cache.timestamp !== 'number') {
+                return false;
+            }
+
+            return Date.now() - cache.timestamp <= this.cacheTTL;
+        }
+
+        async fetchStats({ forceRefresh = false } = {}) {
+            if (!forceRefresh && this.inflightPromise) {
+                return this.inflightPromise;
+            }
+
+            if (forceRefresh && this.currentAbortController) {
                 this.currentAbortController.abort();
             }
 
             const controller = new AbortController();
             this.currentAbortController = controller;
 
-            try {
+            const fetchPromise = (async () => {
                 const response = await fetch('/api/manage/stats', {
                     signal: controller.signal,
                     cache: 'no-store'
                 });
+
                 if (!response.ok) {
-                    throw new Error('获取数据失败');
+                    throw new Error(`获取数据失败(${response.status})`);
                 }
 
                 const stats = await response.json();
-                this.renderStats(stats);
+                const normalized = this.normalizeStats(stats);
+                this.setCache(normalized);
+                return normalized;
+            })();
+
+            this.inflightPromise = fetchPromise;
+
+            try {
+                return await fetchPromise;
             } catch (error) {
                 if (error.name === 'AbortError') {
-                    return;
+                    return null;
                 }
 
-                console.error('Error loading stats:', error);
-                this.container.innerHTML = `
-                    <h3>📊 存储统计</h3>
-                    <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
-                    <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats()">重试</button>
-                `;
+                throw error;
             } finally {
                 if (this.currentAbortController === controller) {
                     this.currentAbortController = null;
                 }
+
+                if (this.inflightPromise === fetchPromise) {
+                    this.inflightPromise = null;
+                }
             }
         }
 
-        renderStats(stats) {
+        async loadStats(forceRefresh = false) {
+            const cache = this.getCache();
+            const cacheExists = !!cache && !!cache.data;
+            const cacheIsFresh = cacheExists && this.isFreshCache(cache);
+
+            if (!forceRefresh && cacheExists) {
+                this.renderStats(cache.data);
+
+                const cacheAge = Date.now() - cache.timestamp;
+                if (cacheIsFresh && cacheAge < this.backgroundRefreshThreshold) {
+                    return;
+                }
+            }
+
+            try {
+                const stats = await this.fetchStats({ forceRefresh });
+                if (stats) {
+                    this.renderStats(stats);
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+
+                if (cacheExists) {
+                    this.renderStats(cache.data);
+                    return;
+                }
+
+                this.container.innerHTML = `
+                    <h3>📊 存储统计</h3>
+                    <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
+                    <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">重试</button>
+                `;
+            }
+        }
+
+        renderStats(rawStats) {
+            const stats = this.normalizeStats(rawStats);
             const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 10);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
@@ -540,7 +651,7 @@
                     }).join('')}
                 </div>
 
-                <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats()">🔄 刷新数据</button>
+                <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">🔄 刷新数据</button>
                 <a href="/stats.html" class="file-stats-link" target="_blank">查看完整统计 →</a>
             `;
         }
