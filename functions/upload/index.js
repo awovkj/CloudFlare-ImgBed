@@ -714,21 +714,14 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
     const { env, waitUntil, uploadConfig, formdata, specifiedChannelName } = context;
     const db = getDatabase(env);
 
-    console.log('=== HuggingFace Upload Start ===');
-
     // 获取 HuggingFace 渠道配置
     const hfSettings = uploadConfig.huggingface;
-    console.log('HuggingFace settings:', hfSettings ? 'found' : 'not found');
-
     if (!hfSettings || !hfSettings.channels || hfSettings.channels.length === 0) {
-        console.log('Error: No HuggingFace channel configured');
         return createResponse('Error: No HuggingFace channel configured', { status: 400 });
     }
 
     // 选择渠道：优先使用指定的渠道名称
     const hfChannels = hfSettings.channels;
-    console.log('HuggingFace channels count:', hfChannels.length);
-
     let hfChannel;
     if (specifiedChannelName) {
         hfChannel = hfChannels.find(ch => ch.name === specifiedChannelName);
@@ -739,14 +732,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
             : hfChannels[0];
     }
 
-    console.log('Selected channel:', hfChannel?.name, 'repo:', hfChannel?.repo);
-
     if (!hfChannel || !hfChannel.token || !hfChannel.repo) {
-        console.log('Error: HuggingFace channel not properly configured', {
-            hasChannel: !!hfChannel,
-            hasToken: !!hfChannel?.token,
-            hasRepo: !!hfChannel?.repo
-        });
         return createResponse('Error: HuggingFace channel not properly configured', { status: 400 });
     }
 
@@ -754,20 +740,13 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
     const fileName = metadata.FileName;
     // 获取前端预计算的 SHA256（如果有）
     const precomputedSha256 = formdata.get('sha256') || null;
-    console.log('File to upload:', fileName, 'size:', file?.size, 'precomputed SHA256:', precomputedSha256 ? 'yes' : 'no');
-
     // 构建文件路径：直接使用 fullId（与其他渠道保持一致）
     const hfFilePath = fullId;
-    console.log('HuggingFace file path:', hfFilePath);
-
     const huggingfaceAPI = new HuggingFaceAPI(hfChannel.token, hfChannel.repo, hfChannel.isPrivate || false);
 
     try {
         // 上传文件到 HuggingFace（传入预计算的 SHA256）
-        console.log('Starting HuggingFace upload...');
         const result = await huggingfaceAPI.uploadFile(file, hfFilePath, `Upload ${fileName}`, precomputedSha256);
-        console.log('HuggingFace upload result:', result);
-
         if (!result.success) {
             throw new Error('Failed to upload file to HuggingFace');
         }

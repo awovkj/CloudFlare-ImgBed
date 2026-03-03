@@ -64,21 +64,18 @@ export async function onRequestPost(context) {
 
         // 如果有 multipart parts，需要先完成 multipart 上传
         if (multipartParts && multipartParts.length > 0) {
-            console.log('Completing multipart upload...');
             // multipartParts 格式: [{ partNumber, etag, completionUrl }]
             // 这里需要调用 HuggingFace 的 multipart complete API
             // 但由于前端已经完成了所有分片上传，这里只需要提交
         }
 
         // 提交 LFS 文件引用
-        console.log('Committing LFS file...');
         const commitResult = await huggingfaceAPI.commitLfsFile(
             filePath,
             sha256,
             fileSize,
             `Upload ${fileName || fullId}`
         );
-        console.log('Commit result:', JSON.stringify(commitResult));
 
         // 构建文件 URL
         const fileUrl = `https://huggingface.co/datasets/${hfChannel.repo}/resolve/main/${filePath}`;

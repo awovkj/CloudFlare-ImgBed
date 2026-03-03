@@ -53,11 +53,9 @@ export class HuggingFaceAPI {
     async createRepoIfNotExists() {
         try {
             if (await this.repoExists()) {
-                console.log('Repository exists:', this.repo);
                 return true;
             }
 
-            console.log('Creating repository:', this.repo);
             const response = await fetch(`${this.baseURL}/api/repos/create`, {
                 method: 'POST',
                 headers: {
@@ -72,7 +70,6 @@ export class HuggingFaceAPI {
             });
 
             if (response.ok || response.status === 409) {
-                console.log('Repository ready');
                 return true;
             }
             
@@ -158,7 +155,6 @@ export class HuggingFaceAPI {
         }
 
         // 基本上传
-        console.log('Uploading to LFS (basic):', href);
         const response = await fetch(href, {
             method: 'PUT',
             headers: header || {},
@@ -185,7 +181,6 @@ export class HuggingFaceAPI {
         
         // 获取所有分片的上传 URL
         const parts = Object.keys(header).filter(key => /^[0-9]+$/.test(key));
-        console.log(`Multipart upload: ${parts.length} parts, chunk size: ${chunkSize}`);
 
         const completeParts = [];
 
@@ -195,7 +190,6 @@ export class HuggingFaceAPI {
             const end = Math.min(start + chunkSize, file.size);
             const chunk = file.slice(start, end);
             
-            console.log(`Uploading part ${part}/${parts.length}`);
             const response = await fetch(header[part], {
                 method: 'PUT',
                 body: chunk
@@ -214,7 +208,6 @@ export class HuggingFaceAPI {
         }
 
         // 完成分片上传
-        console.log('Completing multipart upload...');
         const completeResponse = await fetch(completionUrl, {
             method: 'POST',
             headers: {
@@ -290,9 +283,7 @@ export class HuggingFaceAPI {
         }
 
         // 1. Preupload 检查
-        console.log('Preupload check for direct upload...');
         const preuploadResult = await this.preupload(filePath, fileSize, fileSample);
-        console.log('Preupload result:', JSON.stringify(preuploadResult));
 
         const fileInfo = preuploadResult.files?.[0];
         const needsLfs = fileInfo?.uploadMode === 'lfs';
@@ -303,9 +294,7 @@ export class HuggingFaceAPI {
         }
 
         // 2. LFS Batch - 获取上传 URL
-        console.log('LFS batch request for direct upload...');
         const batchResult = await this.lfsBatch(sha256, fileSize);
-        console.log('LFS batch result:', JSON.stringify(batchResult));
 
         const obj = batchResult.objects?.[0];
         if (obj?.error) {
@@ -346,40 +335,22 @@ export class HuggingFaceAPI {
                 throw new Error('Failed to create or access repository');
             }
 
-            console.log('=== HuggingFace LFS Upload ===');
-            console.log('Repo:', this.repo);
-            console.log('Path:', filePath);
-            console.log('Size:', file.size);
-
             // 1. 使用预计算的 SHA256 或在后端计算
-            let oid;
-            if (precomputedSha256) {
-                console.log('Using precomputed SHA256:', precomputedSha256);
-                oid = precomputedSha256;
-            } else {
-                console.log('Computing SHA256 on server (may timeout for large files)...');
-                oid = await this.sha256(file);
-                console.log('SHA256:', oid);
-            }
+            const oid = precomputedSha256 ?? await this.sha256(file);
 
             // 2. 获取文件样本（前512字节的base64）
             const sampleBytes = new Uint8Array(await file.slice(0, 512).arrayBuffer());
             const sample = btoa(String.fromCharCode(...sampleBytes));
 
             // 3. Preupload 检查
-            console.log('Preupload check...');
             const preuploadResult = await this.preupload(filePath, file.size, sample);
-            console.log('Preupload result:', JSON.stringify(preuploadResult));
 
             const fileInfo = preuploadResult.files?.[0];
             const needsLfs = fileInfo?.uploadMode === 'lfs';
-            console.log('Needs LFS:', needsLfs);
 
             if (needsLfs) {
                 // 4. LFS Batch - 获取上传 URL
-                console.log('LFS batch request...');
                 const batchResult = await this.lfsBatch(oid, file.size);
-                console.log('LFS batch result:', JSON.stringify(batchResult));
 
                 const obj = batchResult.objects?.[0];
                 if (obj?.error) {
@@ -388,20 +359,13 @@ export class HuggingFaceAPI {
 
                 // 5. 上传到 LFS 存储（如果需要）
                 if (obj?.actions?.upload) {
-                    console.log('Uploading to LFS storage...');
                     await this.uploadToLFS(obj.actions.upload, file, oid);
-                    console.log('LFS upload complete');
-                } else {
-                    console.log('File already exists in LFS');
                 }
 
                 // 6. 提交 LFS 文件引用
-                console.log('Committing LFS file...');
-                const commitResult = await this.commitLfsFile(filePath, oid, file.size, commitMessage);
-                console.log('Commit result:', JSON.stringify(commitResult));
+                await this.commitLfsFile(filePath, oid, file.size, commitMessage);
             } else {
                 // 非 LFS 文件：直接 base64 提交（小文本文件）
-                console.log('Direct commit (non-LFS)...');
                 await this.commitDirectFile(filePath, file, commitMessage);
             }
 

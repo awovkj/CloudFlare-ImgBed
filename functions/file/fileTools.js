@@ -1,5 +1,9 @@
 /* ======== 文件读取工具函数 ======== */
 
+// 域名正则表达式缓存（模块生命周期内有效）
+let _domainRegexCache = null;
+let _domainRegexCacheKey = null;
+
 // 判断请求域名是否在允许的域名列表中
 export function isDomainAllowed(context) {
     const { Referer, securityConfig, url } = context;
@@ -10,14 +14,18 @@ export function isDomainAllowed(context) {
         try {
             const refererUrl = new URL(Referer);
             if (allowedDomains && allowedDomains.trim() !== '') {
-                const domains = allowedDomains.split(',');
-                domains.push(url.hostname);// 把自身域名加入白名单
+                // 构建缓存键（包含 hostname 以匹配自身域名）
+                const cacheKey = allowedDomains + '|' + url.hostname;
+                if (_domainRegexCacheKey !== cacheKey) {
+                    const domains = allowedDomains.split(',');
+                    domains.push(url.hostname); // 把自身域名加入白名单
+                    _domainRegexCache = domains.map(domain =>
+                        new RegExp(`(^|\\.)${domain.trim().replace(/\./g, '\\.')}$`)
+                    );
+                    _domainRegexCacheKey = cacheKey;
+                }
 
-                let isAllowed = domains.some(domain => {
-                    let domainPattern = new RegExp(`(^|\\.)${domain.replace('.', '\\.')}$`); // Escape dot in domain
-                    return domainPattern.test(refererUrl.hostname);
-                });
-
+                const isAllowed = _domainRegexCache.some(re => re.test(refererUrl.hostname));
                 if (!isAllowed) {
                     return false;
                 }

@@ -32,12 +32,12 @@ export async function errorHandling(context) {
     let remoteSampleRate = 0.001;
     try {
       remoteSampleRate = await fetchSampleRate(context);
-    } catch (e) { console.log(e) }
+    } catch (e) { console.error(e); }
     const sampleRate = env.sampleRate || remoteSampleRate;
     return sentryPlugin({
       dsn: "https://44b7b443108ec6d298044b125ff89d28@o4507644548022272.ingest.us.sentry.io/4507644555100160",
       tracesSampleRate: sampleRate,
-    })(context);;
+    })(context);
   }
 
   return context.next();
@@ -89,7 +89,7 @@ export async function telemetryData(context) {
       context.data.transaction = transaction;
       return await context.next();
     } catch (e) {
-      console.log(e);
+      console.error(e);
     } finally {
       context.data.transaction.finish();
     }
@@ -102,10 +102,8 @@ export async function traceData(context, span, op, name) {
   const data = context.data
   if (data.telemetry) {
     if (span) {
-      console.log("span finish")
       span.finish();
     } else {
-      console.log("span start")
       span = await context.data.transaction.startChild(
         { op: op, name: name },
       );
