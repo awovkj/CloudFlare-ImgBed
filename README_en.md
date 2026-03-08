@@ -88,6 +88,19 @@ Provides detailed deployment documentation, feature docs, development plans, upd
 
 [![recent update](https://recent-update.cfbed.sanyue.de/en)](https://cfbed.sanyue.de/en/guide/update-log.html)
 
+## Deployment Modes (Pages / Workers)
+
+The project now supports both **Cloudflare Pages** and **Cloudflare Workers** deployment.
+
+- **Pages local dev (default)**: `npm run pages:dev` (`npm start` is equivalent)
+- **Workers local dev**: `npm run worker:dev`
+- **Workers dry-run build check**: `npm run build:worker`
+- **Workers deploy (production)**: `npm run worker:deploy`
+- **Workers deploy (dev env)**: `npm run worker:deploy:dev`
+
+> Worker entry and static assets are configured in `wrangler.toml` (`main = "src/worker.js"` with `[assets]`).
+> On first deployment, verify KV / R2 / D1 bindings in Cloudflare Dashboard based on your actual setup.
+
 # 3. Demo
 
 **Demo Address**: [CloudFlare ImgBed](https://cfbed.1314883.xyz/) Access Password: `cfbed`

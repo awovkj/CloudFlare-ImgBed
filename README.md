@@ -99,6 +99,19 @@
 
 [![更新日志](https://recent-update.cfbed.sanyue.de/cn)](https://cfbed.sanyue.de/guide/update-log.html)
 
+## 部署模式（Pages / Workers）
+
+项目现已同时支持 **Cloudflare Pages** 与 **Cloudflare Workers** 两种部署方式。
+
+- **Pages 本地开发（默认）**：`npm run pages:dev`（`npm start` 等价）
+- **Workers 本地开发**：`npm run worker:dev`
+- **Workers 预构建检查**：`npm run build:worker`
+- **Workers 部署（生产）**：`npm run worker:deploy`
+- **Workers 部署（dev 环境）**：`npm run worker:deploy:dev`
+
+> Workers 入口与静态资源配置见 `wrangler.toml`（`main = "src/worker.js"`，`[assets]` 已配置）。
+> 首次部署请在 Cloudflare 后台确认 KV / R2 / D1 绑定是否符合你的实际使用方案。
+
 # 3. Demo
 
 **演示站点**：[CloudFlare ImgBed](https://cfbed.1314883.xyz/) 访问密码：`cfbed`
