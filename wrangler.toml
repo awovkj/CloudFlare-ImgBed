@@ -25,7 +25,6 @@ command = "node scripts/copy-assets.mjs"
 # =============================================================================
 [assets]
 directory          = ".wrangler-assets"   # 由 [build] 自动准备
-binding            = "ASSETS"
 not_found_handling = "single-page-application"
 
 # 以下路径交给 Worker 处理，其余直接走静态资源 CDN

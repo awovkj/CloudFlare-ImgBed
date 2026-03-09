@@ -1,20 +1,3 @@
-/**
- * CloudFlare-ImgBed — Cloudflare Workers 入口
- *
- * 职责：
- *  1. 将 Cloudflare Workers fetch(request, env, ctx) 适配为 Pages Functions context 对象
- *  2. 复用全部 functions/ 业务逻辑，无需改动任何业务代码
- *  3. 静态资源通过 env.ASSETS.fetch() 转发给 [assets] 绑定处理
- *
- * 路由表（与 wrangler.toml run_worker_first 保持一致）：
- *  POST /upload/*         → functions/upload/index.js
- *  GET  /file/*           → functions/file/[[path]].js
- *  *    /api/*            → functions/api/**
- *  GET  /random/*         → functions/random/index.js
- *  *    /dav/*            → functions/dav/[[path]].js
- *  其他                   → env.ASSETS（静态资源）
- */
-
 // ── 业务模块导入（直接复用 functions/ 目录，路径相对于本文件）──────────────────
 
 // upload
@@ -238,11 +221,6 @@ const ROUTES = [
 // ── Worker 主入口 ─────────────────────────────────────────────────────────────
 
 export default {
-    /**
-     * @param {Request}          request
-     * @param {object}           env     - 包含 img_url / img_r2 / img_d1 / ASSETS 绑定
-     * @param {ExecutionContext}  ctx
-     */
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const pathname = url.pathname;
@@ -261,8 +239,6 @@ export default {
             }
         }
 
-        // 无动态路由匹配 → 转发给静态资源绑定
-        // env.ASSETS 由 wrangler.toml [assets] binding = "ASSETS" 提供
         if (env.ASSETS) {
             return env.ASSETS.fetch(request);
         }

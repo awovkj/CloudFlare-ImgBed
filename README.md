@@ -109,7 +109,7 @@
 - **Workers 部署（生产）**：`npm run worker:deploy`
 - **Workers 部署（dev 环境）**：`npm run worker:deploy:dev`
 
-> Workers 入口与静态资源配置见 `wrangler.toml`（`main = "src/worker.js"`，`[assets]` 已配置）。
+> Workers 入口与静态资源配置见 `wrangler.toml`（`main = "src/worker.js"`，`[assets]` 已配置）。默认**不需要手动绑定 `ASSETS`**；只有当你想在 Worker 代码里主动调用静态资源处理器时，才需要额外声明该绑定。
 > 首次部署请在 Cloudflare 后台确认 KV / R2 / D1 绑定是否符合你的实际使用方案。
 
 # 3. Demo

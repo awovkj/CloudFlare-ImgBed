@@ -98,7 +98,7 @@ The project now supports both **Cloudflare Pages** and **Cloudflare Workers** de
 - **Workers deploy (production)**: `npm run worker:deploy`
 - **Workers deploy (dev env)**: `npm run worker:deploy:dev`
 
-> Worker entry and static assets are configured in `wrangler.toml` (`main = "src/worker.js"` with `[assets]`).
+> Worker entry and static assets are configured in `wrangler.toml` (`main = "src/worker.js"` with `[assets]`). By default, you **do not need to bind `ASSETS` manually**; only add that binding if you explicitly want to call the static asset handler from Worker code.
 > On first deployment, verify KV / R2 / D1 bindings in Cloudflare Dashboard based on your actual setup.
 
 # 3. Demo
