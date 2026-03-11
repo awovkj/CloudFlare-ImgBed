@@ -400,6 +400,7 @@
             this.cacheKey = 'file-stats-widget-cache-v1';
             this.cacheTTL = 60 * 1000;
             this.backgroundRefreshThreshold = 15 * 1000;
+            this.statsDisabled = false;
             if (!this.container) {
                 console.error('File stats widget container not found:', containerId);
                 return;
@@ -415,6 +416,10 @@
         }
 
         updateVisibility() {
+            if (this.statsDisabled) {
+                this.container.style.display = 'none';
+                return;
+            }
             if (this.shouldShowWidget()) {
                 this.container.style.display = 'block';
                 if (!this.container.innerHTML || this.container.innerHTML.includes('正在加载统计数据') || this.container.innerHTML.includes('加载失败')) {
@@ -462,7 +467,7 @@
             try {
                 const resp = await fetch('/api/manage/stats', { cache: 'no-store' });
                 if (resp.status === 403) {
-                    // 管理员已禁用统计图显示
+                    this.statsDisabled = true;
                     this.container.style.display = 'none';
                     return;
                 }
@@ -549,6 +554,12 @@
                     cache: 'no-store'
                 });
 
+                if (response.status === 403) {
+                    this.statsDisabled = true;
+                    this.container.style.display = 'none';
+                    try { localStorage.removeItem(this.cacheKey); } catch(e) {}
+                    throw new Error('STATS_DISABLED');
+                }
                 if (!response.ok) {
                     throw new Error(`获取数据失败(${response.status})`);
                 }
@@ -581,6 +592,7 @@
         }
 
         async loadStats(forceRefresh = false) {
+            if (this.statsDisabled) return;
             const cache = this.getCache();
             const cacheExists = !!cache && !!cache.data;
             const cacheIsFresh = cacheExists && this.isFreshCache(cache);
@@ -597,9 +609,11 @@
             try {
                 const stats = await this.fetchStats({ forceRefresh });
                 if (stats) {
+                    if (this.statsDisabled) return;
                     this.renderStats(stats);
                 }
             } catch (error) {
+                if (this.statsDisabled) return;
                 console.error('Error loading stats:', error);
 
                 if (cacheExists) {
@@ -612,11 +626,10 @@
                     <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
                     <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">重试</button>
                 `;
-            }
         }
 
         renderStats(rawStats) {
-            const stats = this.normalizeStats(rawStats);
+            if (this.statsDisabled) return;
             const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 10);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
