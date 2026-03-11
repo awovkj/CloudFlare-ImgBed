@@ -407,7 +407,6 @@
             }
             
             this.init();
-            this.setupRouteListener();
         }
 
         shouldShowWidget() {
@@ -460,16 +459,23 @@
 
         init() {
             this.container.className = 'file-stats-widget';
-            this.checkConfigAndShow();
+            // 先检查配置，完成后再注册路由监听，避免竞态
+            this.checkConfigAndShow().then(() => {
+                this.setupRouteListener();
+            });
         }
 
         async checkConfigAndShow() {
             try {
-                const resp = await fetch('/api/manage/stats', { cache: 'no-store' });
-                if (resp.status === 403) {
-                    this.statsDisabled = true;
-                    this.container.style.display = 'none';
-                    return;
+                const resp = await fetch('/api/manage/sysConfig/showStats', { cache: 'no-store' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.enabled === false) {
+                        this.statsDisabled = true;
+                        this.container.style.display = 'none';
+                        try { localStorage.removeItem(this.cacheKey); } catch(e) {}
+                        return;
+                    }
                 }
             } catch (e) {
                 // network error: show widget by default

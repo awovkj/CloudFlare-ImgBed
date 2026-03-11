@@ -123,7 +123,7 @@ async function authentication(context) {
   }
 
   const pathname = new URL(context.request.url).pathname;
-  if (pathname === '/api/manage/stats') {
+  if (pathname === '/api/manage/stats' || pathname === '/api/manage/sysConfig/showStats') {
     return context.next();
   }
 
