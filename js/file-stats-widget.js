@@ -407,6 +407,7 @@
             }
             
             this.init();
+            this.setupRouteListener();
         }
 
         shouldShowWidget() {
@@ -459,10 +460,8 @@
 
         init() {
             this.container.className = 'file-stats-widget';
-            // 先检查配置，完成后再注册路由监听，避免竞态
-            this.checkConfigAndShow().then(() => {
-                this.setupRouteListener();
-            });
+            this.setupRouteListener();
+            this.checkConfigAndShow();
         }
 
         async checkConfigAndShow() {
@@ -560,12 +559,6 @@
                     cache: 'no-store'
                 });
 
-                if (response.status === 403) {
-                    this.statsDisabled = true;
-                    this.container.style.display = 'none';
-                    try { localStorage.removeItem(this.cacheKey); } catch(e) {}
-                    throw new Error('STATS_DISABLED');
-                }
                 if (!response.ok) {
                     throw new Error(`获取数据失败(${response.status})`);
                 }
@@ -615,11 +608,9 @@
             try {
                 const stats = await this.fetchStats({ forceRefresh });
                 if (stats) {
-                    if (this.statsDisabled) return;
                     this.renderStats(stats);
                 }
             } catch (error) {
-                if (this.statsDisabled) return;
                 console.error('Error loading stats:', error);
 
                 if (cacheExists) {
@@ -634,6 +625,7 @@
                 `;
             }
         }
+
         renderStats(rawStats) {
             if (this.statsDisabled) return;
             const stats = this.normalizeStats(rawStats);
