@@ -632,10 +632,11 @@
                     <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
                     <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">重试</button>
                 `;
+            }
         }
-
         renderStats(rawStats) {
             if (this.statsDisabled) return;
+            const stats = this.normalizeStats(rawStats);
             const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 10);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
