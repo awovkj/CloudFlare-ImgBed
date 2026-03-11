@@ -1,4 +1,5 @@
 import { getDatabase } from '../../utils/databaseAdapter.js';
+import { fetchOthersConfig } from '../../utils/sysConfig.js';
 
 const STATS_CACHE_TTL_MS = 30000;
 let cachedStats = null;
@@ -52,6 +53,18 @@ export async function onRequest(context) {
     if (request.method === 'OPTIONS') {
         return new Response(null, {
             headers: corsHeaders
+        });
+    }
+
+    // 检查是否允许显示统计图
+    const othersConfig = await fetchOthersConfig(env);
+    if (othersConfig.showStats && othersConfig.showStats.enabled === false) {
+        return new Response(JSON.stringify({ error: 'Stats disabled', showStats: false }), {
+            status: 403,
+            headers: {
+                'Content-Type': 'application/json',
+                ...corsHeaders
+            }
         });
     }
 

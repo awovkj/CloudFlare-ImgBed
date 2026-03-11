@@ -460,13 +460,11 @@
 
         async checkConfigAndShow() {
             try {
-                const resp = await fetch('/api/manage/sysConfig/others');
-                if (resp.ok) {
-                    const config = await resp.json();
-                    if (config && config.showStats && config.showStats.enabled === false) {
-                        this.container.style.display = 'none';
-                        return;
-                    }
+                const resp = await fetch('/api/manage/stats', { cache: 'no-store' });
+                if (resp.status === 403) {
+                    // 管理员已禁用统计图显示
+                    this.container.style.display = 'none';
+                    return;
                 }
             } catch (e) {
                 // network error: show widget by default
