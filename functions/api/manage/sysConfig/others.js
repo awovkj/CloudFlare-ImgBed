@@ -90,6 +90,12 @@ export async function getOthersConfig(db, env) {
         fixed: false,
     }
 
+    // 首页统计图显示
+    const kvShowStats = settingsKV.showStats || {}
+    settings.showStats = {
+        enabled: kvShowStats.enabled ?? true,
+        fixed: false,
+    }
 
     return settings;
 }

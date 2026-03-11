@@ -455,6 +455,22 @@
 
         init() {
             this.container.className = 'file-stats-widget';
+            this.checkConfigAndShow();
+        }
+
+        async checkConfigAndShow() {
+            try {
+                const resp = await fetch('/api/manage/sysConfig/others');
+                if (resp.ok) {
+                    const config = await resp.json();
+                    if (config && config.showStats && config.showStats.enabled === false) {
+                        this.container.style.display = 'none';
+                        return;
+                    }
+                }
+            } catch (e) {
+                // network error: show widget by default
+            }
             this.updateVisibility();
         }
 
