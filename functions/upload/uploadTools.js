@@ -96,6 +96,47 @@ export function isExtValid(fileExt) {
     return VALID_EXTENSIONS.has(fileExt);
 }
 
+export function sanitizeUploadFolder(folder) {
+    if (!folder || folder.trim() === '') {
+        return '';
+    }
+
+    let normalizedFolder = folder;
+    if (/%[0-9a-fA-F]{2}/.test(normalizedFolder)) {
+        try {
+            normalizedFolder = decodeURIComponent(normalizedFolder);
+        } catch {
+        }
+    }
+
+    normalizedFolder = normalizedFolder.replace(/\.\./g, '_');
+    normalizedFolder = normalizedFolder.split('/').map((segment) => segment === '.' ? '_' : segment).join('/');
+    normalizedFolder = normalizedFolder.replace(/\\/g, '/');
+    normalizedFolder = normalizedFolder.replace(/\/{2,}/g, '/');
+    normalizedFolder = normalizedFolder.replace(/^\/+/, '');
+    normalizedFolder = normalizedFolder.replace(/\/+$/, '');
+
+    return normalizedFolder
+        .split('/')
+        .map((segment) => segment.replace(/[\\:\*\?"'<>| \(\)\[\]\{\}#%\^`~;@&=\+\$,]/g, '_'))
+        .filter((segment) => segment.length > 0)
+        .join('/');
+}
+
+export function resolveFileExt(fileName, fileType = 'application/octet-stream') {
+    let fileExt = fileName.split('.').pop();
+    if (fileExt && fileExt !== fileName && isExtValid(fileExt)) {
+        return fileExt;
+    }
+
+    const typePart = fileType.split('/').pop();
+    if (typePart && typePart !== fileType) {
+        return typePart;
+    }
+
+    return 'bin';
+}
+
 /**
  * 从图片文件头部提取尺寸信息
  * 支持 JPEG, PNG, GIF, WebP, BMP 格式

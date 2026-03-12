@@ -1,8 +1,9 @@
 import { userAuthCheck, UnauthorizedResponse } from "../utils/userAuth";
 import { fetchUploadConfig, fetchSecurityConfig } from "../utils/sysConfig";
 import {
-    createResponse, getUploadIp, getIPAddress, isExtValid,
-    moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions
+    createResponse, getUploadIp, getIPAddress, resolveFileExt,
+    moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
+    sanitizeUploadFolder
 } from "./uploadTools";
 import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram, handleCleanupRequest } from "./chunkUpload";
 import { handleChunkMerge } from "./chunkMerge";
@@ -93,6 +94,7 @@ async function processFileUpload(context, formdata = null) {
 
     // 获取上传文件夹路径
     let uploadFolder = url.searchParams.get('uploadFolder') || '';
+    uploadFolder = sanitizeUploadFolder(uploadFolder);
 
     let uploadChannel = 'TelegramNew';
     switch (urlParamUploadChannel) {
@@ -150,13 +152,10 @@ async function processFileUpload(context, formdata = null) {
     // 如果上传文件夹路径为空，尝试从文件名中获取
     if (uploadFolder === '' || uploadFolder === null || uploadFolder === undefined) {
         uploadFolder = fileName.split('/').slice(0, -1).join('/');
+        uploadFolder = sanitizeUploadFolder(uploadFolder);
+        fileName = fileName.split('/').pop();
     }
-    // 处理文件夹路径格式，确保没有开头的/
-    const normalizedFolder = uploadFolder
-        ? uploadFolder.replace(/^\/+/, '') // 移除开头的/
-            .replace(/\/{2,}/g, '/') // 替换多个连续的/为单个/
-            .replace(/\/$/, '') // 移除末尾的/
-        : '';
+    const normalizedFolder = uploadFolder;
 
     const metadata = {
         FileName: fileName,
@@ -178,15 +177,7 @@ async function processFileUpload(context, formdata = null) {
         metadata.Height = imageDimensions.height;
     }
 
-    let fileExt = fileName.split('.').pop(); // 文件扩展名
-    if (!isExtValid(fileExt)) {
-        // 如果文件名中没有扩展名，尝试从文件类型中获取
-        fileExt = fileType.split('/').pop();
-        if (fileExt === fileType || fileExt === '' || fileExt === null || fileExt === undefined) {
-            // Type中无法获取扩展名
-            fileExt = 'unknown' // 默认扩展名
-        }
-    }
+    const fileExt = resolveFileExt(fileName, fileType);
 
     // 构建文件ID
     const fullId = await buildUniqueFileId(context, fileName, fileType);

@@ -1,5 +1,13 @@
 import { fetchOthersConfig } from "../utils/sysConfig";
 import { readIndex } from "../utils/indexManager";
+import { detectDevice, resolveOrientation, addClientHintsHeaders } from "./adaptive.js";
+
+const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+};
 
 let othersConfig = {};
 let allowRandom = false;
@@ -16,6 +24,10 @@ export async function onRequest(context) {
     } = context;
     const requestUrl = new URL(request.url);
 
+    if (request.method === 'OPTIONS') {
+        return new Response(null, { headers: corsHeaders });
+    }
+
     // 读取其他设置
     othersConfig = await fetchOthersConfig(env);
     allowRandom = othersConfig.randomImageAPI.enabled;
@@ -23,7 +35,7 @@ export async function onRequest(context) {
 
     // 检查是否启用了随机图功能
     if (allowRandom != true) {
-        return new Response(JSON.stringify({ error: "Random is disabled" }), { status: 403 });
+        return new Response(JSON.stringify({ error: "Random is disabled" }), { status: 403, headers: corsHeaders });
     }
 
     // 处理允许的目录，每个目录调整为标准格式，去掉首尾空格，去掉开头的/，替换多个连续的/为单个/，去掉末尾的/
@@ -41,7 +53,17 @@ export async function onRequest(context) {
     }
 
     // 读取图片方向参数：landscape(横图), portrait(竖图), square(方图)
-    const orientation = requestUrl.searchParams.get('orientation') || '';
+    const orientationParam = requestUrl.searchParams.get('orientation') || '';
+    const VALID_ORIENTATIONS = ['landscape', 'portrait', 'square'];
+    let orientation = '';
+    let isAutoMode = false;
+    if (VALID_ORIENTATIONS.includes(orientationParam)) {
+        orientation = orientationParam;
+    } else if (orientationParam === 'auto') {
+        isAutoMode = true;
+        const deviceInfo = detectDevice(request);
+        orientation = resolveOrientation(deviceInfo);
+    }
 
     // 读取指定文件夹
     const paramDir = requestUrl.searchParams.get('dir') || '';
@@ -56,14 +78,23 @@ export async function onRequest(context) {
         }
     }
     if (!dirAllowed) {
-        return new Response(JSON.stringify({ error: "Directory not allowed" }), { status: 403 });
+        return new Response(JSON.stringify({ error: "Directory not allowed" }), { status: 403, headers: corsHeaders });
     }
 
-    // 调用randomFileList接口，读取KV数据库中的所有记录
     let allRecords = await getRandomFileList(context, requestUrl, dir, fileType, orientation);
+    const allRecordsBeforeOrientationFilter = allRecords;
+
+    if (isAutoMode && orientation && allRecords.length === 0) {
+        allRecords = allRecordsBeforeOrientationFilter;
+    }
+
+    const responseHeaders = new Headers(corsHeaders);
+    if (isAutoMode) {
+        addClientHintsHeaders(responseHeaders);
+    }
 
     if (allRecords.length == 0) {
-        return new Response(JSON.stringify({}), { status: 200 });
+        return new Response(JSON.stringify({}), { status: 200, headers: responseHeaders });
     } else {
         const randomIndex = Math.floor(Math.random() * allRecords.length);
         const randomKey = allRecords[randomIndex];
@@ -84,10 +115,10 @@ export async function onRequest(context) {
             randomUrl = requestUrl.origin + randomPath;
             const upstreamRes = await fetch(randomUrl);
             if (!upstreamRes.ok) {
-                return new Response(JSON.stringify({ error: 'Failed to fetch random file' }), { status: 502 });
+                return new Response(JSON.stringify({ error: 'Failed to fetch random file' }), { status: 502, headers: responseHeaders });
             }
 
-            const headers = new Headers();
+            const headers = new Headers(responseHeaders);
             const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
             headers.set('Content-Type', contentType);
 
@@ -103,9 +134,9 @@ export async function onRequest(context) {
         }
         
         if (resType == 'text') {
-            return new Response(randomUrl, { status: 200 });
+            return new Response(randomUrl, { status: 200, headers: responseHeaders });
         } else {
-            return new Response(JSON.stringify({ url: randomUrl }), { status: 200 });
+            return new Response(JSON.stringify({ url: randomUrl }), { status: 200, headers: responseHeaders });
         }
     }
 }

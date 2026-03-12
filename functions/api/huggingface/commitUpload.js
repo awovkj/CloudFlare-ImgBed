@@ -7,7 +7,7 @@
 import { HuggingFaceAPI } from '../../utils/huggingfaceAPI.js';
 import { fetchUploadConfig } from '../../utils/sysConfig.js';
 import { getDatabase } from '../../utils/databaseAdapter.js';
-import { moderateContent, endUpload } from '../../upload/uploadTools.js';
+import { moderateContent, endUpload, getUploadIp, getIPAddress, sanitizeUploadFolder } from '../../upload/uploadTools.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/userAuth.js';
 
 export async function onRequestPost(context) {
@@ -27,6 +27,16 @@ export async function onRequestPost(context) {
         if (!fullId || !filePath || !sha256 || !fileSize) {
             return new Response(JSON.stringify({
                 error: 'Missing required fields: fullId, filePath, sha256, fileSize'
+            }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        const sanitizedFullId = sanitizeUploadFolder(fullId);
+        if (sanitizedFullId !== fullId) {
+            return new Response(JSON.stringify({
+                error: 'Invalid fullId: contains illegal path characters'
             }), {
                 status: 400,
                 headers: { 'Content-Type': 'application/json' }
@@ -62,39 +72,44 @@ export async function onRequestPost(context) {
 
         const huggingfaceAPI = new HuggingFaceAPI(hfChannel.token, hfChannel.repo, hfChannel.isPrivate || false);
 
-        // 如果有 multipart parts，需要先完成 multipart 上传
         if (multipartParts && multipartParts.length > 0) {
-            // multipartParts 格式: [{ partNumber, etag, completionUrl }]
-            // 这里需要调用 HuggingFace 的 multipart complete API
-            // 但由于前端已经完成了所有分片上传，这里只需要提交
+            console.log('Completing multipart upload...');
         }
 
-        // 提交 LFS 文件引用
         const commitResult = await huggingfaceAPI.commitLfsFile(
             filePath,
             sha256,
             fileSize,
             `Upload ${fileName || fullId}`
         );
+        console.log('Commit result:', JSON.stringify(commitResult));
 
-        // 构建文件 URL
         const fileUrl = `https://huggingface.co/datasets/${hfChannel.repo}/resolve/main/${filePath}`;
 
-        // 构建 metadata
+        const dirParts = fullId.split('/').slice(0, -1).join('/');
+        const normalizedDirectory = dirParts === '' ? '' : dirParts + '/';
+        const uploadIp = getUploadIp(request) || '';
+        const uploadAddress = await getIPAddress(uploadIp);
+
         const metadata = {
             FileName: fileName || fullId,
-            FileType: fileType || null,
+            FileType: fileType || '',
             Channel: "HuggingFace",
             ChannelName: hfChannel.name || "HuggingFace_env",
             FileSize: (fileSize / 1024 / 1024).toFixed(2),
             FileSizeBytes: fileSize,
+            UploadIP: uploadIp,
+            UploadAddress: uploadAddress,
+            ListType: "None",
             HfRepo: hfChannel.repo,
             HfFilePath: filePath,
             HfToken: hfChannel.token,
             HfIsPrivate: hfChannel.isPrivate || false,
             HfFileUrl: fileUrl,
             TimeStamp: Date.now(),
-            Label: "None"
+            Label: "None",
+            Directory: normalizedDirectory,
+            Tags: []
         };
 
         // 图像审查（公开仓库）

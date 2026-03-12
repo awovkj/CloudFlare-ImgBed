@@ -13,7 +13,7 @@
 import { HuggingFaceAPI } from '../../utils/huggingfaceAPI.js';
 import { fetchUploadConfig } from '../../utils/sysConfig.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/userAuth.js';
-import { buildUniqueFileId } from '../../upload/uploadTools.js';
+import { buildUniqueFileId, getUploadIp, isBlockedUploadIp } from '../../upload/uploadTools.js';
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -27,12 +27,20 @@ export async function onRequestPost(context) {
             return UnauthorizedResponse('Unauthorized');
         }
 
+        const uploadIp = getUploadIp(request);
+        if (await isBlockedUploadIp(env, uploadIp)) {
+            return new Response(JSON.stringify({ error: 'IP blocked' }), {
+                status: 403,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
         const body = await request.json();
         const { fileSize, fileName, fileType, sha256, fileSample, channelName, uploadNameType, uploadFolder } = body;
 
-        if (!fileSize || !fileName || !sha256 || !fileSample) {
+        if (!fileSize || !fileName || !fileType || !sha256 || !fileSample) {
             return new Response(JSON.stringify({
-                error: 'Missing required fields: fileSize, fileName, sha256, fileSample'
+                error: 'Missing required fields: fileSize, fileName, fileType, sha256, fileSample'
             }), {
                 status: 400,
                 headers: { 'Content-Type': 'application/json' }
@@ -79,8 +87,11 @@ export async function onRequestPost(context) {
         // 使用统一的文件命名函数生成文件ID
         const fullId = await buildUniqueFileId(context, fileName, fileType || 'application/octet-stream');
 
-        // 构建 HuggingFace 文件路径：直接使用 fullId（与其他渠道保持一致）
-        const filePath = fullId;
+        const uniquePrefix = crypto.randomUUID();
+        const lastSlashIndex = fullId.lastIndexOf('/');
+        const filePath = lastSlashIndex === -1
+            ? `${uniquePrefix}_${fullId}`
+            : `${fullId.substring(0, lastSlashIndex + 1)}${uniquePrefix}_${fullId.substring(lastSlashIndex + 1)}`;
 
         // 获取 LFS 上传信息
         const huggingfaceAPI = new HuggingFaceAPI(hfChannel.token, hfChannel.repo, hfChannel.isPrivate || false);
