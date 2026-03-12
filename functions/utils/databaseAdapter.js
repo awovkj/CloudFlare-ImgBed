@@ -9,7 +9,7 @@ const adapterCache = new WeakMap();
  * @param {Object} env - 环境变量
  * @returns {Object} 数据库适配器实例
  */
-export function createDatabaseAdapter(env) {
+function createDatabaseAdapter(env) {
     // 检查是否配置了数据库
     if (env.img_url && typeof env.img_url.get === 'function') {
         // 使用KV存储

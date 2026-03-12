@@ -98,19 +98,6 @@ export async function telemetryData(context) {
   return context.next();
 }
 
-export async function traceData(context, span, op, name) {
-  const data = context.data
-  if (data.telemetry) {
-    if (span) {
-      span.finish();
-    } else {
-      span = await context.data.transaction.startChild(
-        { op: op, name: name },
-      );
-    }
-  }
-}
-
 async function fetchSampleRate(context) {
   const data = context.data;
   if (!data.telemetry) return 0.001;

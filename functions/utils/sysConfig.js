@@ -51,16 +51,17 @@ async function filterChannelsByQuota(context, channels) {
     return results.filter(Boolean);
 }
 
+function filterEnabledChannels(settings, channelGroups) {
+    for (const group of channelGroups) {
+        settings[group].channels = settings[group].channels.filter((channel) => channel.enabled);
+    }
+}
+
 export async function fetchUploadConfig(env, context = null) {
     try {
         const db = getDatabase(env);
         const settings = await getUploadConfig(db, env);
-        // 去除 已禁用 的渠道
-        settings.telegram.channels = settings.telegram.channels.filter((channel) => channel.enabled);
-        settings.cfr2.channels = settings.cfr2.channels.filter((channel) => channel.enabled);
-        settings.s3.channels = settings.s3.channels.filter((channel) => channel.enabled);
-        settings.discord.channels = settings.discord.channels.filter((channel) => channel.enabled);
-        settings.huggingface.channels = settings.huggingface.channels.filter((channel) => channel.enabled);
+        filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface']);
 
         // 根据容量限制过滤渠道（仅 R2 和 S3）
         // 需要 context 来调用 getIndexMeta

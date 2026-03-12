@@ -1,4 +1,4 @@
-import { fetchOthersConfig } from '../../../../utils/sysConfig.js';
+import { fetchOthersConfig } from '../../../utils/sysConfig.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',

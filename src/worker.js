@@ -42,6 +42,7 @@ import { onRequest as onManageSysConfigSecurity } from '../functions/api/manage/
 import { onRequest as onManageSysConfigUpload }   from '../functions/api/manage/sysConfig/upload.js';
 import { onRequest as onManageSysConfigOthers }   from '../functions/api/manage/sysConfig/others.js';
 import { onRequest as onManageSysConfigPage }     from '../functions/api/manage/sysConfig/page.js';
+import { onRequest as onManageSysConfigShowStats } from '../functions/api/manage/sysConfig/showStats.js';
 import { onRequest as onManageCusConfigList }      from '../functions/api/manage/cusConfig/list.js';
 import { onRequest as onManageCusConfigBlockIp }   from '../functions/api/manage/cusConfig/blockip.js';
 import { onRequest as onManageCusConfigBlockIpList}from '../functions/api/manage/cusConfig/blockipList.js';
@@ -195,6 +196,7 @@ const ROUTES = [
     { pattern: /^\/api\/manage\/sysConfig\/upload$/,      params: () => ({}), middlewares: apiManageChain(onManageSysConfigUpload) },
     { pattern: /^\/api\/manage\/sysConfig\/others$/,      params: () => ({}), middlewares: apiManageChain(onManageSysConfigOthers) },
     { pattern: /^\/api\/manage\/sysConfig\/page$/,        params: () => ({}), middlewares: apiManageChain(onManageSysConfigPage) },
+    { pattern: /^\/api\/manage\/sysConfig\/showStats$/,   params: () => ({}), middlewares: apiManageChain(onManageSysConfigShowStats) },
     { pattern: /^\/api\/manage\/cusConfig\/list$/,        params: () => ({}), middlewares: apiManageChain(onManageCusConfigList) },
     { pattern: /^\/api\/manage\/cusConfig\/blockip$/,     params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIp) },
     { pattern: /^\/api\/manage\/cusConfig\/blockipList$/, params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIpList) },
