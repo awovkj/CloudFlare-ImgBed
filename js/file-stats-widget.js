@@ -4,25 +4,25 @@
  * 然后引入此脚本即可
  */
 
-(function() {
-    'use strict';
+(() => {
 
     const style = document.createElement('style');
     style.textContent = `
         .file-stats-widget {
-            background: linear-gradient(135deg, rgba(64, 158, 255, 0.92) 0%, rgba(161, 227, 204, 0.92) 100%);
-            border-radius: 18px;
-            padding: 20px;
+            background: linear-gradient(180deg, rgba(17, 38, 67, 0.84) 0%, rgba(24, 57, 96, 0.78) 52%, rgba(32, 90, 132, 0.76) 100%);
+            border-radius: 26px;
+            padding: 24px;
             color: white;
-            box-shadow: 0 6px 30px rgba(64, 158, 255, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.15);
-            backdrop-filter: blur(25px) saturate(180%);
-            -webkit-backdrop-filter: blur(25px) saturate(180%);
+            box-shadow: 0 24px 48px rgba(19, 56, 105, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(26px) saturate(160%);
+            -webkit-backdrop-filter: blur(26px) saturate(160%);
             margin: 20px 0;
             animation: widgetFadeIn 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
-            font-family: Avenir, Helvetica, Arial, sans-serif;
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
             overflow: visible;
+            border: 1px solid rgba(128, 190, 255, 0.18);
         }
 
         .file-stats-widget::before {
@@ -32,13 +32,25 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, transparent 50%);
+            background: radial-gradient(circle at top left, rgba(255, 255, 255, 0.2) 0%, transparent 38%), linear-gradient(135deg, rgba(79, 168, 255, 0.16) 0%, transparent 58%);
             pointer-events: none;
-            border-radius: 18px;
+            border-radius: 26px;
+        }
+
+        .file-stats-widget::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background-image: linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+            background-size: 18px 18px;
+            opacity: 0.24;
+            border-radius: 26px;
+            mask-image: linear-gradient(180deg, rgba(0,0,0,0.85), transparent 92%);
         }
 
         .file-stats-widget:hover {
-            box-shadow: 0 12px 40px rgba(64, 158, 255, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.2);
+            box-shadow: 0 28px 56px rgba(19, 56, 105, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.12);
             transform: translateY(-3px);
         }
 
@@ -55,13 +67,13 @@
 
         .file-stats-widget h3 {
             margin: 0 0 18px 0;
-            font-size: 19px;
+            font-size: 20px;
             font-weight: 700;
             display: flex;
             align-items: center;
             gap: 10px;
-            text-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-            letter-spacing: 0.8px;
+            text-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+            letter-spacing: 0.4px;
             position: relative;
             z-index: 1;
         }
@@ -69,38 +81,39 @@
         .file-stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
-            gap: 12px;
-            margin-bottom: 18px;
+            gap: 14px;
+            margin-bottom: 20px;
             position: relative;
             z-index: 1;
         }
 
         .file-stats-item {
-            background: rgba(255, 255, 255, 0.18);
-            padding: 16px 12px;
-            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.09));
+            padding: 18px 14px;
+            border-radius: 18px;
             text-align: center;
             backdrop-filter: blur(15px);
             -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.16);
             transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
             cursor: default;
             position: relative;
             overflow: visible;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
         }
 
         .file-stats-item:hover {
-            background: rgba(255, 255, 255, 0.28);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
             transform: translateY(-4px) scale(1.03);
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
-            border-color: rgba(255, 255, 255, 0.4);
+            box-shadow: 0 16px 28px rgba(3, 18, 43, 0.22);
+            border-color: rgba(152, 210, 255, 0.36);
         }
 
         .file-stats-value {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 800;
-            margin-bottom: 5px;
-            background: linear-gradient(135deg, #ffffff 0%, #e8f4ff 100%);
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #ffffff 0%, #d7f7ff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -111,21 +124,21 @@
         }
 
         .file-stats-label {
-            font-size: 11px;
-            opacity: 0.95;
+            font-size: 10px;
+            opacity: 0.82;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.2px;
             position: relative;
             z-index: 1;
         }
 
         .file-stats-chart {
-            background: rgba(255, 255, 255, 0.12);
-            border-radius: 14px;
-            padding: 16px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.06));
+            border-radius: 18px;
+            padding: 18px;
             margin-top: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.14);
             backdrop-filter: blur(15px);
             -webkit-backdrop-filter: blur(15px);
             position: relative;
@@ -139,17 +152,17 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.08), transparent 70%);
+            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.1), transparent 72%);
             pointer-events: none;
         }
 
         .file-stats-chart-title {
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 700;
             margin-bottom: 14px;
             text-align: center;
-            letter-spacing: 0.5px;
-            opacity: 0.95;
+            letter-spacing: 0.8px;
+            opacity: 0.9;
             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
             position: relative;
             z-index: 1;
@@ -182,12 +195,12 @@
 
         .file-stats-bar-track {
             flex: 1;
-            background: rgba(255, 255, 255, 0.15);
-            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
             height: 24px;
             overflow: visible;
             position: relative;
-            box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.12);
+            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.18);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             min-width: 0;
@@ -195,13 +208,13 @@
 
         .file-stats-bar-fill {
             height: 100%;
-            border-radius: 10px;
+            border-radius: 999px;
             transition: width 1s cubic-bezier(0.34, 1.56, 0.64, 1);
             display: flex;
             align-items: center;
             justify-content: flex-end;
             padding-right: 0;
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
             animation: barSlideIn 1s cubic-bezier(0.34, 1.56, 0.64, 1);
             position: relative;
             overflow: visible;
@@ -243,11 +256,11 @@
         }
 
         .file-stats-refresh {
-            background: rgba(255, 255, 255, 0.22);
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.1));
+            border: 1px solid rgba(255, 255, 255, 0.16);
             color: white;
-            padding: 11px 18px;
-            border-radius: 12px;
+            padding: 12px 18px;
+            border-radius: 999px;
             font-size: 13px;
             cursor: pointer;
             transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -257,17 +270,17 @@
             margin-top: 16px;
             text-transform: uppercase;
             letter-spacing: 1px;
-            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             position: relative;
         }
 
         .file-stats-refresh:hover {
-            background: rgba(255, 255, 255, 0.32);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.14));
             transform: translateY(-3px);
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-            border-color: rgba(255, 255, 255, 0.45);
+            box-shadow: 0 16px 28px rgba(0, 0, 0, 0.22);
+            border-color: rgba(152, 210, 255, 0.3);
         }
 
         .file-stats-refresh:active {
@@ -304,16 +317,16 @@
         }
 
         .file-stats-error {
-            background: rgba(255, 87, 87, 0.25);
+            background: rgba(255, 87, 87, 0.18);
             padding: 14px;
-            border-radius: 12px;
+            border-radius: 16px;
             font-size: 12px;
             text-align: center;
-            border: 1px solid rgba(255, 87, 87, 0.35);
+            border: 1px solid rgba(255, 87, 87, 0.24);
             font-weight: 600;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0 3px 10px rgba(255, 87, 87, 0.2);
+            box-shadow: 0 12px 22px rgba(255, 87, 87, 0.12);
         }
 
         .file-stats-link {
@@ -472,11 +485,14 @@
                     if (data.enabled === false) {
                         this.statsDisabled = true;
                         this.container.style.display = 'none';
-                        try { localStorage.removeItem(this.cacheKey); } catch(e) {}
+                        try {
+                            localStorage.removeItem(this.cacheKey);
+                        } catch (_e) {
+                        }
                         return;
                     }
                 }
-            } catch (e) {
+            } catch (_e) {
                 // network error: show widget by default
             }
             this.updateVisibility();
@@ -495,7 +511,7 @@
                 }
 
                 return parsed;
-            } catch (error) {
+            } catch (_error) {
                 return null;
             }
         }
@@ -506,7 +522,7 @@
                     timestamp: Date.now(),
                     data: stats
                 }));
-            } catch (error) {
+            } catch (_error) {
                 return;
             }
         }
@@ -519,9 +535,9 @@
             const fileTypesList = Array.isArray(stats.fileTypesList)
                 ? stats.fileTypesList
                     .map((item) => ({
-                        ext: String(item && item.ext ? item.ext : 'unknown'),
-                        count: Number(item && item.count) || 0,
-                        size: Number(item && item.size) || 0
+                        ext: String(item?.ext ? item.ext : 'unknown'),
+                        count: Number(item?.count) || 0,
+                        size: Number(item?.size) || 0
                     }))
                     .filter((item) => item.count > 0 || item.size > 0)
                 : [];
@@ -693,20 +709,20 @@
 
         formatNumber(num) {
             if (num >= 1000000) {
-                return (num / 1000000).toFixed(1) + 'M';
+                return `${(num / 1000000).toFixed(1)}M`;
             } else if (num >= 1000) {
-                return (num / 1000).toFixed(1) + 'K';
+                return `${(num / 1000).toFixed(1)}K`;
             }
             return num.toLocaleString();
         }
 
         formatSize(size) {
             if (size >= 1024) {
-                return (size / 1024).toFixed(2) + ' GB';
+                return `${(size / 1024).toFixed(2)} GB`;
             } else if (size >= 1) {
-                return size.toFixed(2) + ' MB';
+                return `${size.toFixed(2)} MB`;
             } else {
-                return (size * 1024).toFixed(0) + ' KB';
+                return `${(size * 1024).toFixed(0)} KB`;
             }
         }
     }
