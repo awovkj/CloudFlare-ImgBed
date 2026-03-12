@@ -14,10 +14,13 @@
   --theme-primary: #348fff;
   --theme-primary-strong: #2468ea;
   --theme-accent: #37c6b6;
+  --theme-accent-soft: #7ce6da;
   --theme-radius-lg: 24px;
   --theme-radius-md: 18px;
   --theme-radius-sm: 14px;
   --theme-grid-line: rgba(92, 140, 204, 0.08);
+  --theme-tooltip-bg: rgba(18, 30, 49, 0.94);
+  --theme-tooltip-text: rgba(255, 255, 255, 0.96);
 }
 
 html {
@@ -64,6 +67,7 @@ select,
   min-height: 100vh;
   color: var(--theme-text);
   position: relative;
+  isolation: isolate;
 }
 
 #app::before {
@@ -133,7 +137,6 @@ a {
 .el-select-dropdown,
 .el-cascader__dropdown,
 .el-picker-panel,
-.el-popper,
 .el-message,
 .el-notification {
   background: var(--theme-surface) !important;
@@ -208,6 +211,86 @@ a {
   color: var(--theme-text);
 }
 
+.el-container,
+.el-main,
+.el-header,
+.el-aside,
+.el-footer,
+.el-tabs__nav-wrap,
+.el-breadcrumb,
+.el-page-header,
+.el-steps,
+.el-form,
+.el-descriptions,
+.el-result,
+.el-empty,
+.el-alert,
+.el-statistic {
+  color: var(--theme-text);
+}
+
+.el-main,
+.el-header,
+.el-aside,
+.el-footer {
+  background: transparent;
+}
+
+.el-tabs__nav-wrap,
+.el-breadcrumb,
+.el-page-header,
+.el-steps,
+.el-form,
+.el-statistic,
+.el-result,
+.el-empty,
+.el-alert {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.35));
+  border: 1px solid rgba(123, 164, 220, 0.14);
+  border-radius: var(--theme-radius-md);
+  box-shadow: 0 14px 34px rgba(44, 88, 140, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.el-breadcrumb,
+.el-page-header,
+.el-steps,
+.el-alert,
+.el-result,
+.el-empty,
+.el-statistic {
+  padding: 14px 18px;
+}
+
+.el-tabs__nav-wrap,
+.el-form {
+  padding: 8px 10px;
+}
+
+.el-menu,
+.el-tabs__nav-wrap,
+.el-breadcrumb,
+.el-page-header {
+  margin-bottom: 16px;
+}
+
+.el-tabs__item,
+.el-menu-item,
+.el-sub-menu__title,
+.el-breadcrumb__inner,
+.el-page-header__title,
+.el-page-header__content {
+  transition: color 0.22s ease, transform 0.22s ease, opacity 0.22s ease;
+}
+
+.el-tabs__item:hover,
+.el-breadcrumb__inner:hover,
+.el-page-header__title:hover,
+.el-page-header__content:hover {
+  color: var(--theme-primary);
+}
+
 .el-dialog,
 .el-drawer {
   border: 1px solid rgba(124, 168, 223, 0.26) !important;
@@ -234,6 +317,44 @@ a {
 .el-overlay {
   background: rgba(15, 36, 63, 0.32) !important;
   backdrop-filter: blur(8px);
+}
+
+.el-popper:not(.is-dark):not(.el-tooltip__popper):not([role="tooltip"]),
+.el-dropdown__popper,
+.el-popconfirm__popper,
+.el-autocomplete-suggestion,
+.el-color-dropdown,
+.el-picker__popper {
+  background: var(--theme-surface) !important;
+  border: 1px solid var(--theme-border) !important;
+  box-shadow: var(--theme-shadow) !important;
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  color: var(--theme-text) !important;
+}
+
+.el-popper.is-dark,
+.el-tooltip__popper,
+.el-popper[role="tooltip"] {
+  background: var(--theme-tooltip-bg) !important;
+  color: var(--theme-tooltip-text) !important;
+  border: 1px solid rgba(147, 190, 255, 0.16) !important;
+  box-shadow: 0 18px 38px rgba(7, 20, 39, 0.32) !important;
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+}
+
+.el-popper.is-dark *,
+.el-tooltip__popper *,
+.el-popper[role="tooltip"] * {
+  color: inherit !important;
+}
+
+.el-popper.is-dark .el-popper__arrow::before,
+.el-tooltip__popper .el-popper__arrow::before,
+.el-popper[role="tooltip"] .el-popper__arrow::before {
+  background: var(--theme-tooltip-bg) !important;
+  border-color: rgba(147, 190, 255, 0.16) !important;
 }
 
 .el-table {
@@ -287,8 +408,30 @@ a {
   border-radius: 999px;
 }
 
+.el-tag,
+.el-badge__content {
+  box-shadow: 0 8px 20px rgba(52, 143, 255, 0.12);
+}
+
+.el-tag {
+  background: linear-gradient(135deg, rgba(52, 143, 255, 0.12), rgba(55, 198, 182, 0.12));
+  border-color: rgba(52, 143, 255, 0.14);
+  color: var(--theme-text);
+}
+
 .file-stats-widget-container {
   padding: 8px;
+}
+
+.file-stats-widget-container.is-pending {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.file-stats-widget-container.is-ready {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 0.28s ease;
 }
 
 @media (max-width: 1024px) {

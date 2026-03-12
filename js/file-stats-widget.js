@@ -408,6 +408,7 @@
     class FileStatsWidget {
         constructor(containerId) {
             this.container = document.getElementById(containerId);
+            this.containerWrapper = this.container ? this.container.parentElement : null;
             this.currentAbortController = null;
             this.inflightPromise = null;
             this.cacheKey = 'file-stats-widget-cache-v1';
@@ -423,6 +424,29 @@
             this.setupRouteListener();
         }
 
+        setPendingState() {
+            if (this.containerWrapper) {
+                this.containerWrapper.classList.add('is-pending');
+                this.containerWrapper.classList.remove('is-ready');
+            }
+            this.container.style.display = 'none';
+        }
+
+        setReadyState() {
+            if (this.containerWrapper) {
+                this.containerWrapper.classList.remove('is-pending');
+                this.containerWrapper.classList.add('is-ready');
+            }
+        }
+
+        renderLoadingSkeleton() {
+            this.container.className = 'file-stats-widget';
+            this.container.innerHTML = `
+                <h3>📊 存储统计</h3>
+                <div class="file-stats-loading">正在加载统计数据...</div>
+            `;
+        }
+
         shouldShowWidget() {
             const currentPath = window.location.pathname;
             return currentPath === '/' || currentPath === '/index.html';
@@ -435,11 +459,9 @@
             }
             if (this.shouldShowWidget()) {
                 this.container.style.display = 'block';
+                this.setReadyState();
                 if (!this.container.innerHTML || this.container.innerHTML.includes('正在加载统计数据') || this.container.innerHTML.includes('加载失败')) {
-                    this.container.innerHTML = `
-                        <h3>📊 存储统计</h3>
-                        <div class="file-stats-loading">正在加载统计数据...</div>
-                    `;
+                    this.renderLoadingSkeleton();
                     this.loadStats();
                 }
             } else {
@@ -472,8 +494,7 @@
         }
 
         init() {
-            this.container.className = 'file-stats-widget';
-            this.setupRouteListener();
+            this.setPendingState();
             this.checkConfigAndShow();
         }
 
@@ -484,7 +505,7 @@
                     const data = await resp.json();
                     if (data.enabled === false) {
                         this.statsDisabled = true;
-                        this.container.style.display = 'none';
+                        this.setPendingState();
                         try {
                             localStorage.removeItem(this.cacheKey);
                         } catch (_e) {
@@ -613,6 +634,8 @@
             const cacheIsFresh = cacheExists && this.isFreshCache(cache);
 
             if (!forceRefresh && cacheExists) {
+                this.container.style.display = 'block';
+                this.setReadyState();
                 this.renderStats(cache.data);
 
                 const cacheAge = Date.now() - cache.timestamp;
@@ -624,16 +647,22 @@
             try {
                 const stats = await this.fetchStats({ forceRefresh });
                 if (stats) {
+                    this.container.style.display = 'block';
+                    this.setReadyState();
                     this.renderStats(stats);
                 }
             } catch (error) {
                 console.error('Error loading stats:', error);
 
                 if (cacheExists) {
+                    this.container.style.display = 'block';
+                    this.setReadyState();
                     this.renderStats(cache.data);
                     return;
                 }
 
+                this.container.style.display = 'block';
+                this.setReadyState();
                 this.container.innerHTML = `
                     <h3>📊 存储统计</h3>
                     <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
@@ -696,6 +725,7 @@
                 <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">🔄 刷新数据</button>
                 <a href="/stats.html" class="file-stats-link" target="_blank">查看完整统计 →</a>
             `;
+            this.setReadyState();
         }
 
         escapeHtml(text) {
