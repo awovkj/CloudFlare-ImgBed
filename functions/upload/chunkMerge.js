@@ -24,16 +24,6 @@ function isChunkRetryableFailure(chunk) {
     return ['failed', 'timeout', 'retry_failed', 'retry_timeout'].includes(chunk.status);
 }
 
-function buildMergeRetryResponse(errorMessage, statusSummary, statusCode = 409) {
-    return {
-        success: false,
-        retryable: true,
-        statusCode,
-        error: errorMessage,
-        statusSummary
-    };
-}
-
 // 处理分块合并
 export async function handleChunkMerge(context) {
     const { request, env, url, waitUntil } = context;
@@ -142,18 +132,6 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             });
         }
 
-        if (result.retryable) {
-            return createResponse(JSON.stringify({
-                success: false,
-                retryable: true,
-                message: result.error || 'Merge not ready yet, please retry',
-                statusSummary: result.statusSummary || {}
-            }), {
-                status: result.statusCode || 409,
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-
         throw new Error(result.error || 'Merge failed');
 
     } catch (error) {
@@ -241,16 +219,10 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             const finalStatusSummary = summarizeChunkStatuses(chunkStatuses);
 
             if (processingChunks.length > 0) {
-                return buildMergeRetryResponse(
-                    `Merge is waiting for ${processingChunks.length} chunks to finish. Please retry merge shortly.`,
-                    finalStatusSummary
-                );
+                throw new Error(`Merge aborted because ${processingChunks.length} chunks are still processing. Final status: ${JSON.stringify(finalStatusSummary)}`);
             }
 
-            return buildMergeRetryResponse(
-                `Only ${completedChunks.length}/${totalChunks} chunks are completed. Please retry merge.`,
-                finalStatusSummary
-            );
+            throw new Error(`Only ${completedChunks.length}/${totalChunks} chunks completed successfully. Final status: ${JSON.stringify(finalStatusSummary)}`);
         }
 
         // 根据渠道合并分块信息
@@ -270,10 +242,6 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         return result;
 
     } catch (error) {
-        if (error?.retryable) {
-            return error;
-        }
-
         return {
             success: false,
             error: error.message

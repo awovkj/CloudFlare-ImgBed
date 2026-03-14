@@ -155,7 +155,7 @@ export async function handleChunkUpload(context) {
             expirationTtl: 3600 // 1小时过期
         });
 
-        await uploadChunkToStorageWithTimeout(
+        const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
             chunkIndex,
             totalChunks,
@@ -165,6 +165,10 @@ export async function handleChunkUpload(context) {
             uploadChannel,
             usingD1 ? chunkData : undefined
         );
+
+        if (!uploadOutcome.success) {
+            return createResponse(`Error: Failed to upload chunk - ${uploadOutcome.error || 'Unknown upload error'}`, { status: 500 });
+        }
 
         return createResponse(JSON.stringify({
             success: true,
@@ -229,7 +233,15 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
         const uploadPromise = uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData);
 
         // 竞速执行
-        await Promise.race([uploadPromise, timeoutPromise]);
+        const uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+
+        if (!uploadResult || !uploadResult.success) {
+            throw new Error(uploadResult?.error || 'Chunk upload failed');
+        }
+
+        return {
+            success: true
+        };
 
     } catch (error) {
         console.error(`Chunk ${chunkIndex} upload failed or timed out:`, error);
@@ -256,6 +268,11 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
         } catch (metaError) {
             console.error('Failed to save timeout/error metadata:', metaError);
         }
+
+        return {
+            success: false,
+            error: error.message
+        };
     }
 }
 
@@ -279,7 +296,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
             const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
             if (!chunkRecord || !chunkRecord.value) {
                 console.error(`Chunk ${chunkIndex} data not found in database`);
-                return;
+                return {
+                    success: false,
+                    error: 'Chunk data not found in database'
+                };
             }
 
             chunkData = chunkRecord.value;
@@ -317,7 +337,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
                 console.log(`Chunk ${chunkIndex} uploaded successfully to ${uploadChannel}`);
 
-                break;
+                return {
+                    success: true,
+                    uploadResult
+                };
             } else if (retry === MAX_RETRIES - 1) {
                 // 最后一次上传失败，标记为失败状态并保留原始数据以便重试
                 const failedMetadata = {
@@ -334,8 +357,18 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 });
 
                 console.warn(`Chunk ${chunkIndex} upload failed: ${failedMetadata.error}`);
+
+                return {
+                    success: false,
+                    error: failedMetadata.error || 'Unknown error'
+                };
             }
         }
+
+        return {
+            success: false,
+            error: `Chunk ${chunkIndex} upload exhausted retries`
+        };
 
     } catch (error) {
         console.error(`Error uploading chunk ${chunkIndex}:`, error);
@@ -359,6 +392,11 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
         } catch (metaError) {
             console.error('Failed to save error metadata:', metaError);
         }
+
+        return {
+            success: false,
+            error: error.message
+        };
     }
 }
 
