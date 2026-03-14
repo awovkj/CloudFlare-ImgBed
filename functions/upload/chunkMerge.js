@@ -4,6 +4,36 @@ import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatu
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 
+const INITIAL_SETTLE_WAIT_MS = 180000;
+const RETRY_SETTLE_WAIT_MS = 240000;
+const SETTLE_INTERVAL_MS = 2000;
+const FINAL_PENDING_GRACE_MS = 30000;
+
+function summarizeChunkStatuses(chunkStatuses) {
+    return chunkStatuses.reduce((acc, chunk) => {
+        acc[chunk.status] = (acc[chunk.status] || 0) + 1;
+        return acc;
+    }, {});
+}
+
+function isChunkStillProcessing(chunk) {
+    return ['uploading', 'retrying'].includes(chunk.status);
+}
+
+function isChunkRetryableFailure(chunk) {
+    return ['failed', 'timeout', 'retry_failed', 'retry_timeout'].includes(chunk.status);
+}
+
+function buildMergeRetryResponse(errorMessage, statusSummary, statusCode = 409) {
+    return {
+        success: false,
+        retryable: true,
+        statusCode,
+        error: errorMessage,
+        statusSummary
+    };
+}
+
 // 处理分块合并
 export async function handleChunkMerge(context) {
     const { request, env, url, waitUntil } = context;
@@ -55,10 +85,7 @@ export async function handleChunkMerge(context) {
         const chunkStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
 
         // 输出初始状态摘要
-        const initialStatusSummary = chunkStatuses.reduce((acc, chunk) => {
-            acc[chunk.status] = (acc[chunk.status] || 0) + 1;
-            return acc;
-        }, {});
+        const initialStatusSummary = summarizeChunkStatuses(chunkStatuses);
         console.log(`Initial chunk status summary: ${JSON.stringify(initialStatusSummary)}`);
 
         // 开始合并处理
@@ -113,9 +140,21 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
                 status: 200,
                 headers: { 'Content-Type': 'application/json' }
             });
-        } else {
-            throw new Error(result.error || 'Merge failed');
         }
+
+        if (result.retryable) {
+            return createResponse(JSON.stringify({
+                success: false,
+                retryable: true,
+                message: result.error || 'Merge not ready yet, please retry',
+                statusSummary: result.statusSummary || {}
+            }), {
+                status: result.statusCode || 409,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        throw new Error(result.error || 'Merge failed');
 
     } catch (error) {
         // 清理失败的multipart uploads
@@ -158,21 +197,29 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         };
 
         let chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
-            maxWaitMs: 30000,
-            intervalMs: 2000
+            maxWaitMs: INITIAL_SETTLE_WAIT_MS,
+            intervalMs: SETTLE_INTERVAL_MS
         });
         let completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
-        let failedChunks = chunkStatuses.filter(chunk =>
-            chunk.status === 'failed' || chunk.status === 'timeout'
-        );
+        let processingChunks = chunkStatuses.filter(isChunkStillProcessing);
+        let failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
 
         // 统计不同状态的分块
-        const statusSummary = chunkStatuses.reduce((acc, chunk) => {
-            acc[chunk.status] = (acc[chunk.status] || 0) + 1;
-            return acc;
-        }, {});
+        const statusSummary = summarizeChunkStatuses(chunkStatuses);
 
         console.log(`Chunk status summary: ${JSON.stringify(statusSummary)}`);
+
+        if (processingChunks.length > 0) {
+            console.log(`Still waiting for ${processingChunks.length} chunks to finish uploading before merge`);
+
+            chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
+                maxWaitMs: FINAL_PENDING_GRACE_MS,
+                intervalMs: SETTLE_INTERVAL_MS
+            });
+            completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
+            processingChunks = chunkStatuses.filter(isChunkStillProcessing);
+            failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
+        }
 
         // 如果有失败的分块，尝试重试
         if (failedChunks.length > 0) {
@@ -181,20 +228,29 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             await retryFailedChunks(context, failedChunks, uploadChannel);
 
             chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
-                maxWaitMs: 45000,
-                intervalMs: 2000
+                maxWaitMs: RETRY_SETTLE_WAIT_MS,
+                intervalMs: SETTLE_INTERVAL_MS
             });
             completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
+            processingChunks = chunkStatuses.filter(isChunkStillProcessing);
+            failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
         }
 
         // 最终检查是否所有分块都完成
         if (completedChunks.length !== totalChunks) {
-            const finalStatusSummary = chunkStatuses.reduce((acc, chunk) => {
-                acc[chunk.status] = (acc[chunk.status] || 0) + 1;
-                return acc;
-            }, {});
+            const finalStatusSummary = summarizeChunkStatuses(chunkStatuses);
 
-            throw new Error(`Only ${completedChunks.length}/${totalChunks} chunks completed successfully. Final status: ${JSON.stringify(finalStatusSummary)}`);
+            if (processingChunks.length > 0) {
+                return buildMergeRetryResponse(
+                    `Merge is waiting for ${processingChunks.length} chunks to finish. Please retry merge shortly.`,
+                    finalStatusSummary
+                );
+            }
+
+            return buildMergeRetryResponse(
+                `Only ${completedChunks.length}/${totalChunks} chunks are completed. Please retry merge.`,
+                finalStatusSummary
+            );
         }
 
         // 根据渠道合并分块信息
@@ -214,6 +270,10 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         return result;
 
     } catch (error) {
+        if (error?.retryable) {
+            return error;
+        }
+
         return {
             success: false,
             error: error.message
@@ -222,15 +282,13 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
 }
 
 async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
-    const maxWaitMs = options.maxWaitMs || 30000;
-    const intervalMs = options.intervalMs || 2000;
+    const maxWaitMs = options.maxWaitMs || INITIAL_SETTLE_WAIT_MS;
+    const intervalMs = options.intervalMs || SETTLE_INTERVAL_MS;
     const startedAt = Date.now();
 
     let statuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
     while (Date.now() - startedAt < maxWaitMs) {
-        const inProgressCount = statuses.filter(chunk =>
-            chunk.status === 'uploading' || chunk.status === 'retrying'
-        ).length;
+        const inProgressCount = statuses.filter(isChunkStillProcessing).length;
 
         if (inProgressCount === 0) {
             return statuses;

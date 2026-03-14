@@ -5,6 +5,9 @@ import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 
+const CHUNK_UPLOAD_TIMEOUT_MS = 180000;
+const CHUNK_STATUS_TIMEOUT_GRACE_MS = 120000;
+
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
     const { request, env, url } = context;
@@ -142,7 +145,7 @@ export async function handleChunkUpload(context) {
             uploadStartTime: uploadStartTime,
             status: 'uploading',
             uploadChannel,
-            timeoutThreshold: uploadStartTime + 60000 // 1分钟超时阈值
+            timeoutThreshold: uploadStartTime + CHUNK_UPLOAD_TIMEOUT_MS + CHUNK_STATUS_TIMEOUT_GRACE_MS
         };
 
         // 立即保存分块记录和数据，设置过期时间
@@ -215,12 +218,11 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
     const { env } = context;
     const db = getDatabase(env);
     const chunkKey = `chunk_${uploadId}_${chunkIndex.toString().padStart(3, '0')}`;
-    const UPLOAD_TIMEOUT = 180000; // 3分钟超时
 
     try {
         // 设置超时 Promise
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Upload timeout')), UPLOAD_TIMEOUT);
+            setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
         });
 
         // 执行实际上传
