@@ -766,6 +766,76 @@ export async function readIndex(context, options = {}) {
     }
 }
 
+export async function getDirectoryTree(context) {
+    const result = await readIndex(context, {
+        count: -1,
+        includeSubdirFiles: true
+    });
+
+    if (!result.success || !Array.isArray(result.files)) {
+        return [];
+    }
+
+    const directorySet = new Set();
+
+    result.files.forEach(file => {
+        const rawDir = file?.metadata?.Directory || extractDirectory(file.id);
+        const normalizedDir = normalizeDirectoryPath(rawDir);
+
+        if (!normalizedDir) {
+            return;
+        }
+
+        const segments = normalizedDir.split('/').filter(Boolean);
+        let currentPath = '';
+
+        segments.forEach(segment => {
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+            directorySet.add(currentPath);
+        });
+    });
+
+    if (directorySet.size === 0) {
+        return [];
+    }
+
+    const treeNodeMap = new Map();
+    const sortedDirectories = Array.from(directorySet).sort((a, b) => {
+        const depthDiff = getDirectoryDepth(a) - getDirectoryDepth(b);
+        return depthDiff !== 0 ? depthDiff : a.localeCompare(b);
+    });
+
+    sortedDirectories.forEach(dirPath => {
+        const name = getDirectoryName(dirPath);
+        const value = `${dirPath}/`;
+        treeNodeMap.set(dirPath, {
+            name,
+            title: name,
+            label: name,
+            key: value,
+            value,
+            path: value,
+            children: []
+        });
+    });
+
+    const rootNodes = [];
+
+    sortedDirectories.forEach(dirPath => {
+        const node = treeNodeMap.get(dirPath);
+        const parentPath = getParentDirectoryPath(dirPath);
+
+        if (parentPath && treeNodeMap.has(parentPath)) {
+            treeNodeMap.get(parentPath).children.push(node);
+        } else {
+            rootNodes.push(node);
+        }
+    });
+
+    sortDirectoryTree(rootNodes);
+    return rootNodes;
+}
+
 /**
  * 重建索引（从数据库中的所有文件重新构建索引）
  * @param {Object} context - 上下文对象
@@ -1394,6 +1464,42 @@ function extractDirectory(filePath) {
         return ''; // 根目录
     }
     return filePath.substring(0, lastSlashIndex + 1); // 包含最后的斜杠
+}
+
+function normalizeDirectoryPath(directory) {
+    if (!directory || typeof directory !== 'string') {
+        return '';
+    }
+    return directory.replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function getDirectoryDepth(dirPath) {
+    if (!dirPath) {
+        return 0;
+    }
+    return dirPath.split('/').filter(Boolean).length;
+}
+
+function getDirectoryName(dirPath) {
+    const segments = dirPath.split('/').filter(Boolean);
+    return segments[segments.length - 1] || '';
+}
+
+function getParentDirectoryPath(dirPath) {
+    const lastSlashIndex = dirPath.lastIndexOf('/');
+    if (lastSlashIndex === -1) {
+        return '';
+    }
+    return dirPath.substring(0, lastSlashIndex);
+}
+
+function sortDirectoryTree(nodes) {
+    nodes.sort((a, b) => a.title.localeCompare(b.title));
+    nodes.forEach(node => {
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            sortDirectoryTree(node.children);
+        }
+    });
 }
 
 /**
