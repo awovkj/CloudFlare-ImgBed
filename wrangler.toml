@@ -29,10 +29,15 @@ not_found_handling = "single-page-application"
 
 # 以下路径交给 Worker 处理，其余直接走静态资源 CDN
 run_worker_first = [
+  "/upload",
   "/upload/*",
+  "/file",
   "/file/*",
+  "/api",
   "/api/*",
+  "/random",
   "/random/*",
+  "/dav",
   "/dav/*",
 ]
 
