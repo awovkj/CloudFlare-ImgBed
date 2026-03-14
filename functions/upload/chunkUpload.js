@@ -167,7 +167,17 @@ export async function handleChunkUpload(context) {
         );
 
         if (!uploadOutcome.success) {
-            return createResponse(`Error: Failed to upload chunk - ${uploadOutcome.error || 'Unknown upload error'}`, { status: 500 });
+            return createResponse(JSON.stringify({
+                success: true,
+                message: `Chunk ${chunkIndex + 1}/${totalChunks} received; storage upload will be retried during merge`,
+                uploadId,
+                chunkIndex,
+                deferred: true,
+                deferredReason: uploadOutcome.error || 'Unknown upload error'
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
         }
 
         return createResponse(JSON.stringify({
@@ -285,7 +295,11 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
                 };
 
                 // 保留原始数据以便重试
-                await db.put(chunkKey, chunkRecord.value, {
+                const fallbackChunkValue = (chunkRecord.value && chunkRecord.value.byteLength > 0)
+                    ? chunkRecord.value
+                    : (chunkData !== undefined ? chunkData : '');
+
+                await db.put(chunkKey, fallbackChunkValue, {
                     metadata: errorMetadata,
                     expirationTtl: 3600
                 });
@@ -409,7 +423,11 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     failedTime: Date.now()
                 };
 
-                await db.put(chunkKey, chunkRecord.value, {
+                const fallbackChunkValue = (chunkRecord.value && chunkRecord.value.byteLength > 0)
+                    ? chunkRecord.value
+                    : (chunkData !== undefined ? chunkData : '');
+
+                await db.put(chunkKey, fallbackChunkValue, {
                     metadata: errorMetadata,
                     expirationTtl: 3600 // 1小时过期
                 });
