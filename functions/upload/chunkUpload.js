@@ -666,7 +666,7 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
         const chunkBlob = new Blob([chunkData], { type: 'application/octet-stream' });
 
         // 上传分块到Telegram（支持代理域名）
-        const chunkInfo = await uploadChunkToTelegramWithRetry(
+        const chunkUploadResult = await uploadChunkToTelegramWithRetry(
             tgBotToken,
             tgChatId,
             tgProxyUrl,
@@ -674,12 +674,17 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
             chunkFileName,
             chunkIndex,
             totalChunks, // 传入正确的totalChunks
-            2 // maxRetries
+            5
         );
 
-        if (!chunkInfo) {
-            return { success: false, error: 'Failed to upload chunk to Telegram' };
+        if (!chunkUploadResult.success) {
+            return {
+                success: false,
+                error: chunkUploadResult.error || 'Failed to upload chunk to Telegram'
+            };
         }
+
+        const chunkInfo = chunkUploadResult.fileInfo;
 
         return {
             success: true,
@@ -1274,19 +1279,21 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
             const chunkFileName = `${fileName}.part${i.toString().padStart(3, '0')}`;
 
             // 上传分片（带重试机制）
-            const chunkInfo = await uploadChunkToTelegramWithRetry(
+            const chunkUploadResult = await uploadChunkToTelegramWithRetry(
                 tgBotToken,
                 tgChatId,
-                '',
+                tgChannel.proxyUrl || '',
                 chunkBlob,
                 chunkFileName,
                 i,
                 totalChunks
             );
 
-            if (!chunkInfo) {
-                throw new Error(`Failed to upload chunk ${i + 1}/${totalChunks} after retries`);
+            if (!chunkUploadResult.success) {
+                throw new Error(chunkUploadResult.error || `Failed to upload chunk ${i + 1}/${totalChunks} after retries`);
             }
+
+            const chunkInfo = chunkUploadResult.fileInfo;
 
             // 验证分片信息完整性
             if (!chunkInfo.file_id || !chunkInfo.file_size) {
@@ -1313,6 +1320,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
         metadata.ChannelName = tgChannel.name;
         metadata.TgChatId = tgChatId;
         metadata.TgBotToken = tgBotToken;
+        metadata.TgProxyUrl = tgChannel.proxyUrl || '';
         metadata.IsChunked = true;
         metadata.TotalChunks = totalChunks;
         metadata.FileSize = (fileSize / 1024 / 1024).toFixed(2);
@@ -1348,7 +1356,47 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
 }
 
 // 将每个分块上传至Telegram，支持失败重试（支持代理域名）
-async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 2) {
+function isTelegramRetryableError(error) {
+    const status = Number(error?.status || 0);
+    if (status === 429 || status >= 500) {
+        return true;
+    }
+
+    const message = (error?.message || '').toLowerCase();
+    const retryableKeywords = [
+        'timeout',
+        'network',
+        'fetch',
+        'temporarily',
+        'econn',
+        'etimedout',
+        'socket'
+    ];
+
+    return retryableKeywords.some(keyword => message.includes(keyword));
+}
+
+function calculateTelegramRetryDelayMs(error, attempt) {
+    const retryAfterSeconds = Number(error?.retryAfter || 0);
+    if (retryAfterSeconds > 0) {
+        return Math.min(retryAfterSeconds * 1000 + 250, 30000);
+    }
+
+    const exponentialBackoffMs = Math.min(1000 * Math.pow(2, attempt), 15000);
+    const jitterMs = Math.floor(Math.random() * 400);
+    return exponentialBackoffMs + jitterMs;
+}
+
+function buildTelegramChunkErrorMessage(error, chunkIndex, attempt, maxRetries) {
+    const status = Number(error?.status || 0);
+    const retryAfterSeconds = Number(error?.retryAfter || 0);
+    const message = error?.description || error?.message || 'Unknown Telegram upload error';
+    const statusPrefix = status ? `[status:${status}] ` : '';
+    const retryAfterPrefix = retryAfterSeconds > 0 ? `[retry_after:${retryAfterSeconds}s] ` : '';
+    return `Chunk ${chunkIndex + 1} upload attempt ${attempt}/${maxRetries} failed ${statusPrefix}${retryAfterPrefix}${message}`;
+}
+
+async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 5) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             const tgAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
@@ -1365,19 +1413,31 @@ async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, 
                 throw new Error('Failed to extract file info from response');
             }
 
-            return fileInfo;
+            return {
+                success: true,
+                fileInfo
+            };
 
         } catch (error) {
-            console.warn(`Chunk ${chunkIndex} upload attempt ${attempt + 1} failed:`, error.message);
+            const currentAttempt = attempt + 1;
+            const retryable = isTelegramRetryableError(error);
+            const errorMessage = buildTelegramChunkErrorMessage(error, chunkIndex, currentAttempt, maxRetries);
+            console.warn(errorMessage);
 
-            if (attempt === maxRetries - 1) {
-                return null; // 最后一次尝试也失败了
+            if (attempt === maxRetries - 1 || !retryable) {
+                return {
+                    success: false,
+                    error: errorMessage
+                };
             }
 
-            // 减少重试等待时间以节省CPU时间
-            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            const delayMs = calculateTelegramRetryDelayMs(error, attempt);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
         }
     }
 
-    return null;
+    return {
+        success: false,
+        error: `Chunk ${chunkIndex + 1} upload exhausted retries (${maxRetries})`
+    };
 }

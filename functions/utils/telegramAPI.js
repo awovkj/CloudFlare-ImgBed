@@ -14,6 +14,33 @@ export class TelegramAPI {
         };
     }
 
+    async parseTelegramErrorResponse(response) {
+        let description = `HTTP ${response.status}`;
+        let retryAfter = 0;
+
+        try {
+            const responseData = await response.json();
+            if (responseData && typeof responseData === 'object') {
+                description = responseData.description || description;
+                retryAfter = Number(responseData?.parameters?.retry_after || 0);
+            }
+        } catch {
+            try {
+                const text = await response.text();
+                if (text) {
+                    description = text;
+                }
+            } catch {
+            }
+        }
+
+        const error = new Error(`Telegram API error (${response.status}): ${description}`);
+        error.status = response.status;
+        error.description = description;
+        error.retryAfter = retryAfter;
+        return error;
+    }
+
     /**
      * 发送文件到Telegram
      * @param {File} file - 要发送的文件
@@ -42,7 +69,7 @@ export class TelegramAPI {
         });
         console.log('Telegram API response:', response.status, response.statusText);
         if (!response.ok) {
-            throw new Error(`Telegram API error: ${response.statusText}`);
+            throw await this.parseTelegramErrorResponse(response);
         }
 
         // 解析响应数据
