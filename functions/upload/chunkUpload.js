@@ -187,11 +187,36 @@ export async function handleChunkUpload(context) {
 
 // 处理清理请求
 export async function handleCleanupRequest(context, uploadId, totalChunks) {
+    const { env } = context;
+    const db = getDatabase(env);
+
     try {
         if (!uploadId) {
             return createResponse(JSON.stringify({
                 error: 'Missing uploadId parameter'
             }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const sessionKey = `upload_session_${uploadId}`;
+        const sessionData = await db.get(sessionKey);
+        if (sessionData) {
+            const sessionInfo = JSON.parse(sessionData);
+            const isMerging = sessionInfo.status === 'merging';
+            const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
+
+            if (isMerging && isProtectionWindowActive) {
+                return createResponse(JSON.stringify({
+                    success: false,
+                    code: 'MERGE_IN_PROGRESS',
+                    message: 'Merge is still in progress, cleanup skipped to avoid upload loop',
+                    uploadId,
+                    retryAfterMs: 5000,
+                    mergeLastStatusSummary: sessionInfo.mergeLastStatusSummary || {}
+                }), {
+                    status: 409,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
         }
 
         // 强制清理所有相关数据
