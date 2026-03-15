@@ -468,3 +468,8 @@ a {
   color: #15314b !important;
   opacity: 0.6;
 }
+
+.section-help-icon,
+.inline-help-icon {
+  display: none !important;
+}
