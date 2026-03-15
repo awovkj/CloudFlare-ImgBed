@@ -346,17 +346,29 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
         }
 
         for (let retry = 0; retry < MAX_RETRIES; retry++) {
+            // 重试前添加指数退避延迟（首次不延迟）
+            if (retry > 0) {
+                const delay = Math.min(1000 * Math.pow(2, retry - 1), 8000);
+                console.log(`Chunk ${chunkIndex} retry ${retry}/${MAX_RETRIES}, waiting ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+
             // 根据渠道上传分块
             let uploadResult = null;
 
-            if (uploadChannel === 'cfr2') {
-                uploadResult = await uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
-            } else if (uploadChannel === 's3') {
-                uploadResult = await uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
-            } else if (uploadChannel === 'telegram') {
-                uploadResult = await uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
-            } else if (uploadChannel === 'discord') {
-                uploadResult = await uploadSingleChunkToDiscord(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+            try {
+                if (uploadChannel === 'cfr2') {
+                    uploadResult = await uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+                } else if (uploadChannel === 's3') {
+                    uploadResult = await uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+                } else if (uploadChannel === 'telegram') {
+                    uploadResult = await uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+                } else if (uploadChannel === 'discord') {
+                    uploadResult = await uploadSingleChunkToDiscord(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+                }
+            } catch (uploadError) {
+                console.warn(`Chunk ${chunkIndex} attempt ${retry + 1} threw error: ${uploadError.message}`);
+                uploadResult = { success: false, error: uploadError.message };
             }
 
             if (uploadResult && uploadResult.success) {
@@ -365,6 +377,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     ...chunkMetadata,
                     status: 'completed',
                     uploadResult: uploadResult,
+                    retryCount: retry,
                     completedTime: Date.now()
                 };
 
@@ -374,7 +387,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     expirationTtl: 3600 // 1小时过期
                 });
 
-                console.log(`Chunk ${chunkIndex} uploaded successfully to ${uploadChannel}`);
+                console.log(`Chunk ${chunkIndex} uploaded successfully to ${uploadChannel}${retry > 0 ? ` (after ${retry} retries)` : ''}`);
 
                 return {
                     success: true,
@@ -386,6 +399,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     ...chunkMetadata,
                     status: 'failed',
                     error: uploadResult ? uploadResult.error : 'Unknown error',
+                    retryCount: retry + 1,
                     failedTime: Date.now()
                 };
 
@@ -395,13 +409,15 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     expirationTtl: 3600 // 1小时过期
                 });
 
-                console.warn(`Chunk ${chunkIndex} upload failed: ${failedMetadata.error}`);
+                console.warn(`Chunk ${chunkIndex} upload failed after ${MAX_RETRIES} attempts: ${failedMetadata.error}`);
 
                 return {
                     success: false,
                     error: failedMetadata.error || 'Unknown error'
                 };
             }
+
+            console.warn(`Chunk ${chunkIndex} attempt ${retry + 1} failed: ${uploadResult?.error || 'Unknown error'}`);
         }
 
         return {
@@ -936,31 +952,39 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
     let retryCount = 0;
     let lastError = null;
 
-    try {
-        const chunkRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
-        if (!chunkRecord || !chunkRecord.value) {
-            console.error(`Chunk ${chunk.index} data missing for retry`);
-            return { success: false, chunk, reason: 'data_missing', error: 'Chunk data not found' };
+    // 读取分块数据
+    const chunkRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
+    if (!chunkRecord || !chunkRecord.value) {
+        console.error(`Chunk ${chunk.index} data missing for retry`);
+        return { success: false, chunk, reason: 'data_missing', error: 'Chunk data not found' };
+    }
+
+    const chunkData = chunkRecord.value;
+    const originalFileName = chunkRecord.metadata?.originalFileName || 'unknown';
+    const originalFileType = chunkRecord.metadata?.originalFileType || 'application/octet-stream';
+    const uploadId = chunkRecord.metadata?.uploadId;
+    const totalChunks = chunkRecord.metadata?.totalChunks || 1;
+
+    // 更新重试状态
+    const retryMetadata = {
+        ...chunkRecord.metadata,
+        status: 'retrying',
+    };
+
+    await db.put(chunk.key, chunkData, {
+        metadata: retryMetadata,
+        expirationTtl: 3600
+    });
+
+    while (retryCount < maxRetries) {
+        // 重试前添加指数退避延迟（首次不延迟）
+        if (retryCount > 0) {
+            const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
+            console.log(`Chunk ${chunk.index} retry ${retryCount + 1}/${maxRetries}, waiting ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
 
-        const chunkData = chunkRecord.value;
-        const originalFileName = chunkRecord.metadata?.originalFileName || 'unknown';
-        const originalFileType = chunkRecord.metadata?.originalFileType || 'application/octet-stream';
-        const uploadId = chunkRecord.metadata?.uploadId;
-        const totalChunks = chunkRecord.metadata?.totalChunks || 1;
-
-        // 更新重试状态
-        const retryMetadata = {
-            ...chunkRecord.metadata,
-            status: 'retrying',
-        };
-
-        await db.put(chunk.key, chunkData, {
-            metadata: retryMetadata,
-            expirationTtl: 3600
-        });
-
-        while (retryCount < maxRetries) {
+        try {
             // 根据渠道重新上传，添加超时保护
             const retryPromise = (async () => {
                 if (uploadChannel === 'cfr2') {
@@ -997,51 +1021,47 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                 // 删除原始数据，只保留上传结果，设置过期时间
                 await db.put(chunk.key, '', {
                     metadata: updatedMetadata,
-                    expirationTtl: 3600 // 1小时过期
+                    expirationTtl: 3600
                 });
 
                 console.log(`Chunk ${chunk.index} retry successful after ${retryCount + 1} attempts`);
                 return { success: true, chunk, retryCount: retryCount + 1 };
-            } else if (retryCount === maxRetries - 1) {
-                throw new Error(uploadResult?.error || 'Unknown retry error');
             }
 
-            retryCount++;
             lastError = uploadResult?.error || 'Unknown error';
-            console.warn(`Chunk ${chunk.index} retry ${retryCount} failed: ${lastError}`);
-        }
-    } catch (error) {
-        lastError = error;
-        const isTimeout = error.message === 'Retry timeout';
-        console.warn(`Chunk ${chunk.index} retry ${retryCount} ${isTimeout ? 'timed out' : 'failed'}: ${error.message}`);
-
-        // 更新重试失败状态
-        try {
-            const chunkRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
-            if (chunkRecord) {
-                const failedRetryMetadata = {
-                    ...chunkRecord.metadata,
-                    status: isTimeout ? 'retry_timeout' : 'retry_failed'
-                };
-
-                await db.put(chunk.key, chunkRecord.value, {
-                    metadata: failedRetryMetadata,
-                    expirationTtl: 3600
-                });
-            }
-        } catch (metaError) {
-            console.error(`Failed to update retry error metadata for chunk ${chunk.index}:`, metaError);
+            console.warn(`Chunk ${chunk.index} retry ${retryCount + 1}/${maxRetries} failed: ${lastError}`);
+        } catch (error) {
+            lastError = error.message || 'Unknown error';
+            const isTimeout = error.message === 'Retry timeout';
+            console.warn(`Chunk ${chunk.index} retry ${retryCount + 1}/${maxRetries} ${isTimeout ? 'timed out' : 'threw error'}: ${lastError}`);
         }
 
-        if (retryCount < maxRetries) {
-            // 指数退避延迟
-            const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
-            await new Promise(resolve => setTimeout(resolve, delay));
+        retryCount++;
+    }
+
+    // 所有重试耗尽，更新最终失败状态
+    try {
+        const finalRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
+        if (finalRecord) {
+            const failedRetryMetadata = {
+                ...finalRecord.metadata,
+                status: 'retry_failed',
+                retryCount: retryCount,
+                error: lastError,
+                failedTime: Date.now()
+            };
+
+            await db.put(chunk.key, finalRecord.value || '', {
+                metadata: failedRetryMetadata,
+                expirationTtl: 3600
+            });
         }
+    } catch (metaError) {
+        console.error(`Failed to update retry error metadata for chunk ${chunk.index}:`, metaError);
     }
 
     console.error(`Chunk ${chunk.index} failed after ${maxRetries} retry attempts`);
-    return { success: false, chunk, retryCount, error: lastError?.message || 'Max retries exceeded' };
+    return { success: false, chunk, retryCount, error: lastError || 'Max retries exceeded' };
 }
 
 
