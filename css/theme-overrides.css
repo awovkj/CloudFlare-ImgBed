@@ -472,3 +472,30 @@ a {
 img.logo {
   display: none !important;
 }
+
+.el-message .el-message__content {
+  color: #15314b !important;
+}
+
+.el-message--success .el-message__content,
+.el-message--warning .el-message__content,
+.el-message--error .el-message__content,
+.el-message--info .el-message__content {
+  color: #15314b !important;
+}
+
+.el-notification__content {
+  color: #15314b !important;
+}
+
+.el-notification__title {
+  color: #15314b !important;
+}
+
+.el-message-box__message {
+  color: #15314b !important;
+}
+
+.el-message-box__title {
+  color: #15314b !important;
+}
