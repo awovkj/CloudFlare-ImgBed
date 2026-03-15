@@ -1,5 +1,5 @@
 /* ======= 客户端分块上传处理 ======= */
-import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, selectConsistentChannel, selectChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
 import { TelegramAPI } from '../utils/telegramAPI';
 import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
@@ -1274,20 +1274,15 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const { env, waitUntil } = context;
     const db = getDatabase(env);
 
-    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile download limit: 20MB, leave 4MB safety margin)
+    const CHUNK_SIZE = 45 * 1024 * 1024; // 45MB (TG Bot upload limit: 50MB, leave 5MB safety margin)
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
-
-    // 为了避免CPU超时，限制最大分片数（考虑Cloudflare Worker的CPU时间限制）
-    if (totalChunks > 50) {
-        return createResponse('Error: File too large (exceeds 1GB limit)', { status: 413 });
-    }
 
     const chunks = [];
     const uploadedChunks = [];
 
     try {
-        // 分片上传，每10个分片做一次微小延迟以避免CPU超时
+        // 分片上传
         for (let i = 0; i < totalChunks; i++) {
             const start = i * CHUNK_SIZE;
             const end = Math.min(start + CHUNK_SIZE, fileSize);
@@ -1326,11 +1321,6 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
             });
 
             uploadedChunks.push(chunkInfo.file_id);
-
-            // 每10个分片检查一下，添加微小延迟避免CPU限制
-            if (i > 0 && i % 10 === 0) {
-                await new Promise(resolve => setTimeout(resolve, 50)); // 50ms延迟
-            }
         }
 
         // 所有分片上传成功，更新metadata

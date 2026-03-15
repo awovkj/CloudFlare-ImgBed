@@ -463,6 +463,55 @@ export async function buildUniqueFileId(context, fileName, fileType = 'applicati
     }
 }
 
+/**
+ * 构建返回链接
+ * @param {URL} url - 请求URL对象
+ * @param {string} fileId - 文件ID
+ * @returns {string} 返回链接
+ */
+export function buildReturnLink(url, fileId) {
+    const returnFormat = url.searchParams.get('returnFormat') || 'default';
+    if (returnFormat === 'full') {
+        return `${url.origin}/file/${fileId}`;
+    }
+    return `/file/${fileId}`;
+}
+
+/**
+ * 通用渠道选择
+ * @param {Object} channelSettings - 渠道设置对象（如 uploadConfig.telegram）
+ * @param {string|null} specifiedName - 指定的渠道名称
+ * @param {string|null} uploadId - 上传ID（提供时使用一致性哈希选择，否则随机选择）
+ * @returns {Object|null} 选中的渠道对象
+ */
+export function selectChannel(channelSettings, specifiedName = null, uploadId = null) {
+    const channels = channelSettings.channels;
+    if (!channels || channels.length === 0) {
+        return null;
+    }
+
+    // 优先使用指定的渠道名称
+    if (specifiedName) {
+        const specified = channels.find(ch => ch.name === specifiedName);
+        if (specified) {
+            return specified;
+        }
+    }
+
+    const loadBalanceEnabled = channelSettings.loadBalance?.enabled;
+
+    // 如果提供了uploadId，使用一致性哈希（分块合并场景）
+    if (uploadId) {
+        return selectConsistentChannel(channels, uploadId, loadBalanceEnabled);
+    }
+
+    // 普通负载均衡：随机选择或选第一个
+    if (loadBalanceEnabled) {
+        return channels[Math.floor(Math.random() * channels.length)];
+    }
+    return channels[0];
+}
+
 // 基于uploadId的一致性渠道选择
 export function selectConsistentChannel(channels, uploadId, loadBalanceEnabled) {
     if (!loadBalanceEnabled || !channels || channels.length === 0) {

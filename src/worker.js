@@ -135,10 +135,16 @@ async function forwardToUploadDO(context) {
         return onUploadRequest(context);
     }
 
-    // 每次上传请求分配独立的 DO 实例，最大化并行性
-    const id = env.UPLOAD_DO.newUniqueId();
-    const stub = env.UPLOAD_DO.get(id);
-    return stub.fetch(request);
+    try {
+        // 每次上传请求分配独立的 DO 实例，最大化并行性
+        const id = env.UPLOAD_DO.newUniqueId();
+        const stub = env.UPLOAD_DO.get(id);
+        return await stub.fetch(request);
+    } catch (error) {
+        // DO 调用失败，自动 fallback 到 Worker 直接处理
+        console.error('[worker] DO forwarding failed, falling back to Worker:', error.message);
+        return onUploadRequest(context);
+    }
 }
 // ── 路由表 ────────────────────────────────────────────────────────────────────
 //

@@ -1,5 +1,5 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload, buildReturnLink, selectChannel } from './uploadTools';
 import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
@@ -497,18 +497,10 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
         // 使用multipart info中的finalFileId更新metadata
         const finalFileId = multipartInfo.key;
         metadata.Channel = "CloudflareR2";
-        // 从 R2 设置中获取渠道名称（优先使用指定的渠道名称）
+        // 从 R2 设置中获取渠道名称
         const r2Settings = context.uploadConfig.cfr2;
-        let r2ChannelName = "R2_env";
-        if (specifiedChannelName) {
-            const r2Channel = r2Settings.channels?.find(ch => ch.name === specifiedChannelName);
-            if (r2Channel) {
-                r2ChannelName = r2Channel.name;
-            }
-        } else if (r2Settings.channels?.[0]?.name) {
-            r2ChannelName = r2Settings.channels[0].name;
-        }
-        metadata.ChannelName = r2ChannelName;
+        const r2Channel = selectChannel(r2Settings, specifiedChannelName, uploadId);
+        metadata.ChannelName = r2Channel?.name || "R2_env";
         metadata.FileSize = (totalSize / 1024 / 1024).toFixed(2);
         metadata.FileSizeBytes = totalSize;
 
@@ -522,13 +514,7 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
         waitUntil(endUpload(context, finalFileId, metadata));
 
         // 更新返回链接
-        const returnFormat = url.searchParams.get('returnFormat') || 'default';
-        let updatedReturnLink = '';
-        if (returnFormat === 'full') {
-            updatedReturnLink = `${url.origin}/file/${finalFileId}`;
-        } else {
-            updatedReturnLink = `/file/${finalFileId}`;
-        }
+        const updatedReturnLink = buildReturnLink(url, finalFileId);
 
         return {
             success: true,
@@ -547,16 +533,9 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
 
     try {
         const s3Settings = uploadConfig.s3;
-        const s3Channels = s3Settings.channels;
-        
-        // 优先使用指定的渠道名称
-        let s3Channel;
-        if (specifiedChannelName) {
-            s3Channel = s3Channels.find(ch => ch.name === specifiedChannelName);
-        }
-        if (!s3Channel) {
-            s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
-        }
+
+        // 选择渠道
+        const s3Channel = selectChannel(s3Settings, specifiedChannelName, uploadId);
 
         if (!s3Channel) {
             throw new Error('No S3 channel provided');
@@ -637,13 +616,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
         waitUntil(endUpload(context, finalFileId, metadata));
 
         // 更新返回链接
-        const returnFormat = url.searchParams.get('returnFormat') || 'default';
-        let updatedReturnLink = '';
-        if (returnFormat === 'full') {
-            updatedReturnLink = `${url.origin}/file/${finalFileId}`;
-        } else {
-            updatedReturnLink = `/file/${finalFileId}`;
-        }
+        const updatedReturnLink = buildReturnLink(url, finalFileId);
 
         return {
             success: true,
@@ -662,17 +635,9 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
 
     try {
         const tgSettings = uploadConfig.telegram;
-        const tgChannels = tgSettings.channels;
-        
-        // 优先使用指定的渠道名称
-        let tgChannel;
-        if (specifiedChannelName) {
-            tgChannel = tgChannels.find(ch => ch.name === specifiedChannelName);
-        }
-        if (!tgChannel) {
-            tgChannel = selectConsistentChannel(tgChannels, uploadId, tgSettings.loadBalance.enabled);
-        }
 
+        // 选择渠道
+        const tgChannel = selectChannel(tgSettings, specifiedChannelName, uploadId);
         if (!tgChannel) {
             throw new Error('No Telegram channel provided');
         }
@@ -723,13 +688,7 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
         waitUntil(endUpload(context, finalFileId, metadata));
 
         // 生成返回链接
-        const returnFormat = url.searchParams.get('returnFormat') || 'default';
-        let updatedReturnLink = '';
-        if (returnFormat === 'full') {
-            updatedReturnLink = `${url.origin}/file/${finalFileId}`;
-        } else {
-            updatedReturnLink = `/file/${finalFileId}`;
-        }
+        const updatedReturnLink = buildReturnLink(url, finalFileId);
 
         return {
             success: true,
@@ -748,17 +707,9 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
 
     try {
         const discordSettings = uploadConfig.discord;
-        const discordChannels = discordSettings.channels;
-        
-        // 优先使用指定的渠道名称
-        let discordChannel;
-        if (specifiedChannelName) {
-            discordChannel = discordChannels.find(ch => ch.name === specifiedChannelName);
-        }
-        if (!discordChannel) {
-            discordChannel = selectConsistentChannel(discordChannels, uploadId, discordSettings.loadBalance?.enabled);
-        }
 
+        // 选择渠道
+        const discordChannel = selectChannel(discordSettings, specifiedChannelName, uploadId);
         if (!discordChannel) {
             throw new Error('No Discord channel provided');
         }
@@ -807,13 +758,7 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
         waitUntil(endUpload(context, finalFileId, metadata));
 
         // 生成返回链接
-        const returnFormat = url.searchParams.get('returnFormat') || 'default';
-        let updatedReturnLink = '';
-        if (returnFormat === 'full') {
-            updatedReturnLink = `${url.origin}/file/${finalFileId}`;
-        } else {
-            updatedReturnLink = `/file/${finalFileId}`;
-        }
+        const updatedReturnLink = buildReturnLink(url, finalFileId);
 
         return {
             success: true,

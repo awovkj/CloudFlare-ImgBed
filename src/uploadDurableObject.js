@@ -13,8 +13,30 @@ export class UploadDurableObject {
     }
 
     async fetch(request) {
-        const context = this._buildContext(request);
-        return onUploadRequest(context);
+        // 仅允许 POST 和 OPTIONS 请求
+        if (request.method !== 'POST' && request.method !== 'OPTIONS') {
+            return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+                status: 405,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        try {
+            const context = this._buildContext(request);
+            return await onUploadRequest(context);
+        } catch (error) {
+            console.error('[UploadDO] Unhandled error:', error);
+            return new Response(JSON.stringify({
+                error: 'Upload Durable Object internal error',
+                message: error.message
+            }), {
+                status: 500,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*',
+                }
+            });
+        }
     }
 
     /**

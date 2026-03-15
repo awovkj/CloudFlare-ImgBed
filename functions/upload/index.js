@@ -3,7 +3,7 @@ import { fetchUploadConfig, fetchSecurityConfig } from "../utils/sysConfig";
 import {
     createResponse, getUploadIp, getIPAddress, resolveFileExt,
     moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
-    sanitizeUploadFolder
+    sanitizeUploadFolder, buildReturnLink, selectChannel
 } from "./uploadTools";
 import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram, handleCleanupRequest } from "./chunkUpload";
 import { handleChunkMerge } from "./chunkMerge";
@@ -182,14 +182,8 @@ async function processFileUpload(context, formdata = null) {
     // 构建文件ID
     const fullId = await buildUniqueFileId(context, fileName, fileType);
 
-    // 获得返回链接格式, default为返回/file/id, full为返回完整链接
-    const returnFormat = url.searchParams.get('returnFormat') || 'default';
-    let returnLink = '';
-    if (returnFormat === 'full') {
-        returnLink = `${url.origin}/file/${fullId}`;
-    } else {
-        returnLink = `/file/${fullId}`;
-    }
+    // 获得返回链接
+    const returnLink = buildReturnLink(url, fullId);
 
     /* ====================================不同渠道上传======================================= */
     // 出错是否切换渠道自动重试，默认开启
@@ -264,14 +258,8 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
         return createResponse('Error: No R2 channel provided', { status: 400 });
     }
 
-    // 选择渠道：优先使用指定的渠道名称
-    let r2Channel;
-    if (specifiedChannelName) {
-        r2Channel = r2Settings.channels.find(ch => ch.name === specifiedChannelName);
-    }
-    if (!r2Channel) {
-        r2Channel = r2Settings.channels[0];
-    }
+    // 选择渠道
+    const r2Channel = selectChannel(r2Settings, specifiedChannelName);
 
     const R2DataBase = env.img_r2;
 
@@ -320,18 +308,9 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
     const uploadModerate = securityConfig.upload.moderate;
 
     const s3Settings = uploadConfig.s3;
-    const s3Channels = s3Settings.channels;
-    
-    // 选择渠道：优先使用指定的渠道名称
-    let s3Channel;
-    if (specifiedChannelName) {
-        s3Channel = s3Channels.find(ch => ch.name === specifiedChannelName);
-    }
-    if (!s3Channel) {
-        s3Channel = s3Settings.loadBalance.enabled
-            ? s3Channels[Math.floor(Math.random() * s3Channels.length)]
-            : s3Channels[0];
-    }
+
+    // 选择渠道
+    const s3Channel = selectChannel(s3Settings, specifiedChannelName);
 
     if (!s3Channel) {
         return createResponse('Error: No S3 channel provided', { status: 400 });
@@ -437,17 +416,8 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
 
     // 选择一个 Telegram 渠道上传
     const tgSettings = uploadConfig.telegram;
-    const tgChannels = tgSettings.channels;
-    
-    let tgChannel;
-    // 如果指定了渠道名称，优先使用指定的渠道
-    if (specifiedChannelName) {
-        tgChannel = tgChannels.find(ch => ch.name === specifiedChannelName);
-    }
-    // 未指定或未找到指定渠道，使用负载均衡或第一个
-    if (!tgChannel) {
-        tgChannel = tgSettings.loadBalance.enabled ? tgChannels[Math.floor(Math.random() * tgChannels.length)] : tgChannels[0];
-    }
+
+    const tgChannel = selectChannel(tgSettings, specifiedChannelName);
     if (!tgChannel) {
         return createResponse('Error: No Telegram channel provided', { status: 400 });
     }
@@ -460,8 +430,8 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
 
     const telegramAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
 
-    // 16MB 分片阈值 (TG Bot getFile download limit: 20MB, leave 4MB safety margin)
-    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB
+    // 45MB 分片阈值 (TG Bot upload limit: 50MB, leave 5MB safety margin)
+    const CHUNK_SIZE = 45 * 1024 * 1024; // 45MB
 
     if (fileSize > CHUNK_SIZE) {
         // 大文件分片上传
@@ -613,17 +583,8 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
         return createResponse('Error: No Discord channel configured', { status: 400 });
     }
 
-    // 选择渠道：优先使用指定的渠道名称
-    const discordChannels = discordSettings.channels;
-    let discordChannel;
-    if (specifiedChannelName) {
-        discordChannel = discordChannels.find(ch => ch.name === specifiedChannelName);
-    }
-    if (!discordChannel) {
-        discordChannel = discordSettings.loadBalance?.enabled
-            ? discordChannels[Math.floor(Math.random() * discordChannels.length)]
-            : discordChannels[0];
-    }
+    // 选择渠道
+    const discordChannel = selectChannel(discordSettings, specifiedChannelName);
 
     if (!discordChannel || !discordChannel.botToken || !discordChannel.channelId) {
         return createResponse('Error: Discord channel not properly configured', { status: 400 });
@@ -711,17 +672,8 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         return createResponse('Error: No HuggingFace channel configured', { status: 400 });
     }
 
-    // 选择渠道：优先使用指定的渠道名称
-    const hfChannels = hfSettings.channels;
-    let hfChannel;
-    if (specifiedChannelName) {
-        hfChannel = hfChannels.find(ch => ch.name === specifiedChannelName);
-    }
-    if (!hfChannel) {
-        hfChannel = hfSettings.loadBalance?.enabled
-            ? hfChannels[Math.floor(Math.random() * hfChannels.length)]
-            : hfChannels[0];
-    }
+    // 选择渠道
+    const hfChannel = selectChannel(hfSettings, specifiedChannelName);
 
     if (!hfChannel || !hfChannel.token || !hfChannel.repo) {
         return createResponse('Error: HuggingFace channel not properly configured', { status: 400 });
