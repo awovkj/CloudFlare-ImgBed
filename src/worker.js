@@ -1,3 +1,6 @@
+// ── Durable Object re-export（Wrangler 要求入口文件导出 DO 类）─────────────────
+export { UploadDurableObject } from './uploadDurableObject.js';
+
 // ── 业务模块导入（直接复用 functions/ 目录，路径相对于本文件）──────────────────
 
 // upload
@@ -116,6 +119,27 @@ function postOnly(handler) {
         return handler(context);
     };
 }
+/**
+ * 将上传请求转发到 Durable Object 处理。
+ * DO 没有实际的 CPU 时间限制（每次 I/O 重置计时器），适合上传这类长任务。
+ *
+ * fallback 条件（自动退回 Worker 直接处理）：
+ *   1. env.UPLOAD_DO 绑定不存在（未部署 DO）
+ *   2. env.DISABLE_UPLOAD_DO === 'true'（紧急回滚开关）
+ */
+async function forwardToUploadDO(context) {
+    const { request, env } = context;
+
+    // fallback：绑定不存在 或 手动禁用
+    if (!env.UPLOAD_DO || env.DISABLE_UPLOAD_DO === 'true') {
+        return onUploadRequest(context);
+    }
+
+    // 每次上传请求分配独立的 DO 实例，最大化并行性
+    const id = env.UPLOAD_DO.newUniqueId();
+    const stub = env.UPLOAD_DO.get(id);
+    return stub.fetch(request);
+}
 // ── 路由表 ────────────────────────────────────────────────────────────────────
 //
 // 格式：[pattern, params-extractor, middlewares]
@@ -127,7 +151,8 @@ function postOnly(handler) {
 // 注意：顺序即优先级，第一个匹配的路由生效。
 
 // /upload 路由中间件链（对应 functions/upload/_middleware.js + index.js）
-const uploadMiddleware = [checkDatabaseConfig, errorHandling, telemetryData, onUploadRequest];
+// 轻量中间件在 Worker 侧执行，上传逻辑卸载到 Durable Object
+const uploadMiddleware = [checkDatabaseConfig, errorHandling, telemetryData, forwardToUploadDO];
 
 // /api/manage 路由中间件链（对应 functions/api/_middleware.js + manage/_middleware.js + handler）
 function apiManageChain(handler) {

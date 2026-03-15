@@ -73,6 +73,21 @@ binding = "img_r2"
 # bucket_name = "your-r2-bucket-name"
 
 # =============================================================================
+# Durable Objects（用于上传任务卸载，绕过 Worker CPU 时间限制）
+#
+# DO 每次 I/O 操作会重置 CPU 计时器，适合上传这类包含多次顺序异步操作的任务。
+# 设置环境变量 DISABLE_UPLOAD_DO=true 可紧急回退到 Worker 直接处理。
+# =============================================================================
+[durable_objects]
+bindings = [
+    { name = "UPLOAD_DO", class_name = "UploadDurableObject" }
+]
+
+[[migrations]]
+tag = "v1_upload_do"
+new_sqlite_classes = ["UploadDurableObject"]
+
+# =============================================================================
 # D1 数据库绑定（可选，与 KV 二选一）
 #
 # 启用方式：取消注释，省略 database_id 即可自动创建；
@@ -109,6 +124,11 @@ binding = "img_url"
 
 [[env.dev.r2_buckets]]
 binding = "img_r2"
+
+[env.dev.durable_objects]
+bindings = [
+    { name = "UPLOAD_DO", class_name = "UploadDurableObject" }
+]
 
 # [[env.dev.d1_databases]]
 # binding       = "img_d1"
