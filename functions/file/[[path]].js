@@ -146,6 +146,26 @@ export async function onRequest(context) {  // Contents of context object
         const headers = new Headers(response.headers);
         setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
 
+        // 确保设置 Content-Length，特别是对于压缩包文件
+        if (!headers.has('Content-Length') && imgRecord.metadata?.FileSizeBytes) {
+            headers.set('Content-Length', imgRecord.metadata.FileSizeBytes.toString());
+        }
+
+        // 对于压缩包文件，确保 Content-Length 存在
+        const isArchiveFile = fileType && (
+            fileType.includes('zip') || 
+            fileType.includes('rar') || 
+            fileType.includes('7z') || 
+            fileType.includes('tar') || 
+            fileType.includes('gzip') ||
+            fileType.includes('application/x-compressed') ||
+            fileType.includes('application/x-zip-compressed')
+        );
+        
+        if (isArchiveFile && !headers.has('Content-Length') && imgRecord.metadata?.FileSizeBytes) {
+            headers.set('Content-Length', imgRecord.metadata.FileSizeBytes.toString());
+        }
+
         const newRes = new Response(response.body, {
             status: response.status,
             statusText: response.statusText,

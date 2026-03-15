@@ -58,7 +58,23 @@ export function isFromPublicBrowse(Referer, origin) {
 
 // 公共响应头设置函数
 export function setCommonHeaders(headers, encodedFileName, fileType, Referer, url) {
-    headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
+    // 判断是否为压缩包文件
+    const isArchiveFile = fileType && (
+        fileType.includes('zip') || 
+        fileType.includes('rar') || 
+        fileType.includes('7z') || 
+        fileType.includes('tar') || 
+        fileType.includes('gzip') ||
+        fileType.includes('application/x-compressed') ||
+        fileType.includes('application/x-zip-compressed') ||
+        fileType.includes('application/zip') ||
+        fileType.includes('application/x-rar-compressed') ||
+        fileType.includes('application/x-7z-compressed')
+    );
+
+    // 压缩包文件使用 attachment 确保正确下载
+    const dispositionType = isArchiveFile ? 'attachment' : 'inline';
+    headers.set('Content-Disposition', `${dispositionType}; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Accept-Ranges', 'bytes');
     headers.set('Vary', 'Range');
