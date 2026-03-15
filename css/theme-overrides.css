@@ -469,7 +469,6 @@ a {
   opacity: 0.6;
 }
 
-.section-help-icon,
-.inline-help-icon {
+img.logo {
   display: none !important;
 }
