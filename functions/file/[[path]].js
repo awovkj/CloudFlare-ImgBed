@@ -5,7 +5,7 @@ import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
-    returnWithCheck, return404, returnBlockImg, isDomainAllowed
+    returnWithCheck, return404, returnBlockImg, isDomainAllowed, createFixedLengthBody
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
 
@@ -152,7 +152,13 @@ export async function onRequest(context) {  // Contents of context object
             headers.set('Content-Length', imgRecord.metadata.FileSizeBytes.toString());
         }
 
-        const newRes = new Response(response.body, {
+        // 使用 FixedLengthStream 包装响应体，确保 CF Workers 不剥离 Content-Length
+        const contentLength = parseInt(headers.get('Content-Length'));
+        const body = (contentLength > 0 && response.body)
+            ? createFixedLengthBody(response.body, contentLength)
+            : response.body;
+
+        const newRes = new Response(body, {
             status: response.status,
             statusText: response.statusText,
             headers,
@@ -299,15 +305,16 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         // 设置Range相关头部
         if (isRangeRequest) {
             setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
+            const rangeLength = rangeEnd - rangeStart + 1;
 
-            return new Response(stream, {
+            return new Response(createFixedLengthBody(stream, rangeLength), {
                 status: 206, // Partial Content
                 headers,
             });
         } else {
             headers.set('Cache-Control', 'private, max-age=86400'); // CDN 不缓存完整文件，避免 CDN 不支持 Range 请求
 
-            return new Response(stream, {
+            return new Response(createFixedLengthBody(stream, totalSize), {
                 status: 200,
                 headers,
             });
@@ -490,15 +497,16 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         // 设置Range相关头部
         if (isRangeRequest) {
             setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
+            const rangeLength = rangeEnd - rangeStart + 1;
 
-            return new Response(stream, {
+            return new Response(createFixedLengthBody(stream, rangeLength), {
                 status: 206, // Partial Content
                 headers,
             });
         } else {
             headers.set('Cache-Control', 'private, max-age=86400');
 
-            return new Response(stream, {
+            return new Response(createFixedLengthBody(stream, totalSize), {
                 status: 200,
                 headers,
             });
@@ -621,7 +629,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
             headers.set('Content-Length', object.range.length.toString());
 
-            return new Response(object.body, {
+            return new Response(createFixedLengthBody(object.body, object.range.length), {
                 status: 206, // Partial Content
                 headers,
             });
@@ -632,7 +640,8 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             headers.set('Content-Length', object.size.toString());
         }
 
-        return new Response(object.body, {
+        const r2Body = object.size ? createFixedLengthBody(object.body, object.size) : object.body;
+        return new Response(r2Body, {
             status: 200,
             headers,
         });
@@ -699,7 +708,13 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 headers.set('Content-Length', metadata.FileSizeBytes.toString());
             }
 
-            return new Response(response.body, {
+            // 使用 FixedLengthStream 确保 Content-Length 不被剥离
+            const s3CdnCL = parseInt(headers.get('Content-Length'));
+            const s3CdnBody = (s3CdnCL > 0 && response.body)
+                ? createFixedLengthBody(response.body, s3CdnCL)
+                : response.body;
+
+            return new Response(s3CdnBody, {
                 status: response.status,
                 headers
             });
@@ -773,7 +788,12 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
 
         // 返回响应，支持流式传输
         const statusCode = range ? 206 : 200; // Range请求返回206 Partial Content
-        return new Response(response.Body, {
+        const s3ApiCL = parseInt(headers.get('Content-Length'));
+        const s3ApiBody = (s3ApiCL > 0 && response.Body)
+            ? createFixedLengthBody(response.Body, s3ApiCL)
+            : response.Body;
+
+        return new Response(s3ApiBody, {
             status: statusCode,
             headers
         });
@@ -848,7 +868,13 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
             headers.set('Content-Length', metadata.FileSizeBytes.toString());
         }
 
-        return new Response(response.body, {
+        // 使用 FixedLengthStream 确保 Content-Length 不被剥离
+        const discordCL = parseInt(headers.get('Content-Length'));
+        const discordBody = (discordCL > 0 && response.body)
+            ? createFixedLengthBody(response.body, discordCL)
+            : response.body;
+
+        return new Response(discordBody, {
             status: response.status,
             headers
         });

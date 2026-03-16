@@ -1,5 +1,20 @@
 /* ======== 文件读取工具函数 ======== */
 
+/**
+ * 使用 FixedLengthStream 包装响应体，确保 Cloudflare Workers 保留 Content-Length 头。
+ * 当 new Response(readableStream, ...) 时，CF Workers 会剥离 Content-Length 并使用 chunked 传输，
+ * 这导致 IDM 等下载工具无法获取文件大小。FixedLengthStream 声明了流的确切长度，使 CF 保留该头。
+ *
+ * @param {ReadableStream} body - 原始响应体
+ * @param {number} contentLength - 已知的内容长度（字节）
+ * @returns {ReadableStream} 包装后的固定长度流
+ */
+export function createFixedLengthBody(body, contentLength) {
+    const { readable, writable } = new FixedLengthStream(contentLength);
+    body.pipeTo(writable).catch(() => {});
+    return readable;
+}
+
 // 域名正则表达式缓存（模块生命周期内有效）
 let _domainRegexCache = null;
 let _domainRegexCacheKey = null;
