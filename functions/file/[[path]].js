@@ -146,23 +146,9 @@ export async function onRequest(context) {  // Contents of context object
         const headers = new Headers(response.headers);
         setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
 
-        // 确保设置 Content-Length，特别是对于压缩包文件
+        // 确保设置 Content-Length，使用元数据中的文件大小作为后备
+        // 这对于 IDM 等下载工具正确显示文件大小至关重要
         if (!headers.has('Content-Length') && imgRecord.metadata?.FileSizeBytes) {
-            headers.set('Content-Length', imgRecord.metadata.FileSizeBytes.toString());
-        }
-
-        // 对于压缩包文件，确保 Content-Length 存在
-        const isArchiveFile = fileType && (
-            fileType.includes('zip') || 
-            fileType.includes('rar') || 
-            fileType.includes('7z') || 
-            fileType.includes('tar') || 
-            fileType.includes('gzip') ||
-            fileType.includes('application/x-compressed') ||
-            fileType.includes('application/x-zip-compressed')
-        );
-        
-        if (isArchiveFile && !headers.has('Content-Length') && imgRecord.metadata?.FileSizeBytes) {
             headers.set('Content-Length', imgRecord.metadata.FileSizeBytes.toString());
         }
 
@@ -620,6 +606,11 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
         object.writeHttpMetadata(headers);
         setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
 
+        // 确保设置 Content-Length（用于HEAD请求和正常请求）
+        if (!headers.has('Content-Length') && object.size) {
+            headers.set('Content-Length', object.size.toString());
+        }
+
         // 处理HEAD请求
         if (request.method === 'HEAD') {
             return handleHeadRequest(headers);
@@ -636,7 +627,11 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             });
         }
 
-        // 正常请求
+        // 正常请求 - 确保设置 Content-Length
+        if (!headers.has('Content-Length') && object.size) {
+            headers.set('Content-Length', object.size.toString());
+        }
+
         return new Response(object.body, {
             status: 200,
             headers,
@@ -660,6 +655,9 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
             if (request.method === 'HEAD') {
                 const headers = new Headers();
                 setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
+                if (metadata?.FileSizeBytes) {
+                    headers.set('Content-Length', metadata.FileSizeBytes.toString());
+                }
                 return handleHeadRequest(headers);
             }
 
@@ -694,6 +692,11 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
             }
             if (response.headers.get('Content-Range')) {
                 headers.set('Content-Range', response.headers.get('Content-Range'));
+            }
+
+            // 确保 Content-Length 存在，使用元数据中的文件大小作为后备
+            if (!headers.has('Content-Length') && metadata?.FileSizeBytes) {
+                headers.set('Content-Length', metadata.FileSizeBytes.toString());
             }
 
             return new Response(response.body, {
@@ -758,6 +761,11 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
             headers.set('Content-Range', response.ContentRange);
         }
 
+        // 确保 Content-Length 存在，使用元数据中的文件大小作为后备
+        if (!headers.has('Content-Length') && metadata?.FileSizeBytes) {
+            headers.set('Content-Length', metadata.FileSizeBytes.toString());
+        }
+
         // 处理HEAD请求
         if (request.method === 'HEAD') {
             return handleHeadRequest(headers);
@@ -801,6 +809,9 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         if (request.method === 'HEAD') {
             const headers = new Headers();
             setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
+            if (metadata.FileSizeBytes) {
+                headers.set('Content-Length', metadata.FileSizeBytes.toString());
+            }
             return handleHeadRequest(headers);
         }
 
@@ -830,6 +841,11 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         }
         if (response.headers.get('Content-Range')) {
             headers.set('Content-Range', response.headers.get('Content-Range'));
+        }
+
+        // 确保 Content-Length 存在，使用元数据中的文件大小作为后备
+        if (!headers.has('Content-Length') && metadata.FileSizeBytes) {
+            headers.set('Content-Length', metadata.FileSizeBytes.toString());
         }
 
         return new Response(response.body, {
@@ -864,6 +880,9 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         if (request.method === 'HEAD') {
             const headers = new Headers();
             setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
+            if (metadata.FileSizeBytes) {
+                headers.set('Content-Length', metadata.FileSizeBytes.toString());
+            }
             return handleHeadRequest(headers);
         }
 
@@ -900,6 +919,11 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         }
         if (response.headers.get('Content-Range')) {
             headers.set('Content-Range', response.headers.get('Content-Range'));
+        }
+
+        // 确保 Content-Length 存在，使用元数据中的文件大小作为后备
+        if (!headers.has('Content-Length') && metadata.FileSizeBytes) {
+            headers.set('Content-Length', metadata.FileSizeBytes.toString());
         }
 
         return new Response(response.body, {
