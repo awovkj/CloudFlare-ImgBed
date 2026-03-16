@@ -1,5 +1,5 @@
 /**
- * 文件统计小部件 - 可嵌入到上传页面
+ * 文件统计小部件 - 嵌入到首页底部
  * 使用方法：在页面中添加 <div id="file-stats-widget"></div>
  * 然后引入此脚本即可
  */
@@ -9,290 +9,344 @@
     const style = document.createElement('style');
     style.textContent = `
         .file-stats-widget {
-            background: linear-gradient(180deg, rgba(17, 38, 67, 0.84) 0%, rgba(24, 57, 96, 0.78) 52%, rgba(32, 90, 132, 0.76) 100%);
-            border-radius: 26px;
-            padding: 24px;
-            color: white;
-            box-shadow: 0 24px 48px rgba(19, 56, 105, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.08);
-            backdrop-filter: blur(26px) saturate(160%);
-            -webkit-backdrop-filter: blur(26px) saturate(160%);
-            margin: 20px 0;
-            animation: widgetFadeIn 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+            background: var(--theme-surface, rgba(255, 255, 255, 0.74));
+            border-radius: var(--theme-radius-lg, 24px);
+            padding: 28px 32px;
+            color: var(--theme-text, #15314b);
+            box-shadow: var(--theme-shadow, 0 18px 50px rgba(44, 88, 140, 0.12));
+            backdrop-filter: blur(22px) saturate(150%);
+            -webkit-backdrop-filter: blur(22px) saturate(150%);
+            border: 1px solid var(--theme-border, rgba(123, 164, 220, 0.22));
+            animation: widgetFadeIn 0.5s ease;
             font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
-            overflow: visible;
-            border: 1px solid rgba(128, 190, 255, 0.18);
+            overflow: hidden;
         }
 
         .file-stats-widget::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: radial-gradient(circle at top left, rgba(255, 255, 255, 0.2) 0%, transparent 38%), linear-gradient(135deg, rgba(79, 168, 255, 0.16) 0%, transparent 58%);
-            pointer-events: none;
-            border-radius: 26px;
-        }
-
-        .file-stats-widget::after {
-            content: '';
-            position: absolute;
             inset: 0;
             pointer-events: none;
-            background-image: linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
-            background-size: 18px 18px;
-            opacity: 0.24;
-            border-radius: 26px;
-            mask-image: linear-gradient(180deg, rgba(0,0,0,0.85), transparent 92%);
-        }
-
-        .file-stats-widget:hover {
-            box-shadow: 0 28px 56px rgba(19, 56, 105, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.12);
-            transform: translateY(-3px);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.3), transparent 40%, rgba(55, 198, 182, 0.06));
         }
 
         @keyframes widgetFadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px) scale(0.92);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         .file-stats-widget h3 {
-            margin: 0 0 18px 0;
+            margin: 0 0 22px 0;
             font-size: 20px;
             font-weight: 700;
             display: flex;
             align-items: center;
+            justify-content: space-between;
+            position: relative;
+            z-index: 1;
+            color: var(--theme-text, #15314b);
+        }
+
+        .file-stats-header-left {
+            display: flex;
+            align-items: center;
             gap: 10px;
-            text-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
-            letter-spacing: 0.4px;
+        }
+
+        .file-stats-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* ---- 顶部汇总卡片 ---- */
+        .file-stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 14px;
+            margin-bottom: 24px;
             position: relative;
             z-index: 1;
         }
 
-        .file-stats-grid {
+        .file-stats-summary-card {
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(135deg, #348fff 0%, #2468ea 55%, #37c6b6 100%);
+            padding: 20px 16px;
+            border-radius: var(--theme-radius-md, 18px);
+            color: white;
+            text-align: center;
+            box-shadow: 0 14px 30px rgba(47, 137, 255, 0.22);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        .file-stats-summary-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at top right, rgba(255,255,255,0.24), transparent 38%);
+            pointer-events: none;
+        }
+
+        .file-stats-summary-card.alt {
+            background: linear-gradient(135deg, #1d6ce0 0%, #3194ff 52%, #7ecbff 100%);
+        }
+
+        .file-stats-summary-card.alt2 {
+            background: linear-gradient(135deg, #1da6a0 0%, #37c6b6 55%, #8be7d8 100%);
+        }
+
+        .file-stats-summary-value {
+            font-size: 30px;
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: -0.5px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .file-stats-summary-label {
+            font-size: 11px;
+            opacity: 0.9;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ---- 图表区域 ---- */
+        .file-stats-charts-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
-            gap: 14px;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
             margin-bottom: 20px;
             position: relative;
             z-index: 1;
         }
 
-        .file-stats-item {
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.09));
-            padding: 18px 14px;
-            border-radius: 18px;
-            text-align: center;
-            backdrop-filter: blur(15px);
-            -webkit-backdrop-filter: blur(15px);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            cursor: default;
-            position: relative;
-            overflow: visible;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        @media (max-width: 640px) {
+            .file-stats-charts-row {
+                grid-template-columns: 1fr;
+            }
         }
 
-        .file-stats-item:hover {
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
-            transform: translateY(-4px) scale(1.03);
-            box-shadow: 0 16px 28px rgba(3, 18, 43, 0.22);
-            border-color: rgba(152, 210, 255, 0.36);
-        }
-
-        .file-stats-value {
-            font-size: 28px;
-            font-weight: 800;
-            margin-bottom: 8px;
-            background: linear-gradient(135deg, #ffffff 0%, #d7f7ff 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-shadow: none;
-            letter-spacing: -0.8px;
-            position: relative;
-            z-index: 1;
-        }
-
-        .file-stats-label {
-            font-size: 10px;
-            opacity: 0.82;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1.2px;
-            position: relative;
-            z-index: 1;
-        }
-
-        .file-stats-chart {
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.06));
-            border-radius: 18px;
-            padding: 18px;
-            margin-top: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            backdrop-filter: blur(15px);
-            -webkit-backdrop-filter: blur(15px);
-            position: relative;
-            overflow: visible;
-        }
-
-        .file-stats-chart::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.1), transparent 72%);
-            pointer-events: none;
+        .file-stats-chart-panel {
+            background: var(--theme-surface-strong, rgba(255, 255, 255, 0.88));
+            border-radius: var(--theme-radius-md, 18px);
+            padding: 20px;
+            border: 1px solid var(--theme-border, rgba(123, 164, 220, 0.16));
+            box-shadow: 0 10px 24px rgba(38, 86, 150, 0.06);
         }
 
         .file-stats-chart-title {
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 700;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
             text-align: center;
-            letter-spacing: 0.8px;
-            opacity: 0.9;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+            letter-spacing: 0.5px;
+            color: var(--theme-text-muted, #5f7992);
             position: relative;
             z-index: 1;
         }
 
-        .file-stats-horizontal-bar {
+        /* ---- 环形图 ---- */
+        .file-stats-donut-container {
             display: flex;
             align-items: center;
-            margin-bottom: 14px;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .file-stats-donut-wrap {
+            position: relative;
+            width: 130px;
+            height: 130px;
+            flex-shrink: 0;
+        }
+
+        .file-stats-donut-wrap svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .file-stats-donut-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            transform: rotate(0);
+        }
+
+        .file-stats-donut-center-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--theme-text, #15314b);
+            letter-spacing: -0.5px;
+        }
+
+        .file-stats-donut-center-label {
+            font-size: 9px;
+            color: var(--theme-text-muted, #5f7992);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        .file-stats-donut-legend {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+            flex: 1;
+        }
+
+        .file-stats-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--theme-text, #15314b);
+            padding: 4px 0;
+        }
+
+        .file-stats-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+
+        .file-stats-legend-name {
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-stats-legend-value {
+            flex-shrink: 0;
+            color: var(--theme-text-muted, #5f7992);
+            font-weight: 500;
+            font-size: 11px;
+        }
+
+        /* ---- 水平条形图（文件类型存储分布） ---- */
+        .file-stats-bar-list {
+            display: flex;
+            flex-direction: column;
             gap: 10px;
             position: relative;
             z-index: 1;
-            flex-wrap: nowrap;
         }
 
-        .file-stats-horizontal-bar:last-child {
-            margin-bottom: 0;
+        .file-stats-bar-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
         .file-stats-bar-label {
-            min-width: 50px;
+            min-width: 48px;
             font-size: 11px;
-            text-transform: uppercase;
             font-weight: 700;
-            letter-spacing: 0.6px;
-            opacity: 0.95;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--theme-text, #15314b);
             flex-shrink: 0;
+            text-align: right;
         }
 
         .file-stats-bar-track {
             flex: 1;
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(52, 143, 255, 0.08);
             border-radius: 999px;
-            height: 24px;
-            overflow: visible;
+            height: 22px;
+            overflow: hidden;
             position: relative;
-            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.18);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            min-width: 0;
         }
 
         .file-stats-bar-fill {
             height: 100%;
             border-radius: 999px;
-            transition: width 1s cubic-bezier(0.34, 1.56, 0.64, 1);
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            padding-right: 0;
-            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
-            animation: barSlideIn 1s cubic-bezier(0.34, 1.56, 0.64, 1);
-            position: relative;
-            overflow: visible;
+            transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
             min-width: 0;
         }
 
-        @keyframes barSlideIn {
-            from {
-                width: 0 !important;
-                opacity: 0;
-            }
-            to {
-                width: var(--target-width);
-                opacity: 1;
-            }
-        }
-
-        .file-stats-bar-value {
-            font-size: 10px;
-            font-weight: 800;
-            color: white;
-            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-            letter-spacing: 0.3px;
-            position: relative;
-            z-index: 1;
-            white-space: nowrap;
-            overflow: visible;
-        }
-
         .file-stats-bar-size {
-            font-size: 9px;
+            font-size: 11px;
             font-weight: 600;
-            color: rgba(255, 255, 255, 0.85);
-            margin-left: 8px;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            color: var(--theme-text-muted, #5f7992);
             flex-shrink: 0;
             white-space: nowrap;
-            min-width: 60px;
+            min-width: 56px;
+            text-align: right;
         }
 
-        .file-stats-refresh {
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.1));
-            border: 1px solid rgba(255, 255, 255, 0.16);
+        /* ---- 底部操作栏 ---- */
+        .file-stats-footer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-top: 20px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .file-stats-refresh-btn {
+            background: linear-gradient(135deg, var(--theme-primary, #348fff) 0%, var(--theme-primary-strong, #2468ea) 55%, #3fbfe8 100%);
             color: white;
-            padding: 12px 18px;
+            border: none;
+            padding: 10px 22px;
             border-radius: 999px;
             font-size: 13px;
-            cursor: pointer;
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
             font-weight: 700;
-            display: block;
-            width: 100%;
-            margin-top: 16px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            position: relative;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 10px 24px rgba(36, 104, 234, 0.2);
+            letter-spacing: 0.4px;
         }
 
-        .file-stats-refresh:hover {
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.14));
-            transform: translateY(-3px);
-            box-shadow: 0 16px 28px rgba(0, 0, 0, 0.22);
-            border-color: rgba(152, 210, 255, 0.3);
+        .file-stats-refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 28px rgba(36, 104, 234, 0.28);
         }
 
-        .file-stats-refresh:active {
-            transform: translateY(-1px);
+        .file-stats-refresh-btn:active {
+            transform: translateY(0);
         }
 
+        .file-stats-more-link {
+            color: var(--theme-primary, #348fff);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            transition: opacity 0.2s;
+            letter-spacing: 0.3px;
+        }
+
+        .file-stats-more-link:hover {
+            opacity: 0.75;
+        }
+
+        /* ---- Loading / Error ---- */
         .file-stats-loading {
             text-align: center;
-            padding: 28px 18px;
+            padding: 32px 18px;
             font-size: 14px;
-            opacity: 0.95;
             font-weight: 600;
+            color: var(--theme-text-muted, #5f7992);
             position: relative;
             z-index: 1;
         }
@@ -300,110 +354,61 @@
         .file-stats-loading::after {
             content: '';
             display: inline-block;
-            width: 18px;
-            height: 18px;
-            margin-left: 12px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-top-color: white;
+            width: 16px;
+            height: 16px;
+            margin-left: 10px;
+            border: 2px solid rgba(52, 143, 255, 0.2);
+            border-top-color: var(--theme-primary, #348fff);
             border-radius: 50%;
-            animation: loadingSpin 0.9s linear infinite;
+            animation: loadingSpin 0.8s linear infinite;
             vertical-align: middle;
         }
 
         @keyframes loadingSpin {
-            to {
-                transform: rotate(360deg);
-            }
+            to { transform: rotate(360deg); }
         }
 
         .file-stats-error {
-            background: rgba(255, 87, 87, 0.18);
+            background: rgba(255, 87, 87, 0.1);
             padding: 14px;
-            border-radius: 16px;
-            font-size: 12px;
+            border-radius: var(--theme-radius-sm, 14px);
+            font-size: 13px;
             text-align: center;
-            border: 1px solid rgba(255, 87, 87, 0.24);
+            border: 1px solid rgba(255, 87, 87, 0.18);
             font-weight: 600;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0 12px 22px rgba(255, 87, 87, 0.12);
+            color: #d13448;
         }
 
-        .file-stats-link {
-            display: block;
-            text-align: center;
-            color: white;
-            text-decoration: none;
-            font-size: 11px;
-            margin-top: 14px;
-            opacity: 0.88;
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            font-weight: 600;
-            padding: 10px;
-            border-radius: 10px;
-            letter-spacing: 0.6px;
-            position: relative;
-            z-index: 1;
-        }
+        @media (max-width: 480px) {
+            .file-stats-widget {
+                padding: 20px 16px;
+            }
 
-        .file-stats-link:hover {
-            opacity: 1;
-            background: rgba(255, 255, 255, 0.12);
-            text-decoration: none;
-            transform: translateY(-2px);
-        }
+            .file-stats-summary {
+                grid-template-columns: 1fr;
+            }
 
-        .file-stats-pie-chart {
-            position: relative;
-            width: 100%;
-            height: 130px;
-            margin: 16px 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1;
-        }
+            .file-stats-donut-container {
+                flex-direction: column;
+                align-items: center;
+            }
 
-        .file-stats-pie-legend {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 12px;
-            justify-content: center;
-            position: relative;
-            z-index: 1;
-        }
+            .file-stats-donut-legend {
+                width: 100%;
+            }
 
-        .file-stats-pie-legend-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 10px;
-            background: rgba(255, 255, 255, 0.15);
-            padding: 5px 10px;
-            border-radius: 12px;
-            font-weight: 700;
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-        }
-
-        .file-stats-pie-legend-item:hover {
-            background: rgba(255, 255, 255, 0.25);
-            transform: scale(1.08);
-            border-color: rgba(255, 255, 255, 0.35);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        }
-
-        .file-stats-pie-legend-color {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            .file-stats-summary-value {
+                font-size: 26px;
+            }
         }
     `;
     document.head.appendChild(style);
+
+    const COLORS = [
+        '#348fff', '#37c6b6', '#e6a23c', '#f56c6c', '#909399',
+        '#67c23a', '#a29bfe', '#fd79a8', '#45b7d1', '#ffeaa7',
+        '#6c5ce7', '#00b894', '#ff6b6b', '#4ecdc4', '#96ceb4'
+    ];
 
     class FileStatsWidget {
         constructor(containerId) {
@@ -411,7 +416,7 @@
             this.containerWrapper = this.container ? this.container.parentElement : null;
             this.currentAbortController = null;
             this.inflightPromise = null;
-            this.cacheKey = 'file-stats-widget-cache-v1';
+            this.cacheKey = 'file-stats-widget-cache-v2';
             this.cacheTTL = 60 * 1000;
             this.backgroundRefreshThreshold = 15 * 1000;
             this.statsDisabled = false;
@@ -419,7 +424,7 @@
                 console.error('File stats widget container not found:', containerId);
                 return;
             }
-            
+
             this.init();
             this.setupRouteListener();
         }
@@ -442,7 +447,7 @@
         renderLoadingSkeleton() {
             this.container.className = 'file-stats-widget';
             this.container.innerHTML = `
-                <h3>📊 存储统计</h3>
+                <h3><span class="file-stats-header-left">📊 存储统计</span></h3>
                 <div class="file-stats-loading">正在加载统计数据...</div>
             `;
         }
@@ -508,29 +513,20 @@
                         this.setPendingState();
                         try {
                             localStorage.removeItem(this.cacheKey);
-                        } catch (_e) {
-                        }
+                        } catch (_e) {}
                         return;
                     }
                 }
-            } catch (_e) {
-                // network error: show widget by default
-            }
+            } catch (_e) {}
             this.updateVisibility();
         }
 
         getCache() {
             try {
                 const raw = localStorage.getItem(this.cacheKey);
-                if (!raw) {
-                    return null;
-                }
-
+                if (!raw) return null;
                 const parsed = JSON.parse(raw);
-                if (!parsed || typeof parsed.timestamp !== 'number' || !parsed.data) {
-                    return null;
-                }
-
+                if (!parsed || typeof parsed.timestamp !== 'number' || !parsed.data) return null;
                 return parsed;
             } catch (_error) {
                 return null;
@@ -543,9 +539,7 @@
                     timestamp: Date.now(),
                     data: stats
                 }));
-            } catch (_error) {
-                return;
-            }
+            } catch (_error) {}
         }
 
         normalizeStats(rawStats) {
@@ -563,18 +557,21 @@
                     .filter((item) => item.count > 0 || item.size > 0)
                 : [];
 
-            return {
-                totalFiles,
-                totalSize,
-                fileTypesList
-            };
+            const channelsList = Array.isArray(stats.channelsList)
+                ? stats.channelsList
+                    .map((item) => ({
+                        channel: String(item?.channel || 'unknown'),
+                        count: Number(item?.count) || 0,
+                        size: Number(item?.size) || 0
+                    }))
+                    .filter((item) => item.count > 0 || item.size > 0)
+                : [];
+
+            return { totalFiles, totalSize, fileTypesList, channelsList };
         }
 
         isFreshCache(cache) {
-            if (!cache || typeof cache.timestamp !== 'number') {
-                return false;
-            }
-
+            if (!cache || typeof cache.timestamp !== 'number') return false;
             return Date.now() - cache.timestamp <= this.cacheTTL;
         }
 
@@ -611,19 +608,11 @@
             try {
                 return await fetchPromise;
             } catch (error) {
-                if (error.name === 'AbortError') {
-                    return null;
-                }
-
+                if (error.name === 'AbortError') return null;
                 throw error;
             } finally {
-                if (this.currentAbortController === controller) {
-                    this.currentAbortController = null;
-                }
-
-                if (this.inflightPromise === fetchPromise) {
-                    this.inflightPromise = null;
-                }
+                if (this.currentAbortController === controller) this.currentAbortController = null;
+                if (this.inflightPromise === fetchPromise) this.inflightPromise = null;
             }
         }
 
@@ -639,9 +628,7 @@
                 this.renderStats(cache.data);
 
                 const cacheAge = Date.now() - cache.timestamp;
-                if (cacheIsFresh && cacheAge < this.backgroundRefreshThreshold) {
-                    return;
-                }
+                if (cacheIsFresh && cacheAge < this.backgroundRefreshThreshold) return;
             }
 
             try {
@@ -664,66 +651,138 @@
                 this.container.style.display = 'block';
                 this.setReadyState();
                 this.container.innerHTML = `
-                    <h3>📊 存储统计</h3>
+                    <h3><span class="file-stats-header-left">📊 存储统计</span></h3>
                     <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
-                    <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">重试</button>
+                    <div class="file-stats-footer">
+                        <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">重试</button>
+                    </div>
                 `;
             }
+        }
+
+        /* ---- SVG 环形图 ---- */
+        buildDonutSVG(items, centerValue, centerLabel) {
+            const total = items.reduce((s, i) => s + i.value, 0);
+            if (total === 0) return '<div style="text-align:center;padding:20px;opacity:0.5">暂无数据</div>';
+
+            const radius = 50;
+            const circumference = 2 * Math.PI * radius;
+            let offset = 0;
+
+            const slices = items.map((item, idx) => {
+                const pct = item.value / total;
+                const dash = pct * circumference;
+                const gap = circumference - dash;
+                const slice = `<circle cx="65" cy="65" r="${radius}" fill="none" stroke="${COLORS[idx % COLORS.length]}" stroke-width="14" stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-offset}" stroke-linecap="round" style="transition: stroke-dasharray 0.6s ease"/>`;
+                offset += dash;
+                return slice;
+            });
+
+            const legend = items.map((item, idx) => `
+                <div class="file-stats-legend-item">
+                    <span class="file-stats-legend-dot" style="background:${COLORS[idx % COLORS.length]}"></span>
+                    <span class="file-stats-legend-name">${this.escapeHtml(item.label)}</span>
+                    <span class="file-stats-legend-value">${item.display}</span>
+                </div>
+            `).join('');
+
+            return `
+                <div class="file-stats-donut-container">
+                    <div class="file-stats-donut-wrap">
+                        <svg viewBox="0 0 130 130">${slices.join('')}</svg>
+                        <div class="file-stats-donut-center">
+                            <div class="file-stats-donut-center-value">${centerValue}</div>
+                            <div class="file-stats-donut-center-label">${centerLabel}</div>
+                        </div>
+                    </div>
+                    <div class="file-stats-donut-legend">${legend}</div>
+                </div>
+            `;
         }
 
         renderStats(rawStats) {
             if (this.statsDisabled) return;
             const stats = this.normalizeStats(rawStats);
-            const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 10);
+            const avgSize = stats.totalFiles > 0 ? (stats.totalSize / stats.totalFiles) : 0;
+
+            /* 文件类型存储分布（条形图） */
+            const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 8);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
-            const colors = [
-                '#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399',
-                '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
-                '#dfe6e9', '#fd79a8', '#a29bfe', '#6c5ce7', '#00b894'
-            ];
+            const barsHTML = topTypes.map((type, index) => {
+                const logMax = Math.log10(maxSize + 1);
+                const logSize = Math.log10(type.size + 1);
+                let pct = (logSize / logMax * 100).toFixed(1);
+                if (parseFloat(pct) < 8) pct = Math.max(8, parseFloat(pct)).toFixed(1);
+                const color = COLORS[index % COLORS.length];
+                return `
+                    <div class="file-stats-bar-row">
+                        <div class="file-stats-bar-label">${type.ext.toUpperCase()}</div>
+                        <div class="file-stats-bar-track">
+                            <div class="file-stats-bar-fill" style="width:${pct}%; background:linear-gradient(90deg,${color},${color}cc);"></div>
+                        </div>
+                        <span class="file-stats-bar-size">${this.formatSize(type.size)}</span>
+                    </div>
+                `;
+            }).join('');
+
+            /* 文件类型分布环形图（按数量） */
+            const topTypesCount = stats.fileTypesList.filter(t => t.count > 0).slice(0, 6);
+            const typeCountDonut = this.buildDonutSVG(
+                topTypesCount.map(t => ({ label: t.ext.toUpperCase(), value: t.count, display: t.count.toLocaleString() })),
+                this.formatNumber(stats.totalFiles),
+                '文件总数'
+            );
+
+            /* 存储渠道分布环形图（按大小） */
+            const channelDonut = stats.channelsList.length > 0
+                ? this.buildDonutSVG(
+                    stats.channelsList.map(c => ({ label: c.channel, value: c.size, display: this.formatSize(c.size) })),
+                    this.formatSize(stats.totalSize),
+                    '总大小'
+                )
+                : '<div style="text-align:center;padding:20px;opacity:0.5">暂无渠道数据</div>';
 
             this.container.innerHTML = `
-                <h3>📊 存储统计</h3>
-                
-                <div class="file-stats-grid">
-                    <div class="file-stats-item">
-                        <div class="file-stats-value">${this.formatNumber(stats.totalFiles)}</div>
-                        <div class="file-stats-label">文件总数</div>
+                <h3>
+                    <span class="file-stats-header-left">📊 存储统计</span>
+                </h3>
+
+                <div class="file-stats-summary">
+                    <div class="file-stats-summary-card">
+                        <div class="file-stats-summary-value">${this.formatNumber(stats.totalFiles)}</div>
+                        <div class="file-stats-summary-label">文件总数</div>
                     </div>
-                    <div class="file-stats-item">
-                        <div class="file-stats-value">${this.formatSize(stats.totalSize)}</div>
-                        <div class="file-stats-label">总大小</div>
+                    <div class="file-stats-summary-card alt">
+                        <div class="file-stats-summary-value">${this.formatSize(stats.totalSize)}</div>
+                        <div class="file-stats-summary-label">总存储大小</div>
+                    </div>
+                    <div class="file-stats-summary-card alt2">
+                        <div class="file-stats-summary-value">${this.formatSize(avgSize)}</div>
+                        <div class="file-stats-summary-label">平均文件大小</div>
                     </div>
                 </div>
 
-                <div class="file-stats-chart">
+                <div class="file-stats-charts-row">
+                    <div class="file-stats-chart-panel">
+                        <div class="file-stats-chart-title">文件类型分布（数量）</div>
+                        ${typeCountDonut}
+                    </div>
+                    <div class="file-stats-chart-panel">
+                        <div class="file-stats-chart-title">存储渠道分布（大小）</div>
+                        ${channelDonut}
+                    </div>
+                </div>
+
+                <div class="file-stats-chart-panel">
                     <div class="file-stats-chart-title">文件类型存储分布</div>
-                    ${topTypes.map((type, index) => {
-                        const logMax = Math.log10(maxSize + 1);
-                        const logSize = Math.log10(type.size + 1);
-                        let percentage = (logSize / logMax * 100).toFixed(1);
-                        
-                        if (parseFloat(percentage) < 10) {
-                            percentage = Math.max(10, parseFloat(percentage)).toFixed(1);
-                        }
-                        
-                        const barColor = colors[index % colors.length];
-                        return `
-                            <div class="file-stats-horizontal-bar">
-                                <div class="file-stats-bar-label">${type.ext.toUpperCase()}</div>
-                                <div class="file-stats-bar-track">
-                                    <div class="file-stats-bar-fill" style="width: ${percentage}%; background: linear-gradient(90deg, ${barColor} 0%, ${barColor}dd 100%); --target-width: ${percentage}%;">
-                                    </div>
-                                </div>
-                                <span class="file-stats-bar-size">${this.formatSize(type.size)}</span>
-                            </div>
-                        `;
-                    }).join('')}
+                    <div class="file-stats-bar-list">${barsHTML || '<div style="text-align:center;padding:12px;opacity:0.5">暂无数据</div>'}</div>
                 </div>
 
-                <button class="file-stats-refresh" onclick="fileStatsWidget.loadStats(true)">🔄 刷新数据</button>
-                <a href="/stats.html" class="file-stats-link" target="_blank">查看完整统计 →</a>
+                <div class="file-stats-footer">
+                    <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">🔄 刷新数据</button>
+                    <a href="/stats.html" class="file-stats-more-link" target="_blank">查看完整统计 →</a>
+                </div>
             `;
             this.setReadyState();
         }
@@ -738,22 +797,15 @@
         }
 
         formatNumber(num) {
-            if (num >= 1000000) {
-                return `${(num / 1000000).toFixed(1)}M`;
-            } else if (num >= 1000) {
-                return `${(num / 1000).toFixed(1)}K`;
-            }
+            if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+            if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
             return num.toLocaleString();
         }
 
         formatSize(size) {
-            if (size >= 1024) {
-                return `${(size / 1024).toFixed(2)} GB`;
-            } else if (size >= 1) {
-                return `${size.toFixed(2)} MB`;
-            } else {
-                return `${(size * 1024).toFixed(0)} KB`;
-            }
+            if (size >= 1024) return `${(size / 1024).toFixed(2)} GB`;
+            if (size >= 1) return `${size.toFixed(2)} MB`;
+            return `${(size * 1024).toFixed(0)} KB`;
         }
     }
 
