@@ -420,27 +420,23 @@ a {
 }
 
 .file-stats-widget-container {
-  padding: 0 20px 32px;
+  padding: 8px;
 }
 
 .file-stats-widget-container.is-pending {
   visibility: hidden;
   opacity: 0;
-  height: 0;
-  overflow: hidden;
 }
 
 .file-stats-widget-container.is-ready {
   visibility: visible;
   opacity: 1;
-  height: auto;
-  overflow: visible;
-  transition: opacity 0.4s ease;
+  transition: opacity 0.28s ease;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .file-stats-widget-container {
-    padding: 0 14px 24px;
+    padding-inline: 16px;
   }
 }
 

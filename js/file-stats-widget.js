@@ -1,5 +1,5 @@
 /**
- * 文件统计小部件 - 嵌入到首页底部
+ * 文件统计小部件 - 侧边栏嵌入式数据面板
  * 使用方法：在页面中添加 <div id="file-stats-widget"></div>
  * 然后引入此脚本即可
  */
@@ -11,12 +11,13 @@
         .file-stats-widget {
             background: var(--theme-surface, rgba(255, 255, 255, 0.74));
             border-radius: var(--theme-radius-lg, 24px);
-            padding: 28px 32px;
+            padding: 22px;
             color: var(--theme-text, #15314b);
             box-shadow: var(--theme-shadow, 0 18px 50px rgba(44, 88, 140, 0.12));
             backdrop-filter: blur(22px) saturate(150%);
             -webkit-backdrop-filter: blur(22px) saturate(150%);
             border: 1px solid var(--theme-border, rgba(123, 164, 220, 0.22));
+            margin: 20px 0;
             animation: widgetFadeIn 0.5s ease;
             font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
             position: relative;
@@ -29,6 +30,7 @@
             inset: 0;
             pointer-events: none;
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.3), transparent 40%, rgba(55, 198, 182, 0.06));
+            border-radius: var(--theme-radius-lg, 24px);
         }
 
         @keyframes widgetFadeIn {
@@ -37,79 +39,63 @@
         }
 
         .file-stats-widget h3 {
-            margin: 0 0 22px 0;
-            font-size: 20px;
+            margin: 0 0 16px 0;
+            font-size: 17px;
             font-weight: 700;
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            gap: 8px;
             position: relative;
             z-index: 1;
             color: var(--theme-text, #15314b);
         }
 
-        .file-stats-header-left {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .file-stats-header-actions {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        /* ---- 顶部汇总卡片 ---- */
-        .file-stats-summary {
+        /* ---- 汇总卡片 ---- */
+        .file-stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 14px;
-            margin-bottom: 24px;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 16px;
             position: relative;
             z-index: 1;
         }
 
-        .file-stats-summary-card {
+        .file-stats-item {
             position: relative;
             overflow: hidden;
             background: linear-gradient(135deg, #348fff 0%, #2468ea 55%, #37c6b6 100%);
-            padding: 20px 16px;
+            padding: 14px 10px;
             border-radius: var(--theme-radius-md, 18px);
-            color: white;
             text-align: center;
-            box-shadow: 0 14px 30px rgba(47, 137, 255, 0.22);
+            color: white;
+            box-shadow: 0 10px 24px rgba(47, 137, 255, 0.2);
             border: 1px solid rgba(255, 255, 255, 0.18);
         }
 
-        .file-stats-summary-card::before {
+        .file-stats-item::before {
             content: '';
             position: absolute;
             inset: 0;
-            background: radial-gradient(circle at top right, rgba(255,255,255,0.24), transparent 38%);
+            background: radial-gradient(circle at top right, rgba(255,255,255,0.22), transparent 36%);
             pointer-events: none;
         }
 
-        .file-stats-summary-card.alt {
+        .file-stats-item.alt {
             background: linear-gradient(135deg, #1d6ce0 0%, #3194ff 52%, #7ecbff 100%);
         }
 
-        .file-stats-summary-card.alt2 {
-            background: linear-gradient(135deg, #1da6a0 0%, #37c6b6 55%, #8be7d8 100%);
-        }
-
-        .file-stats-summary-value {
-            font-size: 30px;
+        .file-stats-value {
+            font-size: 24px;
             font-weight: 800;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             letter-spacing: -0.5px;
             position: relative;
             z-index: 1;
         }
 
-        .file-stats-summary-label {
-            font-size: 11px;
-            opacity: 0.9;
+        .file-stats-label {
+            font-size: 9px;
+            opacity: 0.88;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -117,54 +103,39 @@
             z-index: 1;
         }
 
-        /* ---- 图表区域 ---- */
-        .file-stats-charts-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 20px;
-            position: relative;
-            z-index: 1;
-        }
-
-        @media (max-width: 640px) {
-            .file-stats-charts-row {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .file-stats-chart-panel {
+        /* ---- 环形图面板 ---- */
+        .file-stats-chart-section {
             background: var(--theme-surface-strong, rgba(255, 255, 255, 0.88));
             border-radius: var(--theme-radius-md, 18px);
-            padding: 20px;
+            padding: 14px;
+            margin-top: 12px;
             border: 1px solid var(--theme-border, rgba(123, 164, 220, 0.16));
-            box-shadow: 0 10px 24px rgba(38, 86, 150, 0.06);
+            box-shadow: 0 8px 20px rgba(38, 86, 150, 0.05);
+            position: relative;
+            z-index: 1;
         }
 
         .file-stats-chart-title {
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 700;
-            margin-bottom: 16px;
+            margin-bottom: 10px;
             text-align: center;
             letter-spacing: 0.5px;
             color: var(--theme-text-muted, #5f7992);
-            position: relative;
-            z-index: 1;
         }
 
-        /* ---- 环形图 ---- */
+        /* 环形图 */
         .file-stats-donut-container {
             display: flex;
+            flex-direction: column;
             align-items: center;
-            justify-content: center;
-            gap: 20px;
-            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .file-stats-donut-wrap {
             position: relative;
-            width: 130px;
-            height: 130px;
+            width: 110px;
+            height: 110px;
             flex-shrink: 0;
         }
 
@@ -181,86 +152,73 @@
             align-items: center;
             justify-content: center;
             flex-direction: column;
-            transform: rotate(0);
         }
 
         .file-stats-donut-center-value {
-            font-size: 20px;
+            font-size: 16px;
             font-weight: 800;
             color: var(--theme-text, #15314b);
             letter-spacing: -0.5px;
         }
 
         .file-stats-donut-center-label {
-            font-size: 9px;
+            font-size: 8px;
             color: var(--theme-text-muted, #5f7992);
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.6px;
+            letter-spacing: 0.5px;
         }
 
         .file-stats-donut-legend {
             display: flex;
-            flex-direction: column;
-            gap: 6px;
-            min-width: 0;
-            flex: 1;
+            flex-wrap: wrap;
+            gap: 4px 8px;
+            justify-content: center;
         }
 
         .file-stats-legend-item {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 12px;
+            gap: 4px;
+            font-size: 10px;
             font-weight: 600;
             color: var(--theme-text, #15314b);
-            padding: 4px 0;
         }
 
         .file-stats-legend-dot {
-            width: 10px;
-            height: 10px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
             flex-shrink: 0;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-        }
-
-        .file-stats-legend-name {
-            flex: 1;
-            min-width: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15);
         }
 
         .file-stats-legend-value {
-            flex-shrink: 0;
             color: var(--theme-text-muted, #5f7992);
             font-weight: 500;
-            font-size: 11px;
+            font-size: 9px;
+            margin-left: 1px;
         }
 
-        /* ---- 水平条形图（文件类型存储分布） ---- */
+        /* ---- 水平条形图 ---- */
         .file-stats-bar-list {
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            position: relative;
-            z-index: 1;
+            gap: 8px;
         }
 
         .file-stats-bar-row {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }
 
         .file-stats-bar-label {
-            min-width: 48px;
-            font-size: 11px;
+            min-width: 40px;
+            font-size: 10px;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.4px;
             color: var(--theme-text, #15314b);
             flex-shrink: 0;
             text-align: right;
@@ -270,36 +228,36 @@
             flex: 1;
             background: rgba(52, 143, 255, 0.08);
             border-radius: 999px;
-            height: 22px;
+            height: 18px;
             overflow: hidden;
             position: relative;
+            min-width: 0;
         }
 
         .file-stats-bar-fill {
             height: 100%;
             border-radius: 999px;
             transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
             min-width: 0;
         }
 
         .file-stats-bar-size {
-            font-size: 11px;
+            font-size: 9px;
             font-weight: 600;
             color: var(--theme-text-muted, #5f7992);
             flex-shrink: 0;
             white-space: nowrap;
-            min-width: 56px;
+            min-width: 50px;
             text-align: right;
         }
 
-        /* ---- 底部操作栏 ---- */
+        /* ---- 底部操作 ---- */
         .file-stats-footer {
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 16px;
-            margin-top: 20px;
+            justify-content: space-between;
+            margin-top: 14px;
             position: relative;
             z-index: 1;
         }
@@ -308,19 +266,19 @@
             background: linear-gradient(135deg, var(--theme-primary, #348fff) 0%, var(--theme-primary-strong, #2468ea) 55%, #3fbfe8 100%);
             color: white;
             border: none;
-            padding: 10px 22px;
+            padding: 8px 16px;
             border-radius: 999px;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 700;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 10px 24px rgba(36, 104, 234, 0.2);
-            letter-spacing: 0.4px;
+            box-shadow: 0 8px 20px rgba(36, 104, 234, 0.18);
+            letter-spacing: 0.3px;
         }
 
         .file-stats-refresh-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 14px 28px rgba(36, 104, 234, 0.28);
+            box-shadow: 0 12px 24px rgba(36, 104, 234, 0.26);
         }
 
         .file-stats-refresh-btn:active {
@@ -330,21 +288,21 @@
         .file-stats-more-link {
             color: var(--theme-primary, #348fff);
             text-decoration: none;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             transition: opacity 0.2s;
             letter-spacing: 0.3px;
         }
 
         .file-stats-more-link:hover {
-            opacity: 0.75;
+            opacity: 0.7;
         }
 
         /* ---- Loading / Error ---- */
         .file-stats-loading {
             text-align: center;
-            padding: 32px 18px;
-            font-size: 14px;
+            padding: 24px 14px;
+            font-size: 13px;
             font-weight: 600;
             color: var(--theme-text-muted, #5f7992);
             position: relative;
@@ -354,9 +312,9 @@
         .file-stats-loading::after {
             content: '';
             display: inline-block;
-            width: 16px;
-            height: 16px;
-            margin-left: 10px;
+            width: 14px;
+            height: 14px;
+            margin-left: 8px;
             border: 2px solid rgba(52, 143, 255, 0.2);
             border-top-color: var(--theme-primary, #348fff);
             border-radius: 50%;
@@ -370,36 +328,13 @@
 
         .file-stats-error {
             background: rgba(255, 87, 87, 0.1);
-            padding: 14px;
+            padding: 12px;
             border-radius: var(--theme-radius-sm, 14px);
-            font-size: 13px;
+            font-size: 12px;
             text-align: center;
             border: 1px solid rgba(255, 87, 87, 0.18);
             font-weight: 600;
             color: #d13448;
-        }
-
-        @media (max-width: 480px) {
-            .file-stats-widget {
-                padding: 20px 16px;
-            }
-
-            .file-stats-summary {
-                grid-template-columns: 1fr;
-            }
-
-            .file-stats-donut-container {
-                flex-direction: column;
-                align-items: center;
-            }
-
-            .file-stats-donut-legend {
-                width: 100%;
-            }
-
-            .file-stats-summary-value {
-                font-size: 26px;
-            }
         }
     `;
     document.head.appendChild(style);
@@ -447,7 +382,7 @@
         renderLoadingSkeleton() {
             this.container.className = 'file-stats-widget';
             this.container.innerHTML = `
-                <h3><span class="file-stats-header-left">📊 存储统计</span></h3>
+                <h3>📊 存储统计</h3>
                 <div class="file-stats-loading">正在加载统计数据...</div>
             `;
         }
@@ -651,7 +586,7 @@
                 this.container.style.display = 'block';
                 this.setReadyState();
                 this.container.innerHTML = `
-                    <h3><span class="file-stats-header-left">📊 存储统计</span></h3>
+                    <h3>📊 存储统计</h3>
                     <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
                     <div class="file-stats-footer">
                         <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">重试</button>
@@ -663,9 +598,9 @@
         /* ---- SVG 环形图 ---- */
         buildDonutSVG(items, centerValue, centerLabel) {
             const total = items.reduce((s, i) => s + i.value, 0);
-            if (total === 0) return '<div style="text-align:center;padding:20px;opacity:0.5">暂无数据</div>';
+            if (total === 0) return '<div style="text-align:center;padding:12px;opacity:0.5;font-size:12px">暂无数据</div>';
 
-            const radius = 50;
+            const radius = 42;
             const circumference = 2 * Math.PI * radius;
             let offset = 0;
 
@@ -673,23 +608,23 @@
                 const pct = item.value / total;
                 const dash = pct * circumference;
                 const gap = circumference - dash;
-                const slice = `<circle cx="65" cy="65" r="${radius}" fill="none" stroke="${COLORS[idx % COLORS.length]}" stroke-width="14" stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-offset}" stroke-linecap="round" style="transition: stroke-dasharray 0.6s ease"/>`;
+                const slice = `<circle cx="55" cy="55" r="${radius}" fill="none" stroke="${COLORS[idx % COLORS.length]}" stroke-width="12" stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-offset}" stroke-linecap="round"/>`;
                 offset += dash;
                 return slice;
             });
 
             const legend = items.map((item, idx) => `
-                <div class="file-stats-legend-item">
+                <span class="file-stats-legend-item">
                     <span class="file-stats-legend-dot" style="background:${COLORS[idx % COLORS.length]}"></span>
-                    <span class="file-stats-legend-name">${this.escapeHtml(item.label)}</span>
+                    ${this.escapeHtml(item.label)}
                     <span class="file-stats-legend-value">${item.display}</span>
-                </div>
+                </span>
             `).join('');
 
             return `
                 <div class="file-stats-donut-container">
                     <div class="file-stats-donut-wrap">
-                        <svg viewBox="0 0 130 130">${slices.join('')}</svg>
+                        <svg viewBox="0 0 110 110">${slices.join('')}</svg>
                         <div class="file-stats-donut-center">
                             <div class="file-stats-donut-center-value">${centerValue}</div>
                             <div class="file-stats-donut-center-label">${centerLabel}</div>
@@ -703,7 +638,6 @@
         renderStats(rawStats) {
             if (this.statsDisabled) return;
             const stats = this.normalizeStats(rawStats);
-            const avgSize = stats.totalFiles > 0 ? (stats.totalSize / stats.totalFiles) : 0;
 
             /* 文件类型存储分布（条形图） */
             const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 8);
@@ -713,7 +647,7 @@
                 const logMax = Math.log10(maxSize + 1);
                 const logSize = Math.log10(type.size + 1);
                 let pct = (logSize / logMax * 100).toFixed(1);
-                if (parseFloat(pct) < 8) pct = Math.max(8, parseFloat(pct)).toFixed(1);
+                if (parseFloat(pct) < 10) pct = Math.max(10, parseFloat(pct)).toFixed(1);
                 const color = COLORS[index % COLORS.length];
                 return `
                     <div class="file-stats-bar-row">
@@ -726,62 +660,57 @@
                 `;
             }).join('');
 
-            /* 文件类型分布环形图（按数量） */
+            /* 文件类型数量环形图 */
             const topTypesCount = stats.fileTypesList.filter(t => t.count > 0).slice(0, 6);
-            const typeCountDonut = this.buildDonutSVG(
-                topTypesCount.map(t => ({ label: t.ext.toUpperCase(), value: t.count, display: t.count.toLocaleString() })),
+            const typeDonut = this.buildDonutSVG(
+                topTypesCount.map(t => ({ label: t.ext.toUpperCase(), value: t.count, display: String(t.count) })),
                 this.formatNumber(stats.totalFiles),
                 '文件总数'
             );
 
-            /* 存储渠道分布环形图（按大小） */
+            /* 存储渠道大小环形图 */
             const channelDonut = stats.channelsList.length > 0
                 ? this.buildDonutSVG(
                     stats.channelsList.map(c => ({ label: c.channel, value: c.size, display: this.formatSize(c.size) })),
                     this.formatSize(stats.totalSize),
                     '总大小'
                 )
-                : '<div style="text-align:center;padding:20px;opacity:0.5">暂无渠道数据</div>';
+                : '';
 
             this.container.innerHTML = `
-                <h3>
-                    <span class="file-stats-header-left">📊 存储统计</span>
-                </h3>
+                <h3>📊 存储统计</h3>
 
-                <div class="file-stats-summary">
-                    <div class="file-stats-summary-card">
-                        <div class="file-stats-summary-value">${this.formatNumber(stats.totalFiles)}</div>
-                        <div class="file-stats-summary-label">文件总数</div>
+                <div class="file-stats-grid">
+                    <div class="file-stats-item">
+                        <div class="file-stats-value">${this.formatNumber(stats.totalFiles)}</div>
+                        <div class="file-stats-label">文件总数</div>
                     </div>
-                    <div class="file-stats-summary-card alt">
-                        <div class="file-stats-summary-value">${this.formatSize(stats.totalSize)}</div>
-                        <div class="file-stats-summary-label">总存储大小</div>
-                    </div>
-                    <div class="file-stats-summary-card alt2">
-                        <div class="file-stats-summary-value">${this.formatSize(avgSize)}</div>
-                        <div class="file-stats-summary-label">平均文件大小</div>
+                    <div class="file-stats-item alt">
+                        <div class="file-stats-value">${this.formatSize(stats.totalSize)}</div>
+                        <div class="file-stats-label">总大小</div>
                     </div>
                 </div>
 
-                <div class="file-stats-charts-row">
-                    <div class="file-stats-chart-panel">
-                        <div class="file-stats-chart-title">文件类型分布（数量）</div>
-                        ${typeCountDonut}
-                    </div>
-                    <div class="file-stats-chart-panel">
-                        <div class="file-stats-chart-title">存储渠道分布（大小）</div>
-                        ${channelDonut}
-                    </div>
+                <div class="file-stats-chart-section">
+                    <div class="file-stats-chart-title">文件类型分布</div>
+                    ${typeDonut}
                 </div>
 
-                <div class="file-stats-chart-panel">
-                    <div class="file-stats-chart-title">文件类型存储分布</div>
-                    <div class="file-stats-bar-list">${barsHTML || '<div style="text-align:center;padding:12px;opacity:0.5">暂无数据</div>'}</div>
+                ${channelDonut ? `
+                <div class="file-stats-chart-section">
+                    <div class="file-stats-chart-title">存储渠道分布</div>
+                    ${channelDonut}
+                </div>
+                ` : ''}
+
+                <div class="file-stats-chart-section">
+                    <div class="file-stats-chart-title">类型存储占比</div>
+                    <div class="file-stats-bar-list">${barsHTML || '<div style="text-align:center;padding:8px;opacity:0.5;font-size:12px">暂无数据</div>'}</div>
                 </div>
 
                 <div class="file-stats-footer">
-                    <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">🔄 刷新数据</button>
-                    <a href="/stats.html" class="file-stats-more-link" target="_blank">查看完整统计 →</a>
+                    <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">🔄 刷新</button>
+                    <a href="/stats.html" class="file-stats-more-link" target="_blank">完整统计 →</a>
                 </div>
             `;
             this.setReadyState();
