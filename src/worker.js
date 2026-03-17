@@ -186,24 +186,22 @@ const ROUTES = [
     {
         pattern: /^\/music\/?$/,
         params: () => ({}),
-        middlewares: [checkDatabaseConfig, async (context) => {
+        middlewares: [async (context) => {
             try {
                 const othersConfig = await fetchOthersConfig(context.env);
                 const musicConfig = othersConfig.musicPlayer || {};
                 if (!musicConfig.enabled) {
                     return new Response('Music player is disabled', { status: 403 });
                 }
-                const url = new URL(context.request.url);
-                url.pathname = '/music.html';
-                const newReq = new Request(url.toString(), context.request);
-                if (context.env.ASSETS) {
-                    return context.env.ASSETS.fetch(newReq);
-                }
-                return new Response('Not Found', { status: 404 });
-            } catch (err) {
-                console.error('Error serving music page:', err);
-                return new Response('Internal server error', { status: 500 });
+            } catch (e) {
+                // 配置读取失败时也允许访问，不阻断
+                console.error('Failed to read music config, allowing access:', e);
             }
+            if (!context.env.ASSETS) {
+                return new Response('Static assets not available', { status: 500 });
+            }
+            const assetUrl = new URL('/music.html', context.request.url);
+            return context.env.ASSETS.fetch(assetUrl.toString());
         }],
     },
 
