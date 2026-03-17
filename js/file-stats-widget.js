@@ -205,6 +205,23 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .file-stats-bar-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .file-stats-bar-list::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, rgba(52, 143, 255, 0.4), rgba(55, 198, 182, 0.4));
+            border-radius: 999px;
+        }
+
+        .file-stats-bar-list::-webkit-scrollbar-track {
+            background: rgba(52, 143, 255, 0.08);
+            border-radius: 999px;
         }
 
         .file-stats-bar-row {
@@ -671,8 +688,8 @@
             if (this.statsDisabled || !this.container) return;
             const stats = this.normalizeStats(rawStats);
 
-            /* 文件类型存储分布（条形图） */
-            const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 8);
+            /* 文件类型存储分布（条形图）- 显示更多类型，支持滚动 */
+            const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 20);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
             const barsHTML = topTypes.map((type, index) => {
