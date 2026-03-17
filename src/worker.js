@@ -183,10 +183,9 @@ const randomMiddleware = [checkDatabaseConfig, onRandomRequest];
 const ROUTES = [
     // ── /music page ──────────────────────────────────────────────────────────
     {
-        pattern: /^\/music$/,
+        pattern: /^\/music\/?$/,
         params: () => ({}),
         middlewares: [async (context) => {
-            // Rewrite to /music.html and serve from static assets
             const url = new URL(context.request.url);
             url.pathname = '/music.html';
             const newReq = new Request(url.toString(), context.request);
