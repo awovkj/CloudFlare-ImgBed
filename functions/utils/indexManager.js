@@ -439,15 +439,26 @@ export async function mergeOperationsToIndex(context, options = {}) {
         if (!isALLOperations) {
             console.log('There are remaining operations, will process them in subsequent calls.');
 
-            const headers = new Headers(request.headers);
-            const originUrl = new URL(request.url);
-            const mergeUrl = `${originUrl.protocol}//${originUrl.host}/api/manage/list?action=merge-operations`;
+            try {
+                const headers = new Headers(request.headers);
+                const originUrl = new URL(request.url);
+                const mergeUrl = `${originUrl.protocol}//${originUrl.host}/api/manage/list?action=merge-operations`;
 
-            await fetch(mergeUrl, { method: 'GET', headers });
+                await fetch(mergeUrl, { method: 'GET', headers });
+            } catch (e) {
+                console.warn('Failed to trigger subsequent merge:', e.message);
+            }
 
+            // 即使还有未处理的操作，当前批次已成功合并并保存，返回 success
             return {
-                success: false,
-                error: 'There are remaining operations, will process them in subsequent calls.'
+                success: true,
+                processedOperations: operationsProcessed,
+                addedCount,
+                updatedCount,
+                removedCount,
+                movedCount,
+                totalFiles: workingIndex.totalCount,
+                hasRemainingOperations: true,
             };
         }
 
