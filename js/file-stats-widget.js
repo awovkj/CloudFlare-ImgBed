@@ -688,8 +688,11 @@
             if (this.statsDisabled || !this.container) return;
             const stats = this.normalizeStats(rawStats);
 
-            /* 文件类型存储分布（条形图）- 显示更多类型，支持滚动 */
-            const topTypes = stats.fileTypesList.filter(t => t.size > 0).slice(0, 20);
+            /* 文件类型存储分布（条形图）- 显示更多类型，支持滚动，按大小降序排列 */
+            const topTypes = stats.fileTypesList
+                .filter(t => t.size > 0)
+                .sort((a, b) => b.size - a.size)
+                .slice(0, 20);
             const maxSize = Math.max(...topTypes.map(t => t.size), 1);
 
             const barsHTML = topTypes.map((type, index) => {
