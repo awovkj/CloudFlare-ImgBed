@@ -186,7 +186,14 @@ const ROUTES = [
         pattern: /^\/music$/,
         params: () => ({}),
         middlewares: [async (context) => {
-            // Rewrite to /music.html and serve from static assets
+            const { fetchOthersConfig } = await import('../functions/utils/sysConfig.js');
+            const othersConfig = await fetchOthersConfig(context.env);
+            const musicConfig = othersConfig.musicPlayer || {};
+
+            if (!musicConfig.enabled) {
+                return new Response('Music player is disabled', { status: 403 });
+            }
+
             const url = new URL(context.request.url);
             url.pathname = '/music.html';
             const newReq = new Request(url.toString(), context.request);
