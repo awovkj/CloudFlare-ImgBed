@@ -46,6 +46,7 @@ import { onRequest as onManageSysConfigUpload }   from '../functions/api/manage/
 import { onRequest as onManageSysConfigOthers }   from '../functions/api/manage/sysConfig/others.js';
 import { onRequest as onManageSysConfigPage }     from '../functions/api/manage/sysConfig/page.js';
 import { onRequest as onManageSysConfigShowStats } from '../functions/api/manage/sysConfig/showStats.js';
+import { onRequest as onManageSysConfigMusic }     from '../functions/api/manage/sysConfig/music.js';
 import { onRequest as onManageCusConfigList }      from '../functions/api/manage/cusConfig/list.js';
 import { onRequest as onManageCusConfigBlockIp }   from '../functions/api/manage/cusConfig/blockip.js';
 import { onRequest as onManageCusConfigBlockIpList}from '../functions/api/manage/cusConfig/blockipList.js';
@@ -56,6 +57,9 @@ import { onRequest as onManageBatchIndexChunk }    from '../functions/api/manage
 import { onRequest as onManageBatchIndexConfig }   from '../functions/api/manage/batch/index/config.js';
 import { onRequest as onManageBatchIndexFinalize } from '../functions/api/manage/batch/index/finalize.js';
 import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage/batch/restore/chunk.js';
+
+// music
+import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
 
 // random
 import { onRequest as onRandomRequest }        from '../functions/random/index.js';
@@ -178,6 +182,22 @@ const davMiddleware = [checkDatabaseConfig, onDavRequest];
 const randomMiddleware = [checkDatabaseConfig, onRandomRequest];
 
 const ROUTES = [
+    // ── /music page ──────────────────────────────────────────────────────────
+    {
+        pattern: /^\/music$/,
+        params: () => ({}),
+        middlewares: [async (context) => {
+            // Rewrite to /music.html and serve from static assets
+            const url = new URL(context.request.url);
+            url.pathname = '/music.html';
+            const newReq = new Request(url.toString(), context.request);
+            if (context.env.ASSETS) {
+                return context.env.ASSETS.fetch(newReq);
+            }
+            return new Response('Not Found', { status: 404 });
+        }],
+    },
+
     // ── /upload ──────────────────────────────────────────────────────────────
     {
         pattern: /^\/upload(\/.*)?$/,
@@ -228,6 +248,7 @@ const ROUTES = [
     { pattern: /^\/api\/manage\/sysConfig\/others$/,      params: () => ({}), middlewares: apiManageChain(onManageSysConfigOthers) },
     { pattern: /^\/api\/manage\/sysConfig\/page$/,        params: () => ({}), middlewares: apiManageChain(onManageSysConfigPage) },
     { pattern: /^\/api\/manage\/sysConfig\/showStats$/,   params: () => ({}), middlewares: apiManageChain(onManageSysConfigShowStats) },
+    { pattern: /^\/api\/manage\/sysConfig\/music$/,       params: () => ({}), middlewares: apiManageChain(onManageSysConfigMusic) },
     { pattern: /^\/api\/manage\/cusConfig\/list$/,        params: () => ({}), middlewares: apiManageChain(onManageCusConfigList) },
     { pattern: /^\/api\/manage\/cusConfig\/blockip$/,     params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIp) },
     { pattern: /^\/api\/manage\/cusConfig\/blockipList$/, params: () => ({}), middlewares: apiManageChain(onManageCusConfigBlockIpList) },
@@ -246,6 +267,7 @@ const ROUTES = [
     { pattern: /^\/api\/channels$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onChannelsRequest] },
     { pattern: /^\/api\/fetchRes$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onFetchResRequest] },
     { pattern: /^\/api\/public\/list$/,                   params: () => ({}), middlewares: [checkDatabaseConfig, onPublicListRequest] },
+    { pattern: /^\/api\/music\/list$/,                    params: () => ({}), middlewares: [checkDatabaseConfig, onMusicListRequest] },
     { pattern: /^\/api\/bing\/wallpaper$/,                params: () => ({}), middlewares: [checkDatabaseConfig, onBingWallpaperRequest] },
     { pattern: /^\/api\/huggingface\/getUploadUrl$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)] },
     { pattern: /^\/api\/huggingface\/commitUpload$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfCommitPost)] },
