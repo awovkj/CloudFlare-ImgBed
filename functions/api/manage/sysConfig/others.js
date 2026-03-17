@@ -97,5 +97,13 @@ export async function getOthersConfig(db, env) {
         fixed: false,
     }
 
+    // 音乐播放器
+    const kvMusicPlayer = settingsKV.musicPlayer || {}
+    settings.musicPlayer = {
+        enabled: kvMusicPlayer.enabled ?? false,
+        musicDir: kvMusicPlayer.musicDir || '',
+        fixed: false,
+    }
+
     return settings;
 }

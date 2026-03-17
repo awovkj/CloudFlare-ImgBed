@@ -355,8 +355,8 @@
             this.cacheTTL = 60 * 1000;
             this.backgroundRefreshThreshold = 15 * 1000;
             this.statsDisabled = false;
+            this.initialized = false;
             if (!this.container) {
-                console.error('File stats widget container not found:', containerId);
                 return;
             }
 
@@ -369,7 +369,9 @@
                 this.containerWrapper.classList.add('is-pending');
                 this.containerWrapper.classList.remove('is-ready');
             }
-            this.container.style.display = 'none';
+            if (this.container) {
+                this.container.style.display = 'none';
+            }
         }
 
         setReadyState() {
@@ -380,6 +382,7 @@
         }
 
         renderLoadingSkeleton() {
+            if (!this.container) return;
             this.container.className = 'file-stats-widget';
             this.container.innerHTML = `
                 <h3>📊 存储统计</h3>
@@ -394,24 +397,34 @@
 
         updateVisibility() {
             if (this.statsDisabled) {
-                this.container.style.display = 'none';
+                this.cleanup();
                 return;
             }
             if (this.shouldShowWidget()) {
-                this.container.style.display = 'block';
+                if (this.container) {
+                    this.container.style.display = 'block';
+                }
                 this.setReadyState();
-                if (!this.container.innerHTML || this.container.innerHTML.includes('正在加载统计数据') || this.container.innerHTML.includes('加载失败')) {
-                    this.renderLoadingSkeleton();
+                if (!this.container || this.container.innerHTML.includes('正在加载统计数据') || this.container.innerHTML.includes('加载失败')) {
+                    if (this.container) {
+                        this.renderLoadingSkeleton();
+                    }
                     this.loadStats();
                 }
             } else {
-                this.container.style.display = 'none';
+                if (this.container) {
+                    this.container.style.display = 'none';
+                }
             }
         }
 
         setupRouteListener() {
+            if (this.statsDisabled) return;
+            
             const checkRoute = () => {
-                this.updateVisibility();
+                if (!this.statsDisabled) {
+                    this.updateVisibility();
+                }
             };
 
             window.addEventListener('popstate', checkRoute);
@@ -445,7 +458,7 @@
                     const data = await resp.json();
                     if (data.enabled === false) {
                         this.statsDisabled = true;
-                        this.setPendingState();
+                        this.cleanup();
                         try {
                             localStorage.removeItem(this.cacheKey);
                         } catch (_e) {}
@@ -454,6 +467,20 @@
                 }
             } catch (_e) {}
             this.updateVisibility();
+        }
+
+        cleanup() {
+            if (this.container) {
+                this.container.innerHTML = '';
+                this.container.style.display = 'none';
+            }
+            if (this.containerWrapper) {
+                this.containerWrapper.innerHTML = '';
+                this.containerWrapper.style.display = 'none';
+                this.containerWrapper.remove();
+            }
+            this.container = null;
+            this.containerWrapper = null;
         }
 
         getCache() {
@@ -552,13 +579,15 @@
         }
 
         async loadStats(forceRefresh = false) {
-            if (this.statsDisabled) return;
+            if (this.statsDisabled || !this.container) return;
             const cache = this.getCache();
             const cacheExists = !!cache && !!cache.data;
             const cacheIsFresh = cacheExists && this.isFreshCache(cache);
 
             if (!forceRefresh && cacheExists) {
-                this.container.style.display = 'block';
+                if (this.container) {
+                    this.container.style.display = 'block';
+                }
                 this.setReadyState();
                 this.renderStats(cache.data);
 
@@ -568,7 +597,7 @@
 
             try {
                 const stats = await this.fetchStats({ forceRefresh });
-                if (stats) {
+                if (stats && this.container) {
                     this.container.style.display = 'block';
                     this.setReadyState();
                     this.renderStats(stats);
@@ -576,22 +605,24 @@
             } catch (error) {
                 console.error('Error loading stats:', error);
 
-                if (cacheExists) {
+                if (cacheExists && this.container) {
                     this.container.style.display = 'block';
                     this.setReadyState();
                     this.renderStats(cache.data);
                     return;
                 }
 
-                this.container.style.display = 'block';
-                this.setReadyState();
-                this.container.innerHTML = `
-                    <h3>📊 存储统计</h3>
-                    <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
-                    <div class="file-stats-footer">
-                        <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">重试</button>
-                    </div>
-                `;
+                if (this.container) {
+                    this.container.style.display = 'block';
+                    this.setReadyState();
+                    this.container.innerHTML = `
+                        <h3>📊 存储统计</h3>
+                        <div class="file-stats-error">加载失败: ${this.escapeHtml(error.message)}</div>
+                        <div class="file-stats-footer">
+                            <button class="file-stats-refresh-btn" onclick="fileStatsWidget.loadStats(true)">重试</button>
+                        </div>
+                    `;
+                }
             }
         }
 
@@ -636,7 +667,7 @@
         }
 
         renderStats(rawStats) {
-            if (this.statsDisabled) return;
+            if (this.statsDisabled || !this.container) return;
             const stats = this.normalizeStats(rawStats);
 
             /* 文件类型存储分布（条形图） */

@@ -1,5 +1,5 @@
 import { readIndex } from '../../utils/indexManager.js';
-import { getDatabase } from '../../utils/databaseAdapter.js';
+import { fetchOthersConfig } from '../../utils/sysConfig.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -10,7 +10,6 @@ const corsHeaders = {
 
 export async function onRequest(context) {
     const { request, env } = context;
-    const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
         return new Response(null, { status: 204, headers: corsHeaders });
@@ -24,21 +23,19 @@ export async function onRequest(context) {
     }
 
     try {
-        const db = getDatabase(env);
+        // 从 others 配置中读取音乐播放器设置
+        const othersConfig = await fetchOthersConfig(env);
+        const musicConfig = othersConfig.musicPlayer || {};
 
-        // 读取音乐配置
-        const configStr = await db.get('manage@sysConfig@music');
-        const config = configStr ? JSON.parse(configStr) : {};
-
-        if (!config.enabled) {
-            return new Response(JSON.stringify({ error: 'Music player is disabled' }), {
+        if (!musicConfig.enabled) {
+            return new Response(JSON.stringify({ error: 'Music player is disabled', enabled: false }), {
                 status: 403,
                 headers: { 'Content-Type': 'application/json', ...corsHeaders }
             });
         }
 
         // 获取配置的音乐目录
-        let musicDir = config.musicDir || '';
+        let musicDir = musicConfig.musicDir || '';
         if (musicDir.startsWith('/')) {
             musicDir = musicDir.substring(1);
         }
@@ -65,7 +62,6 @@ export async function onRequest(context) {
         // 构建音乐文件列表
         const files = result.files.map(file => {
             const fileName = file.id.split('/').pop();
-            // 去掉扩展名作为显示名
             const displayName = fileName.replace(/\.[^/.]+$/, '');
             return {
                 id: file.id,
@@ -81,7 +77,7 @@ export async function onRequest(context) {
         return new Response(JSON.stringify({
             files,
             totalCount: files.length,
-            musicDir: config.musicDir || '/',
+            musicDir: musicConfig.musicDir || '/',
         }), {
             headers: { 'Content-Type': 'application/json', ...corsHeaders }
         });
