@@ -51,32 +51,73 @@ export async function onRequest(context) {
             videoDir += '/';
         }
 
-        // 读取所有文件（包括视频、字幕、图片）以便匹配
-        const allResult = await readIndex(context, {
+        // 只读取视频文件（使用 fileType 过滤减少返回数据量）
+        const videoResult = await readIndex(context, {
             directory: videoDir,
             start: 0,
             count: -1,
             includeSubdirFiles: true,
             accessStatus: 'normal',
+            fileType: 'video',
         });
 
-        const allFiles = allResult.success ? allResult.files : [];
-
-        // 按目录和文件名构建查找映射
-        const fileMap = new Map();
-        for (const file of allFiles) {
-            const parts = file.id.split('/');
-            const name = parts.pop();
-            const dir = parts.join('/');
-            const key = `${dir}/${name}`.toLowerCase();
-            fileMap.set(key, file);
+        if (!videoResult.success) {
+            return new Response(JSON.stringify({
+                error: 'Failed to load index',
+                message: 'Index loading failed, please try again later'
+            }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
         }
 
-        // 过滤出视频文件
-        const videoFiles = allFiles.filter(file => {
-            const mimeType = file.metadata?.FileType || '';
-            return mimeType.startsWith('video/');
-        });
+        const videoFiles = videoResult.files || [];
+
+        // 收集视频文件所在目录和基名，用于查找字幕/封面
+        const neededLookups = new Set();
+        for (const file of videoFiles) {
+            const parts = file.id.split('/');
+            const fileName = parts.pop();
+            const dir = parts.join('/');
+            const baseName = fileName.replace(/\.[^/.]+$/, '');
+            // 字幕
+            for (const ext of ['.vtt', '.srt', '.ass']) {
+                neededLookups.add(`${dir}/${baseName}${ext}`.toLowerCase());
+            }
+            // 同名封面
+            for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
+                neededLookups.add(`${dir}/${baseName}${ext}`.toLowerCase());
+            }
+            // 通用封面
+            for (const cname of ['cover', 'poster', 'thumb', 'folder']) {
+                for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
+                    neededLookups.add(`${dir}/${cname}${ext}`.toLowerCase());
+                }
+            }
+        }
+
+        // 读取非视频文件（字幕、封面等）用于匹配，失败时静默跳过
+        let fileMap = new Map();
+        try {
+            const companionResult = await readIndex(context, {
+                directory: videoDir,
+                start: 0,
+                count: -1,
+                includeSubdirFiles: true,
+                accessStatus: 'normal',
+                fileType: ['image', 'other'],
+            });
+            if (companionResult.success && companionResult.files) {
+                for (const file of companionResult.files) {
+                    const key = file.id.toLowerCase();
+                    if (neededLookups.has(key)) {
+                        fileMap.set(key, file);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to load companion files for subtitle/poster matching:', e.message);
+        }
 
         // 构建视频文件列表
         const files = videoFiles.map(file => {
@@ -97,7 +138,7 @@ export async function onRequest(context) {
                 }
             }
 
-            // 查找封面/海报图片：优先同名图片，其次目录下的 cover/poster/thumb 图片
+            // 查找封面/海报图片
             let posterUrl = null;
             const imgExts = ['.jpg', '.jpeg', '.png', '.webp'];
             // 1. 同名图片

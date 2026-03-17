@@ -55,32 +55,72 @@ export async function onRequest(context) {
             musicDir += '/';
         }
 
-        // 读取所有文件（包括音频、歌词、图片）以便匹配
-        const allResult = await readIndex(context, {
+        // 只读取音频文件（使用 fileType 过滤减少返回数据量）
+        const audioResult = await readIndex(context, {
             directory: musicDir,
             start: 0,
             count: -1,
             includeSubdirFiles: true,
             accessStatus: 'normal',
+            fileType: 'audio',
         });
 
-        const allFiles = allResult.success ? allResult.files : [];
-
-        // 按目录和文件名构建查找映射
-        const fileMap = new Map();
-        for (const file of allFiles) {
-            const parts = file.id.split('/');
-            const name = parts.pop();
-            const dir = parts.join('/');
-            const key = `${dir}/${name}`.toLowerCase();
-            fileMap.set(key, file);
+        if (!audioResult.success) {
+            return new Response(JSON.stringify({
+                error: 'Failed to load index',
+                message: 'Index loading failed, please try again later'
+            }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
         }
 
-        // 过滤出音频文件
-        const audioFiles = allFiles.filter(file => {
-            const mimeType = file.metadata?.FileType || '';
-            return mimeType.startsWith('audio/');
-        });
+        const audioFiles = audioResult.files || [];
+
+        // 收集音频文件所在目录和基名，用于查找歌词/封面
+        const neededLookups = new Set();
+        for (const file of audioFiles) {
+            const parts = file.id.split('/');
+            const fileName = parts.pop();
+            const dir = parts.join('/');
+            const baseName = fileName.replace(/\.[^/.]+$/, '');
+            // 歌词
+            neededLookups.add(`${dir}/${baseName}.lrc`.toLowerCase());
+            // 同名封面
+            for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
+                neededLookups.add(`${dir}/${baseName}${ext}`.toLowerCase());
+            }
+            // 通用封面
+            for (const cname of ['cover', 'folder', 'album', 'front']) {
+                for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
+                    neededLookups.add(`${dir}/${cname}${ext}`.toLowerCase());
+                }
+            }
+        }
+
+        // 读取非音频文件（歌词、封面等）用于匹配，失败时静默跳过
+        let fileMap = new Map();
+        try {
+            const companionResult = await readIndex(context, {
+                directory: musicDir,
+                start: 0,
+                count: -1,
+                includeSubdirFiles: true,
+                accessStatus: 'normal',
+                fileType: ['image', 'other'],
+            });
+            if (companionResult.success && companionResult.files) {
+                for (const file of companionResult.files) {
+                    const key = file.id.toLowerCase();
+                    if (neededLookups.has(key)) {
+                        fileMap.set(key, file);
+                    }
+                }
+            }
+        } catch (e) {
+            // 封面/歌词匹配失败不影响主列表
+            console.warn('Failed to load companion files for cover/lyrics matching:', e.message);
+        }
 
         // 构建音乐文件列表
         const files = audioFiles.map(file => {
@@ -92,13 +132,9 @@ export async function onRequest(context) {
 
             // 查找同名 .lrc 歌词文件
             let lrcUrl = null;
-            const lrcExts = ['.lrc'];
-            for (const ext of lrcExts) {
-                const lrcKey = `${dir}/${baseName}${ext}`.toLowerCase();
-                if (fileMap.has(lrcKey)) {
-                    lrcUrl = `/file/${fileMap.get(lrcKey).id}`;
-                    break;
-                }
+            const lrcKey = `${dir}/${baseName}.lrc`.toLowerCase();
+            if (fileMap.has(lrcKey)) {
+                lrcUrl = `/file/${fileMap.get(lrcKey).id}`;
             }
 
             // 查找封面图片：优先同名图片，其次目录下的 cover/folder 图片

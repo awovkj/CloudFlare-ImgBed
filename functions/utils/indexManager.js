@@ -522,10 +522,14 @@ export async function readIndex(context, options = {}) {
         // 处理目录满足无头有尾的格式，根目录为空
         const dirPrefix = directory === '' || directory.endsWith('/') ? directory : directory + '/';
 
-        // 处理挂起的操作
-        const mergeResult = await mergeOperationsToIndex(context);
-        if (!mergeResult.success) {
-            throw new Error('Failed to merge operations: ' + mergeResult.error);
+        // 处理挂起的操作（失败时不阻塞读取，使用现有索引）
+        try {
+            const mergeResult = await mergeOperationsToIndex(context);
+            if (!mergeResult.success) {
+                console.warn('Failed to merge operations, proceeding with existing index:', mergeResult.error);
+            }
+        } catch (mergeError) {
+            console.warn('Error during operations merge, proceeding with existing index:', mergeError.message);
         }
 
         // 获取当前索引
