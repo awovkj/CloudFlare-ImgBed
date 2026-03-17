@@ -58,6 +58,7 @@ import { onRequest as onManageBatchIndexFinalize } from '../functions/api/manage
 import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage/batch/restore/chunk.js';
 
 // music
+import { onRequest as onMusicPageRequest }         from '../functions/music/index.js';
 import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
 
 // random
@@ -185,15 +186,7 @@ const ROUTES = [
     {
         pattern: /^\/music\/?$/,
         params: () => ({}),
-        middlewares: [async (context) => {
-            const url = new URL(context.request.url);
-            url.pathname = '/music.html';
-            const newReq = new Request(url.toString(), context.request);
-            if (context.env.ASSETS) {
-                return context.env.ASSETS.fetch(newReq);
-            }
-            return new Response('Not Found', { status: 404 });
-        }],
+        middlewares: [checkDatabaseConfig, onMusicPageRequest],
     },
 
     // ── /upload ──────────────────────────────────────────────────────────────
