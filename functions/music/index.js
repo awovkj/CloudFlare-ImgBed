@@ -14,7 +14,7 @@ export async function onRequest(context) {
             }
 
             const musicHtmlUrl = new URL('/music.html', request.url);
-            const musicHtml = await env.ASSETS.fetch(musicHtmlUrl);
+            const musicHtml = await env.ASSETS.fetch(new Request(musicHtmlUrl.toString(), request));
             
             if (musicHtml.ok) {
                 const html = await musicHtml.text();
