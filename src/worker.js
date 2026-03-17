@@ -58,8 +58,8 @@ import { onRequest as onManageBatchIndexFinalize } from '../functions/api/manage
 import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage/batch/restore/chunk.js';
 
 // music
-import { onRequest as onMusicPageRequest }         from '../functions/music/index.js';
 import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
+import { fetchOthersConfig }                       from '../functions/utils/sysConfig.js';
 
 // random
 import { onRequest as onRandomRequest }        from '../functions/random/index.js';
@@ -186,7 +186,25 @@ const ROUTES = [
     {
         pattern: /^\/music\/?$/,
         params: () => ({}),
-        middlewares: [checkDatabaseConfig, onMusicPageRequest],
+        middlewares: [checkDatabaseConfig, async (context) => {
+            try {
+                const othersConfig = await fetchOthersConfig(context.env);
+                const musicConfig = othersConfig.musicPlayer || {};
+                if (!musicConfig.enabled) {
+                    return new Response('Music player is disabled', { status: 403 });
+                }
+                const url = new URL(context.request.url);
+                url.pathname = '/music.html';
+                const newReq = new Request(url.toString(), context.request);
+                if (context.env.ASSETS) {
+                    return context.env.ASSETS.fetch(newReq);
+                }
+                return new Response('Not Found', { status: 404 });
+            } catch (err) {
+                console.error('Error serving music page:', err);
+                return new Response('Internal server error', { status: 500 });
+            }
+        }],
     },
 
     // ── /upload ──────────────────────────────────────────────────────────────
