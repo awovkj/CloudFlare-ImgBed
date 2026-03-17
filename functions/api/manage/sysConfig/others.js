@@ -105,5 +105,13 @@ export async function getOthersConfig(db, env) {
         fixed: false,
     }
 
+    // 视频播放器
+    const kvVideoPlayer = settingsKV.videoPlayer || {}
+    settings.videoPlayer = {
+        enabled: kvVideoPlayer.enabled ?? false,
+        videoDir: kvVideoPlayer.videoDir || '',
+        fixed: false,
+    }
+
     return settings;
 }

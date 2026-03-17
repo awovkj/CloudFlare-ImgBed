@@ -60,6 +60,9 @@ import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage
 // music
 import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
 
+// video
+import { onRequest as onVideoListRequest }         from '../functions/api/video/list.js';
+
 // random
 import { onRequest as onRandomRequest }        from '../functions/random/index.js';
 
@@ -250,6 +253,7 @@ const ROUTES = [
     { pattern: /^\/api\/fetchRes$/,                       params: () => ({}), middlewares: [checkDatabaseConfig, onFetchResRequest] },
     { pattern: /^\/api\/public\/list$/,                   params: () => ({}), middlewares: [checkDatabaseConfig, onPublicListRequest] },
     { pattern: /^\/api\/music\/list$/,                    params: () => ({}), middlewares: [checkDatabaseConfig, onMusicListRequest] },
+    { pattern: /^\/api\/video\/list$/,                    params: () => ({}), middlewares: [checkDatabaseConfig, onVideoListRequest] },
     { pattern: /^\/api\/bing\/wallpaper$/,                params: () => ({}), middlewares: [checkDatabaseConfig, onBingWallpaperRequest] },
     { pattern: /^\/api\/huggingface\/getUploadUrl$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)] },
     { pattern: /^\/api\/huggingface\/commitUpload$/,      params: () => ({}), middlewares: [checkDatabaseConfig, postOnly(onHfCommitPost)] },
