@@ -392,29 +392,27 @@
 
         shouldShowWidget() {
             const currentPath = window.location.pathname;
-            return currentPath === '/' || currentPath === '/index.html';
+            const hash = window.location.hash;
+            const isHomePage = currentPath === '/' || currentPath === '/index.html' || currentPath.endsWith('/index.html');
+            const isHashHome = hash === '' || hash === '#' || hash === '#/';
+            return isHomePage && isHashHome;
         }
 
         updateVisibility() {
-            if (this.statsDisabled) {
+            if (this.statsDisabled || !this.container) {
                 this.cleanup();
                 return;
             }
             if (this.shouldShowWidget()) {
-                if (this.container) {
-                    this.container.style.display = 'block';
-                }
+                this.container.style.display = 'block';
                 this.setReadyState();
-                if (!this.container || this.container.innerHTML.includes('正在加载统计数据') || this.container.innerHTML.includes('加载失败')) {
-                    if (this.container) {
-                        this.renderLoadingSkeleton();
-                    }
+                const html = this.container.innerHTML || '';
+                if (!html || html.includes('正在加载统计数据') || html.includes('加载失败')) {
+                    this.renderLoadingSkeleton();
                     this.loadStats();
                 }
             } else {
-                if (this.container) {
-                    this.container.style.display = 'none';
-                }
+                this.container.style.display = 'none';
             }
         }
 
@@ -428,6 +426,7 @@
             };
 
             window.addEventListener('popstate', checkRoute);
+            window.addEventListener('hashchange', checkRoute);
 
             if (!window.__fileStatsHistoryPatched) {
                 const originalPushState = history.pushState;
@@ -465,8 +464,10 @@
                         return;
                     }
                 }
-            } catch (_e) {}
-            this.updateVisibility();
+                this.updateVisibility();
+            } catch (_e) {
+                this.updateVisibility();
+            }
         }
 
         cleanup() {
