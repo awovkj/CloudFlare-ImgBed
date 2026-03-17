@@ -197,21 +197,6 @@ const ROUTES = [
         }],
     },
 
-    // ── /music-admin page ───────────────────────────────────────────────────
-    {
-        pattern: /^\/music-admin$/,
-        params: () => ({}),
-        middlewares: [async (context) => {
-            const url = new URL(context.request.url);
-            url.pathname = '/music-admin.html';
-            const newReq = new Request(url.toString(), context.request);
-            if (context.env.ASSETS) {
-                return context.env.ASSETS.fetch(newReq);
-            }
-            return new Response('Not Found', { status: 404 });
-        }],
-    },
-
     // ── /upload ──────────────────────────────────────────────────────────────
     {
         pattern: /^\/upload(\/.*)?$/,
