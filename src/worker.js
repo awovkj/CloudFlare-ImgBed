@@ -59,7 +59,6 @@ import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage
 
 // music
 import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
-import { fetchOthersConfig }                       from '../functions/utils/sysConfig.js';
 
 // random
 import { onRequest as onRandomRequest }        from '../functions/random/index.js';
@@ -182,29 +181,6 @@ const davMiddleware = [checkDatabaseConfig, onDavRequest];
 const randomMiddleware = [checkDatabaseConfig, onRandomRequest];
 
 const ROUTES = [
-    // ── /music page ──────────────────────────────────────────────────────────
-    {
-        pattern: /^\/music\/?$/,
-        params: () => ({}),
-        middlewares: [async (context) => {
-            try {
-                const othersConfig = await fetchOthersConfig(context.env);
-                const musicConfig = othersConfig.musicPlayer || {};
-                if (!musicConfig.enabled) {
-                    return new Response('Music player is disabled', { status: 403 });
-                }
-            } catch (e) {
-                // 配置读取失败时也允许访问，不阻断
-                console.error('Failed to read music config, allowing access:', e);
-            }
-            if (!context.env.ASSETS) {
-                return new Response('Static assets not available', { status: 500 });
-            }
-            const assetUrl = new URL('/music.html', context.request.url);
-            return context.env.ASSETS.fetch(assetUrl.toString());
-        }],
-    },
-
     // ── /upload ──────────────────────────────────────────────────────────────
     {
         pattern: /^\/upload(\/.*)?$/,
