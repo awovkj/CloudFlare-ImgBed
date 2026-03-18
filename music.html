@@ -346,26 +346,72 @@ body{
 
   loadSettings();
 
-  fetch('/api/music/list')
-    .then(r => {
-      if (r.status === 403) {
-        return r.json().then(() => {
-          document.getElementById('loadingState').innerHTML =
-            '<div class="empty-state"><div class="icon">\u{1F6AB}</div>' +
-            '<p>\u97F3\u4E50\u64AD\u653E\u5668\u672A\u542F\u7528</p>' +
-            '<div class="hint">\u8BF7\u5728\u540E\u53F0\u7BA1\u7406 - \u5176\u4ED6\u8BBE\u7F6E\u4E2D\u542F\u7528\u97F3\u4E50\u64AD\u653E\u5668</div></div>';
-          return null;
-        });
+  let isLoadingMore = false;
+  let totalMusicCount = 0;
+
+  async function fetchMusicPage(page, pageSize) {
+    const r = await fetch(`/api/music/list?page=${page}&pageSize=${pageSize}`);
+    if (r.status === 403) {
+      document.getElementById('loadingState').innerHTML =
+        '<div class="empty-state"><div class="icon">\u{1F6AB}</div>' +
+        '<p>\u97F3\u4E50\u64AD\u653E\u5668\u672A\u542F\u7528</p>' +
+        '<div class="hint">\u8BF7\u5728\u540E\u53F0\u7BA1\u7406 - \u5176\u4ED6\u8BBE\u7F6E\u4E2D\u542F\u7528\u97F3\u4E50\u64AD\u653E\u5668</div></div>';
+      return null;
+    }
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.message || '\u670D\u52A1\u4E0D\u53EF\u7528');
+    }
+    return r.json();
+  }
+
+  function appendToPlaylist(files, startId) {
+    const newItems = files.map((f, i) => ({
+      ...f,
+      _id: startId + i,
+      lyrics: null,
+      cover: f.coverUrl || null,
+      lrcUrl: f.lrcUrl || null,
+    }));
+    playlist = playlist.concat(newItems);
+    filteredPlaylist = [...playlist];
+    if (searchQuery || sortBy !== 'default') {
+      filterAndSort();
+    } else {
+      updatePlaylistUI();
+    }
+    // 更新列表计数显示
+    const cnt = document.getElementById('playlistCount');
+    if (cnt) {
+      const loadingTip = isLoadingMore ? ' ...' : '';
+      cnt.textContent = filteredPlaylist.length + ' / ' + totalMusicCount + ' \u9996' + loadingTip;
+    }
+  }
+
+  async function loadRemainingPages(totalPages, pageSize) {
+    isLoadingMore = true;
+    for (let page = 2; page <= totalPages; page++) {
+      try {
+        const data = await fetchMusicPage(page, pageSize);
+        if (!data || !data.files || data.files.length === 0) break;
+        appendToPlaylist(data.files, playlist.length);
+      } catch(e) {
+        console.warn('Failed to load page ' + page + ':', e.message);
+        break;
       }
-      if (!r.ok) {
-        return r.json().catch(() => ({})).then(body => {
-          throw new Error(body.message || '\u670D\u52A1\u4E0D\u53EF\u7528');
-        });
-      }
-      return r.json();
-    })
+    }
+    isLoadingMore = false;
+    // 最终更新计数
+    const cnt = document.getElementById('playlistCount');
+    if (cnt) cnt.textContent = filteredPlaylist.length + ' \u9996';
+  }
+
+  // 首次加载第一页
+  const PAGE_SIZE = 50;
+  fetchMusicPage(1, PAGE_SIZE)
     .then(data => {
       if (!data) return;
+      totalMusicCount = data.totalCount || 0;
       playlist = (data.files || []).map((f, i) => ({
         ...f,
         _id: i,
@@ -378,6 +424,10 @@ body{
       if (playlist.length > 0) {
         currentIndex = 0;
         loadTrack(0, false);
+      }
+      // 后台继续加载剩余页
+      if (data.hasMore) {
+        loadRemainingPages(data.totalPages, PAGE_SIZE);
       }
     })
     .catch(err => {
@@ -450,7 +500,7 @@ body{
         <button class="toolbar-btn ${sortBy==='date'?'active':''}" id="sortDateBtn" title="\u6309\u65F6\u95F4">\u{1F4C5}</button>
       </div>
       <div class="playlist-header" id="plToggle">
-        <span>\u{1F3B5} \u64AD\u653E\u5217\u8868 <span style="opacity:0.5;font-size:12px" id="playlistCount">${filteredPlaylist.length} \u9996</span></span>
+        <span>\u{1F3B5} \u64AD\u653E\u5217\u8868 <span style="opacity:0.5;font-size:12px" id="playlistCount">${isLoadingMore ? filteredPlaylist.length + ' / ' + totalMusicCount + ' \u9996 ...' : filteredPlaylist.length + ' \u9996'}</span></span>
         <span class="arrow ${playlistOpen?'open':''}" id="plArrow">\u25BC</span>
       </div>
       <div class="playlist ${playlistOpen?'open':''}" id="playlist">${renderPlaylistItems()}</div>

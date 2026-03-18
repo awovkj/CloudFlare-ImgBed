@@ -55,6 +55,11 @@ export async function onRequest(context) {
             musicDir += '/';
         }
 
+        // 分页参数
+        const url = new URL(request.url);
+        const page = Math.max(1, parseInt(url.searchParams.get('page')) || 1);
+        const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get('pageSize')) || 50));
+
         // 只读取音频文件（使用 fileType 过滤减少返回数据量）
         const audioResult = await readIndex(context, {
             directory: musicDir,
@@ -75,7 +80,11 @@ export async function onRequest(context) {
             });
         }
 
-        const audioFiles = audioResult.files || [];
+        const allAudioFiles = audioResult.files || [];
+        const totalCount = allAudioFiles.length;
+        const totalPages = Math.ceil(totalCount / pageSize) || 1;
+        const startIdx = (page - 1) * pageSize;
+        const audioFiles = allAudioFiles.slice(startIdx, startIdx + pageSize);
 
         // 收集音频文件所在目录和基名，用于查找歌词/封面
         const neededLookups = new Set();
@@ -178,7 +187,11 @@ export async function onRequest(context) {
 
         return new Response(JSON.stringify({
             files,
-            totalCount: files.length,
+            totalCount,
+            page,
+            pageSize,
+            totalPages,
+            hasMore: page < totalPages,
             musicDir: musicConfig.musicDir || '/',
         }), {
             headers: { 'Content-Type': 'application/json', ...corsHeaders }
