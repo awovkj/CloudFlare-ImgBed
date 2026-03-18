@@ -1,5 +1,6 @@
 import { readIndex } from '../../utils/indexManager.js';
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
+import { userAuthCheck } from '../../utils/userAuth.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -33,6 +34,15 @@ export async function onRequest(context) {
     }
 
     try {
+        // 客户端认证检查
+        const url = new URL(request.url);
+        if (!await userAuthCheck(env, url, request)) {
+            return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+                status: 401,
+                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            });
+        }
+
         const othersConfig = await fetchOthersConfig(env);
         const videoConfig = othersConfig.videoPlayer || {};
 

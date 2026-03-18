@@ -1,9 +1,10 @@
 import { fetchOthersConfig } from '../utils/sysConfig.js';
+import { userAuthCheck, UnauthorizedResponse } from '../utils/userAuth.js';
 
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
-    
+
     if (url.pathname === '/music' || url.pathname === '/music/') {
         try {
             const othersConfig = await fetchOthersConfig(env);
@@ -11,6 +12,11 @@ export async function onRequest(context) {
 
             if (!musicConfig.enabled) {
                 return new Response('Music player is disabled', { status: 403 });
+            }
+
+            // 客户端认证检查
+            if (!await userAuthCheck(env, url, request)) {
+                return UnauthorizedResponse('Unauthorized');
             }
 
             const musicHtmlUrl = new URL('/music.html', request.url);

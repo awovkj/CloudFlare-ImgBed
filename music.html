@@ -324,6 +324,35 @@ body{
   let searchQuery = '';
   let sortBy = 'default';
 
+  // 获取当前页面 URL 中的 authCode 参数，传递给 API 请求
+  function getAuthParam() {
+    const params = new URLSearchParams(window.location.search);
+    const authCode = params.get('authCode');
+    return authCode ? '&authCode=' + encodeURIComponent(authCode) : '';
+  }
+
+  function showAuthPrompt() {
+    document.getElementById('mainContent').innerHTML =
+      '<div class="empty-state">' +
+      '<div class="icon">\u{1F512}</div>' +
+      '<p>\u9700\u8981\u8BA4\u8BC1</p>' +
+      '<div class="hint" style="margin-bottom:16px">\u8BF7\u8F93\u5165\u8BBF\u95EE\u5BC6\u7801</div>' +
+      '<div style="display:flex;gap:8px;justify-content:center;align-items:center">' +
+      '<input type="password" id="authInput" placeholder="\u5BC6\u7801" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,0.06);color:var(--text);font-size:14px;outline:none;width:180px">' +
+      '<button onclick="var c=document.getElementById(\'authInput\').value;if(c){var u=new URL(location.href);u.searchParams.set(\'authCode\',c);location.href=u.toString()}" style="padding:8px 16px;border:none;border-radius:8px;background:var(--primary);color:#fff;font-size:14px;cursor:pointer">\u786E\u5B9A</button>' +
+      '</div></div>';
+    const inp = document.getElementById('authInput');
+    if (inp) {
+      inp.focus();
+      inp.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          var c = this.value;
+          if (c) { var u = new URL(location.href); u.searchParams.set('authCode', c); location.href = u.toString(); }
+        }
+      });
+    }
+  }
+
   function loadSettings(){
     try{
       const saved = localStorage.getItem('musicPlayerSettings');
@@ -350,7 +379,11 @@ body{
   let totalMusicCount = 0;
 
   async function fetchMusicPage(page, pageSize) {
-    const r = await fetch(`/api/music/list?page=${page}&pageSize=${pageSize}`);
+    const r = await fetch(`/api/music/list?page=${page}&pageSize=${pageSize}${getAuthParam()}`);
+    if (r.status === 401) {
+      showAuthPrompt();
+      return null;
+    }
     if (r.status === 403) {
       document.getElementById('loadingState').innerHTML =
         '<div class="empty-state"><div class="icon">\u{1F6AB}</div>' +
