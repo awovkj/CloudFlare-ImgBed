@@ -249,27 +249,26 @@ export async function moderateContent(env, url, securityConfig = null) {
     // moderatecontent.com 渠道
     if (uploadModerate.channel === 'moderatecontent.com') {
         const apikey = uploadModerate.moderateContentApiKey;
-        if (apikey == undefined || apikey == null || apikey == "") {
-            label = "None";
-        } else {
-            try {
-                const params = new URLSearchParams({ key: apikey, url: url });
-                const fetchResponse = await fetch('https://api.moderatecontent.com/moderate/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: params.toString()
-                });
-                if (!fetchResponse.ok) {
-                    throw new Error(`HTTP error! status: ${fetchResponse.status}`);
-                }
-                const moderate_data = await fetchResponse.json();
-                if (moderate_data.rating_label) {
-                    label = moderate_data.rating_label;
-                }
-            } catch (error) {
-                console.error('Moderate Error:', error);
-                label = "None";
+        if (!apikey) {
+            return label;
+        }
+        try {
+            const params = new URLSearchParams({ key: apikey, url: url });
+            const fetchResponse = await fetch('https://api.moderatecontent.com/moderate/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params.toString()
+            });
+            if (!fetchResponse.ok) {
+                throw new Error(`HTTP error! status: ${fetchResponse.status}`);
             }
+            const moderate_data = await fetchResponse.json();
+            if (moderate_data.rating_label) {
+                label = moderate_data.rating_label;
+            }
+        } catch (error) {
+            console.error('Moderate Error:', error);
+            label = "None";
         }
         return label;
     }
@@ -305,21 +304,20 @@ export async function moderateContent(env, url, securityConfig = null) {
 }
 
 // 清除CDN缓存
+// 优化：三个缓存清理操作互不依赖，用 Promise.allSettled 并行执行
+// 使用 allSettled 而非 all，确保单个失败不影响其他操作
 export async function purgeCDNCache(env, cdnUrl, url, normalizedFolder) {
     if (env.dev_mode === 'true') {
         return;
     }
 
-    // 清除CDN缓存
-    try {
-        await purgeCFCache(env, cdnUrl);
-    } catch (error) {
-        console.error('Failed to clear CDN cache:', error);
-    }
-
-    // 清除 api/randomFileList 等API缓存
-    await purgeRandomFileListCache(url.origin, normalizedFolder);
-    await purgePublicFileListCache(url.origin, normalizedFolder);
+    await Promise.allSettled([
+        purgeCFCache(env, cdnUrl).catch(error => {
+            console.error('Failed to clear CDN cache:', error);
+        }),
+        purgeRandomFileListCache(url.origin, normalizedFolder),
+        purgePublicFileListCache(url.origin, normalizedFolder),
+    ]);
 }
 
 // 结束上传：清除缓存，维护索引
@@ -336,32 +334,43 @@ export async function endUpload(context, fileId, metadata) {
 }
 
 // 从 request 中解析 ip 地址
+// 优化：Cloudflare Workers 环境下 cf-connecting-ip 几乎必定存在，
+// 优先检查并短路返回，避免读取 19 个 header 的开销
 export function getUploadIp(request) {
-    const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || request.headers.get("x-forwarded-for") || request.headers.get("x-client-ip") || request.headers.get("x-host") || request.headers.get("x-originating-ip") || request.headers.get("x-cluster-client-ip") || request.headers.get("forwarded-for") || request.headers.get("forwarded") || request.headers.get("via") || request.headers.get("requester") || request.headers.get("true-client-ip") || request.headers.get("client-ip") || request.headers.get("x-remote-ip") || request.headers.get("x-originating-ip") || request.headers.get("fastly-client-ip") || request.headers.get("akamai-origin-hop") || request.headers.get("x-remote-addr") || request.headers.get("x-remote-host") || request.headers.get("x-client-ips")
+    // 快速路径：CF Workers 环境
+    const cfIp = request.headers.get("cf-connecting-ip");
+    if (cfIp) return cfIp.split(',')[0].trim();
 
-    if (!ip) {
-        return null;
+    // 后备路径：其他环境
+    const FALLBACK_HEADERS = [
+        "x-real-ip", "x-forwarded-for", "x-client-ip", "true-client-ip",
+        "x-host", "x-originating-ip", "x-cluster-client-ip",
+        "forwarded-for", "forwarded", "via", "requester",
+        "client-ip", "x-remote-ip", "fastly-client-ip",
+        "akamai-origin-hop", "x-remote-addr", "x-remote-host", "x-client-ips"
+    ];
+
+    for (const header of FALLBACK_HEADERS) {
+        const value = request.headers.get(header);
+        if (value) return value.split(',')[0].trim();
     }
 
-    // 处理多个IP地址的情况
-    const ips = ip.split(',').map(i => i.trim());
-
-    return ips[0]; // 返回第一个IP地址
+    return null;
 }
 
 // 检查上传IP是否被封禁
+// 优化：使用 Set 代替 Array.includes 进行 O(1) 查找
 export async function isBlockedUploadIp(env, uploadIp) {
     try {
         const db = getDatabase(env);
 
-        let list = await db.get("manage@blockipList");
+        const list = await db.get("manage@blockipList");
         if (list == null) {
-            list = [];
-        } else {
-            list = list.split(",");
+            return false;
         }
 
-        return list.includes(uploadIp);
+        const blockedSet = new Set(list.split(","));
+        return blockedSet.has(uploadIp);
     } catch (error) {
         console.error('Failed to check blocked IP:', error);
         // 如果数据库未配置，默认不阻止任何IP

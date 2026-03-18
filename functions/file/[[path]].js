@@ -30,7 +30,13 @@ export async function onRequest(context) {  // Contents of context object
     }
 
     // 读取安全配置，解析必要参数
-    const securityConfig = await fetchSecurityConfig(env);
+    // 优化：并行读取安全配置和数据库记录，节省一次网络往返
+    const db = getDatabase(env);
+    const [securityConfig, imgRecord] = await Promise.all([
+        fetchSecurityConfig(env),
+        db.getWithMetadata(fileId),
+    ]);
+
     context.securityConfig = securityConfig;
 
     const url = new URL(request.url);
@@ -45,8 +51,6 @@ export async function onRequest(context) {  // Contents of context object
     }
 
     // 从数据库中获取图片记录
-    const db = getDatabase(env);
-    const imgRecord = await db.getWithMetadata(fileId);
     if (!imgRecord) {
         return new Response('Error: Image Not Found', { status: 404 });
     }
@@ -326,11 +330,13 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
 }
 
 // 带重试机制的Telegram分片获取函数（支持代理域名）
+// 优化：在循环外创建 TelegramAPI 实例，避免每次重试都重新实例化
+// 优化：使用指数退避 (500ms, 1000ms, 2000ms) 替代线性递增
 async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRetries = 3) {
+    const tgApi = new TelegramAPI(botToken, proxyUrl);
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            const tgApi = new TelegramAPI(botToken, proxyUrl);
-
             const response = await tgApi.getFileContent(chunk.fileId);
 
             if (!response.ok) {
@@ -355,8 +361,8 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
                 return null; // 最后一次尝试也失败了
             }
 
-            // 重试前等待一段时间
-            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            // 指数退避重试: 500ms, 1000ms, 2000ms
+            await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
         }
     }
 
@@ -518,11 +524,14 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
 }
 
 // 带重试机制的Discord分片获取函数（每次通过 API 获取新的附件 URL）
+// 优化：在循环外创建 DiscordAPI 实例，避免每次重试都重新实例化
+// 优化：使用指数退避替代线性递增
 async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, maxRetries = 3) {
+    const discordAPI = new DiscordAPI(botToken);
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             // 通过 Discord API 获取新的附件 URL（因为 URL 会在约24小时后过期）
-            const discordAPI = new DiscordAPI(botToken);
             let fileUrl = await discordAPI.getFileURL(channelId, chunk.messageId);
 
             if (!fileUrl) {
@@ -558,8 +567,8 @@ async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 
                 return null; // 最后一次尝试也失败了
             }
 
-            // 重试前等待一段时间
-            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            // 指数退避重试: 500ms, 1000ms, 2000ms
+            await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
         }
     }
 

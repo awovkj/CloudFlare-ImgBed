@@ -26,36 +26,31 @@ function createDatabaseAdapter(env) {
 /**
  * KV适配器类
  * 保持与原有KV接口的兼容性
+ * 优化：直接返回 KV 的 Promise，避免不必要的 async/await 微任务开销
  */
 class KVAdapter {
     constructor(kv) {
         this.kv = kv;
     }
 
-    // 直接代理到KV的方法
-    async put(key, value, options) {
-        options = options || {};
-        return await this.kv.put(key, value, options);
+    put(key, value, options) {
+        return this.kv.put(key, value, options || {});
     }
 
-    async get(key, options) {
-        options = options || {};
-        return await this.kv.get(key, options);
+    get(key, options) {
+        return this.kv.get(key, options || {});
     }
 
-    async getWithMetadata(key, options) {
-        options = options || {};
-        return await this.kv.getWithMetadata(key, options);
+    getWithMetadata(key, options) {
+        return this.kv.getWithMetadata(key, options || {});
     }
 
-    async delete(key, options) {
-        options = options || {};
-        return await this.kv.delete(key, options);
+    delete(key, options) {
+        return this.kv.delete(key, options || {});
     }
 
-    async list(options) {
-        options = options || {};
-        return await this.kv.list(options);
+    list(options) {
+        return this.kv.list(options || {});
     }
 }
 
@@ -85,12 +80,12 @@ export function getDatabase(env) {
  * @returns {Object} 配置信息
  */
 export function checkDatabaseConfig(env) {
-    var hasD1 = env.img_d1 && typeof env.img_d1.prepare === 'function';
-    var hasKV = env.img_url && typeof env.img_url.get === 'function';
+    const hasD1 = !!(env.img_d1 && typeof env.img_d1.prepare === 'function');
+    const hasKV = !!(env.img_url && typeof env.img_url.get === 'function');
 
     return {
-        hasD1: hasD1,
-        hasKV: hasKV,
+        hasD1,
+        hasKV,
         usingD1: hasD1,
         usingKV: !hasD1 && hasKV,
         configured: hasD1 || hasKV

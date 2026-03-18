@@ -21,9 +21,11 @@ export async function onRequest(context) {  // Contents of context object
     const url = new URL(request.url);
     context.url = url;
 
-    // 读取各项配置，存入 context
-    const securityConfig = await fetchSecurityConfig(env);
-    const uploadConfig = await fetchUploadConfig(env, context);
+    // 优化：并行读取安全配置和上传配置，节省一次网络往返
+    const [securityConfig, uploadConfig] = await Promise.all([
+        fetchSecurityConfig(env),
+        fetchUploadConfig(env, context),
+    ]);
 
     context.securityConfig = securityConfig;
     context.uploadConfig = uploadConfig;
@@ -90,36 +92,25 @@ async function processFileUpload(context, formdata = null) {
 
     // 获取IP地址
     const uploadIp = getUploadIp(request);
-    const ipAddress = await getIPAddress(uploadIp);
+    // 优化：IP 地理位置查询涉及 2 次外部 HTTP 请求（美团 API），
+    // 但仅用于 metadata 记录，不影响上传逻辑。
+    // 使用 Promise 延迟求值，仅在构建 metadata 时才 await。
+    const ipAddressPromise = getIPAddress(uploadIp);
 
     // 获取上传文件夹路径
     let uploadFolder = url.searchParams.get('uploadFolder') || '';
     uploadFolder = sanitizeUploadFolder(uploadFolder);
 
-    let uploadChannel = 'TelegramNew';
-    switch (urlParamUploadChannel) {
-        case 'telegram':
-            uploadChannel = 'TelegramNew';
-            break;
-        case 'cfr2':
-            uploadChannel = 'CloudflareR2';
-            break;
-        case 's3':
-            uploadChannel = 'S3';
-            break;
-        case 'discord':
-            uploadChannel = 'Discord';
-            break;
-        case 'huggingface':
-            uploadChannel = 'HuggingFace';
-            break;
-        case 'external':
-            uploadChannel = 'External';
-            break;
-        default:
-            uploadChannel = 'TelegramNew';
-            break;
-    }
+    // 优化：用 Map 替代 switch 进行渠道映射，O(1) 查找
+    const CHANNEL_MAP = {
+        'telegram': 'TelegramNew',
+        'cfr2': 'CloudflareR2',
+        's3': 'S3',
+        'discord': 'Discord',
+        'huggingface': 'HuggingFace',
+        'external': 'External',
+    };
+    const uploadChannel = CHANNEL_MAP[urlParamUploadChannel] || 'TelegramNew';
 
     // 将指定的渠道名称存入 context，供后续上传函数使用
     context.specifiedChannelName = urlParamChannelName || null;
@@ -163,7 +154,7 @@ async function processFileUpload(context, formdata = null) {
         FileSize: fileSize,
         FileSizeBytes: fileSizeBytes,
         UploadIP: uploadIp,
-        UploadAddress: ipAddress,
+        UploadAddress: await ipAddressPromise,
         ListType: "None",
         TimeStamp: time,
         Label: "None",
@@ -187,55 +178,27 @@ async function processFileUpload(context, formdata = null) {
 
     /* ====================================不同渠道上传======================================= */
     // 出错是否切换渠道自动重试，默认开启
-    const autoRetry = url.searchParams.get('autoRetry') === 'false' ? false : true;
+    const autoRetry = url.searchParams.get('autoRetry') !== 'false';
 
-    let err = '';
-    // 上传到不同渠道
-    if (uploadChannel === 'CloudflareR2') {
-        // -------------CloudFlare R2 渠道---------------
-        const res = await uploadFileToCloudflareR2(context, fullId, metadata, returnLink);
-        if (res.status === 200 || !autoRetry) {
-            return res;
-        } else {
-            err = await res.text();
-        }
-    } else if (uploadChannel === 'S3') {
-        // ---------------------S3 渠道------------------
-        const res = await uploadFileToS3(context, fullId, metadata, returnLink);
-        if (res.status === 200 || !autoRetry) {
-            return res;
-        } else {
-            err = await res.text();
-        }
-    } else if (uploadChannel === 'Discord') {
-        // ---------------------Discord 渠道------------------
-        const res = await uploadFileToDiscord(context, fullId, metadata, returnLink);
-        if (res.status === 200 || !autoRetry) {
-            return res;
-        } else {
-            err = await res.text();
-        }
-    } else if (uploadChannel === 'HuggingFace') {
-        // ---------------------HuggingFace 渠道------------------
-        const res = await uploadFileToHuggingFace(context, fullId, metadata, returnLink);
-        if (res.status === 200 || !autoRetry) {
-            return res;
-        } else {
-            err = await res.text();
-        }
-    } else if (uploadChannel === 'External') {
-        // --------------------外链渠道----------------------
-        const res = await uploadFileToExternal(context, fullId, metadata, returnLink);
+    // 优化：用调度表替代 if/else 链，消除重复代码
+    const UPLOAD_DISPATCHERS = {
+        'CloudflareR2': (ctx, id, meta, link) => uploadFileToCloudflareR2(ctx, id, meta, link),
+        'S3':           (ctx, id, meta, link) => uploadFileToS3(ctx, id, meta, link),
+        'Discord':      (ctx, id, meta, link) => uploadFileToDiscord(ctx, id, meta, link),
+        'HuggingFace':  (ctx, id, meta, link) => uploadFileToHuggingFace(ctx, id, meta, link),
+        'External':     (ctx, id, meta, link) => uploadFileToExternal(ctx, id, meta, link),
+        'TelegramNew':  (ctx, id, meta, link) => uploadFileToTelegram(ctx, id, meta, fileExt, fileName, fileType, link),
+    };
+
+    const dispatcher = UPLOAD_DISPATCHERS[uploadChannel] || UPLOAD_DISPATCHERS['TelegramNew'];
+    const res = await dispatcher(context, fullId, metadata, returnLink);
+
+    // External 渠道不支持自动重试
+    if (res.status === 200 || !autoRetry || uploadChannel === 'External') {
         return res;
-    } else {
-        // ----------------Telegram New 渠道-------------------
-        const res = await uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink);
-        if (res.status === 200 || !autoRetry) {
-            return res;
-        } else {
-            err = await res.text();
-        }
     }
+
+    const err = await res.text();
 
     // 上传失败，开始自动切换渠道重试
     const res = await tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink);
@@ -752,57 +715,47 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
 
 
 // 自动切换渠道重试
+// 优化：用调度表消除重复 if/else，减少代码体积（影响冷启动解析时间）
 async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink) {
-    const { env, url, formdata } = context;
+    const { url } = context;
+
+    const RETRY_DISPATCHERS = {
+        'CloudflareR2': (ctx, id, meta, link) => uploadFileToCloudflareR2(ctx, id, meta, link),
+        'TelegramNew':  (ctx, id, meta, link) => uploadFileToTelegram(ctx, id, meta, fileExt, fileName, fileType, link),
+        'S3':           (ctx, id, meta, link) => uploadFileToS3(ctx, id, meta, link),
+        'HuggingFace':  (ctx, id, meta, link) => uploadFileToHuggingFace(ctx, id, meta, link),
+        'Discord':      (ctx, id, meta, link) => uploadFileToDiscord(ctx, id, meta, link),
+    };
 
     // 渠道列表（Discord 因为有 10MB 限制，放在最后尝试）
     const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'Discord'];
-    const errMessages = {};
-    errMessages[uploadChannel] = 'Error: ' + uploadChannel + err;
+    const errMessages = { [uploadChannel]: 'Error: ' + uploadChannel + err };
 
     // 先用原渠道再试一次（关闭服务端压缩）
     url.searchParams.set('serverCompress', 'false');
-    let retryRes = null;
-    if (uploadChannel === 'CloudflareR2') {
-        retryRes = await uploadFileToCloudflareR2(context, fullId, metadata, returnLink);
-    } else if (uploadChannel === 'TelegramNew') {
-        retryRes = await uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink);
-    } else if (uploadChannel === 'S3') {
-        retryRes = await uploadFileToS3(context, fullId, metadata, returnLink);
-    } else if (uploadChannel === 'HuggingFace') {
-        retryRes = await uploadFileToHuggingFace(context, fullId, metadata, returnLink);
-    } else if (uploadChannel === 'Discord') {
-        retryRes = await uploadFileToDiscord(context, fullId, metadata, returnLink);
-    }
-
-    // 原渠道重试成功，直接返回
-    if (retryRes && retryRes.status === 200) {
-        return retryRes;
-    } else if (retryRes) {
-        errMessages[uploadChannel + '_retry'] = 'Error: ' + uploadChannel + ' retry - ' + await retryRes.text();
+    const retryDispatcher = RETRY_DISPATCHERS[uploadChannel];
+    if (retryDispatcher) {
+        const retryRes = await retryDispatcher(context, fullId, metadata, returnLink);
+        if (retryRes && retryRes.status === 200) {
+            return retryRes;
+        }
+        if (retryRes) {
+            errMessages[uploadChannel + '_retry'] = 'Error: ' + uploadChannel + ' retry - ' + await retryRes.text();
+        }
     }
 
     // 原渠道重试失败，切换到其他渠道
-    for (let i = 0; i < channelList.length; i++) {
-        if (channelList[i] !== uploadChannel) {
-            let res = null;
-            if (channelList[i] === 'CloudflareR2') {
-                res = await uploadFileToCloudflareR2(context, fullId, metadata, returnLink);
-            } else if (channelList[i] === 'TelegramNew') {
-                res = await uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink);
-            } else if (channelList[i] === 'S3') {
-                res = await uploadFileToS3(context, fullId, metadata, returnLink);
-            } else if (channelList[i] === 'HuggingFace') {
-                res = await uploadFileToHuggingFace(context, fullId, metadata, returnLink);
-            } else if (channelList[i] === 'Discord') {
-                res = await uploadFileToDiscord(context, fullId, metadata, returnLink);
-            }
+    for (const channel of channelList) {
+        if (channel === uploadChannel) continue;
+        const dispatcher = RETRY_DISPATCHERS[channel];
+        if (!dispatcher) continue;
 
-            if (res && res.status === 200) {
-                return res;
-            } else if (res) {
-                errMessages[channelList[i]] = 'Error: ' + channelList[i] + await res.text();
-            }
+        const res = await dispatcher(context, fullId, metadata, returnLink);
+        if (res && res.status === 200) {
+            return res;
+        }
+        if (res) {
+            errMessages[channel] = 'Error: ' + channel + await res.text();
         }
     }
 

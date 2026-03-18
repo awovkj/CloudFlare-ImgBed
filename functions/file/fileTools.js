@@ -71,24 +71,28 @@ export function isFromPublicBrowse(Referer, origin) {
     return false;
 }
 
+// 判断是否为压缩包文件 — 使用 Set O(1) 查找替代多次 includes()
+const ARCHIVE_TYPES = new Set([
+    'zip', 'rar', '7z', 'tar', 'gzip',
+    'application/x-compressed', 'application/x-zip-compressed',
+    'application/zip', 'application/x-rar-compressed', 'application/x-7z-compressed'
+]);
+
+function isArchiveType(fileType) {
+    if (!fileType) return false;
+    // 先尝试精确匹配
+    if (ARCHIVE_TYPES.has(fileType)) return true;
+    // 再检查子串匹配（兼容 "application/zip; charset=..." 等）
+    for (const t of ARCHIVE_TYPES) {
+        if (fileType.includes(t)) return true;
+    }
+    return false;
+}
+
 // 公共响应头设置函数
 export function setCommonHeaders(headers, encodedFileName, fileType, Referer, url) {
-    // 判断是否为压缩包文件
-    const isArchiveFile = fileType && (
-        fileType.includes('zip') || 
-        fileType.includes('rar') || 
-        fileType.includes('7z') || 
-        fileType.includes('tar') || 
-        fileType.includes('gzip') ||
-        fileType.includes('application/x-compressed') ||
-        fileType.includes('application/x-zip-compressed') ||
-        fileType.includes('application/zip') ||
-        fileType.includes('application/x-rar-compressed') ||
-        fileType.includes('application/x-7z-compressed')
-    );
-
     // 压缩包文件使用 attachment 确保正确下载
-    const dispositionType = isArchiveFile ? 'attachment' : 'inline';
+    const dispositionType = isArchiveType(fileType) ? 'attachment' : 'inline';
     headers.set('Content-Disposition', `${dispositionType}; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Accept-Ranges', 'bytes');
@@ -114,27 +118,22 @@ export function setRangeHeaders(headers, rangeStart, rangeEnd, totalSize) {
 }
 
 // 处理HEAD请求的公共函数
+// 优化：直接复用传入的 headers，避免逐 key 创建新 Headers 对象
 export function handleHeadRequest(headers, etag = null) {
-    const responseHeaders = new Headers();
-
-    // 复制关键头部
-    responseHeaders.set('Content-Length', headers.get('Content-Length') || '0');
-    responseHeaders.set('Content-Type', headers.get('Content-Type') || 'application/octet-stream');
-    responseHeaders.set('Content-Disposition', headers.get('Content-Disposition') || 'inline');
-    responseHeaders.set('Access-Control-Allow-Origin', headers.get('Access-Control-Allow-Origin') || '*');
-    responseHeaders.set('Accept-Ranges', headers.get('Accept-Ranges') || 'bytes');
-    responseHeaders.set('Cache-Control', headers.get('Cache-Control') || 'public, max-age=2592000');
-
     if (etag) {
-        responseHeaders.set('ETag', etag);
+        headers.set('ETag', etag);
     }
+    // 确保关键头部存在
+    if (!headers.has('Content-Length')) headers.set('Content-Length', '0');
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream');
 
     return new Response(null, {
         status: 200,
-        headers: responseHeaders,
+        headers,
     });
 }
 
+// 优化：使用指数退避重试，避免连续立即重试打满上游服务
 export async function getFileContent(request, targetUrl, max_retries = 2) {
     let retries = 0;
     while (retries <= max_retries) {
@@ -150,9 +149,15 @@ export async function getFileContent(request, targetUrl, max_retries = 2) {
                 return new Response('Error: Image Not Found', { status: 404 });
             } else {
                 retries++;
+                if (retries <= max_retries) {
+                    await new Promise(r => setTimeout(r, 300 * retries)); // 300ms, 600ms 指数退避
+                }
             }
         } catch (error) {
             retries++;
+            if (retries <= max_retries) {
+                await new Promise(r => setTimeout(r, 300 * retries));
+            }
         }
     }
     return null;
@@ -202,8 +207,35 @@ export async function returnWithCheck(context, imgRecord) {
     return response;
 }
 
+// 优化：使用 Cache API 缓存静态图片，避免每次都产生回环请求
+// Workers fetch(url.origin + "/static/...") 会产生 Workers -> CDN -> Workers 的回环
+// 缓存后只有首次请求产生回环，后续请求直接从 edge cache 读取
+async function fetchStaticWithCache(url, staticPath) {
+    const staticUrl = url.origin + staticPath;
+    const cache = caches.default;
+
+    // 尝试从缓存读取
+    const cached = await cache.match(staticUrl);
+    if (cached) return cached.clone();
+
+    // 缓存未命中，发起请求
+    const response = await fetch(staticUrl);
+    if (response.ok) {
+        // 克隆后写入缓存（长期缓存，静态图片不会变）
+        const cacheResponse = new Response(response.clone().body, {
+            headers: {
+                ...Object.fromEntries(response.headers),
+                'Cache-Control': 'public, max-age=604800', // 7天
+            },
+        });
+        // 不 await，后台写入
+        cache.put(staticUrl, cacheResponse).catch(() => {});
+    }
+    return response;
+}
+
 export async function return404(url) {
-    const Img404 = await fetch(url.origin + "/static/404.png");
+    const Img404 = await fetchStaticWithCache(url, "/static/404.png");
     if (!Img404.ok) {
         return new Response('Error: Image Not Found',
             {
@@ -226,7 +258,7 @@ export async function return404(url) {
 }
 
 export async function returnBlockImg(url) {
-    const blockImg = await fetch(url.origin + "/static/BlockImg.png");
+    const blockImg = await fetchStaticWithCache(url, "/static/BlockImg.png");
     if (!blockImg.ok) {
         return new Response(null, {
             status: 302,
@@ -248,7 +280,7 @@ export async function returnBlockImg(url) {
 }
 
 export async function returnWhiteListImg(url) {
-    const WhiteListImg = await fetch(url.origin + "/static/WhiteListOn.png");
+    const WhiteListImg = await fetchStaticWithCache(url, "/static/WhiteListOn.png");
     if (!WhiteListImg.ok) {
         return new Response(null, {
             status: 302,

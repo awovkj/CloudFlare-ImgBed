@@ -52,24 +52,38 @@ export async function telemetryData(context) {
   if (!disableTelemetry) {
     try {
       const parsedHeaders = {};
-      context.request.headers.forEach((value, key) => {
-        parsedHeaders[key] = value;
-        if (value.length > 0) {
+      // 只收集有调试价值的请求头，避免遍历全部头部的开销
+      const USEFUL_HEADERS = [
+        'user-agent', 'referer', 'origin', 'content-type',
+        'accept', 'accept-language', 'authorization',
+        'cf-connecting-ip', 'cf-ipcountry', 'x-forwarded-for'
+      ];
+      for (const key of USEFUL_HEADERS) {
+        const value = context.request.headers.get(key);
+        if (value) {
+          parsedHeaders[key] = value;
           context.data.sentry.setTag(key, value);
         }
-      });
-      const CF = JSON.parse(JSON.stringify(context.request.cf));
+      }
+
+      // 直接遍历 request.cf，无需 JSON 深拷贝（request.cf 已是普通对象）
+      const cf = context.request.cf;
       const parsedCF = {};
-      for (const key in CF) {
-        if (typeof CF[key] == "object") {
-          parsedCF[key] = JSON.stringify(CF[key]);
-        } else {
-          parsedCF[key] = CF[key];
-          if (CF[key].length > 0) {
-            context.data.sentry.setTag(key, CF[key]);
+      if (cf) {
+        for (const key in cf) {
+          const val = cf[key];
+          if (typeof val === "object") {
+            parsedCF[key] = JSON.stringify(val);
+          } else {
+            parsedCF[key] = val;
+            if (val && String(val).length > 0) {
+              context.data.sentry.setTag(key, String(val));
+            }
           }
         }
       }
+
+      const requestUrl = new URL(context.request.url);
       const data = {
         headers: parsedHeaders,
         cf: parsedCF,
@@ -77,15 +91,12 @@ export async function telemetryData(context) {
         method: context.request.method,
         redirect: context.request.redirect,
       };
-      const requestUrl = new URL(context.request.url);
-      const urlPath = requestUrl.pathname;
-      const hostname = requestUrl.hostname;
-      context.data.sentry.setTag("path", urlPath);
+      context.data.sentry.setTag("path", requestUrl.pathname);
       context.data.sentry.setTag("url", data.url);
       context.data.sentry.setTag("method", context.request.method);
       context.data.sentry.setTag("redirect", context.request.redirect);
       context.data.sentry.setContext("request", data);
-      const transaction = context.data.sentry.startTransaction({ name: `${context.request.method} ${hostname}` });
+      const transaction = context.data.sentry.startTransaction({ name: `${context.request.method} ${requestUrl.hostname}` });
       context.data.transaction = transaction;
       return await context.next();
     } catch (e) {
@@ -116,10 +127,9 @@ async function fetchSampleRate(context) {
 }
 
 // 检查数据库是否配置
-export async function checkDatabaseConfig(context) {
-  var env = context.env;
-
-  var dbConfig = checkDbConfig(env);
+// 优化：checkDbConfig 是纯同步操作，去掉不必要的 async/await，减少微任务调度开销
+export function checkDatabaseConfig(context) {
+  const dbConfig = checkDbConfig(context.env);
 
   if (!dbConfig.configured) {
     return new Response(
@@ -137,6 +147,6 @@ export async function checkDatabaseConfig(context) {
     );
   }
 
-  // 继续执行
-  return await context.next();
+  // 继续执行 — 直接返回 next() 的 Promise，无需 await
+  return context.next();
 }
