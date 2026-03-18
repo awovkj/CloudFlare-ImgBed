@@ -201,8 +201,7 @@ async function processFileUpload(context, formdata = null) {
     const err = await res.text();
 
     // 上传失败，开始自动切换渠道重试
-    const res = await tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink);
-    return res;
+    return await tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink);
 }
 
 // 上传到Cloudflare R2
