@@ -1,4 +1,36 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/logo.png"><link rel="apple-touch-icon" href="/logo.png"><link rel="mask-icon" href="/logo.png" color="#f4b400"><meta name="description" content="Sanyue ImgHub - A modern file hosting platform"><meta name="keywords" content="Sanyue, ImgHub, file hosting, image hosting, cloud storage"><meta name="author" content="SanyueQi"><title>Sanyue ImgHub</title><script defer="defer" src="/js/chunk-vendors.75bb1397.js"></script><script defer="defer" src="/js/app.f1037a91.js"></script><link href="/css/chunk-vendors.4363ed49.css" rel="stylesheet"><link href="/css/app.75711fde.css" rel="stylesheet"><link href="/css/theme-overrides.css" rel="stylesheet"><style>
+:root {
+    --fabric-bg: #f5f1e8;
+    --fabric-surface: rgba(255,255,255,0.92);
+    --fabric-border: rgba(180,160,130,0.18);
+    --fabric-text: #2f2f2f;
+    --fabric-muted: #6b6b6b;
+    --fabric-shadow: 0 4px 12px rgba(80,60,40,0.06);
+    --fabric-shadow-lg: 0 8px 24px rgba(80,60,40,0.08);
+    --fabric-radius-sm: 8px;
+    --fabric-radius-md: 12px;
+    --fabric-radius-lg: 16px;
+    --fabric-transition: 200ms ease;
+}
+body {
+    background: var(--fabric-bg) !important;
+    position: relative;
+}
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+        repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(180,160,130,0.015) 2px,rgba(180,160,130,0.015) 4px),
+        repeating-linear-gradient(90deg,transparent,transparent 2px,rgba(180,160,130,0.015) 2px,rgba(180,160,130,0.015) 4px);
+    opacity: 0.7;
+    z-index: 0;
+}
+#app {
+    position: relative;
+    z-index: 1;
+}
 .file-stats-widget-container {
     position: fixed;
     left: 24px;
