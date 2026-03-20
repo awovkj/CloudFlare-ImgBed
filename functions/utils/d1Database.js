@@ -1,10 +1,18 @@
 /**
  * D1 数据库操作工具类
+ * 优化：缓存 prepared statements，减少重复解析开销
  */
-
 class D1Database {
     constructor(db) {
         this.db = db;
+        this._stmtCache = new Map();
+    }
+
+    _prepare(sql) {
+        if (!this._stmtCache.has(sql)) {
+            this._stmtCache.set(sql, this.db.prepare(sql));
+        }
+        return this._stmtCache.get(sql);
     }
 }
 
@@ -17,50 +25,19 @@ D1Database.prototype.putFile = function(fileId, value, options) {
     value = value || '';
     options = options || {};
     var metadata = options.metadata || {};
+    var fields = this.extractMetadataFields(metadata);
     
-    // 从metadata中提取字段用于索引
-    var extractedFields = this.extractMetadataFields(metadata);
-    
-    var stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO files (' +
-        'id, value, metadata, file_name, file_type, file_size, ' +
-        'upload_ip, upload_address, list_type, timestamp, ' +
-        'label, directory, channel, channel_name, ' +
-        'tg_file_id, tg_chat_id, tg_bot_token, is_chunked' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    );
-    
-    return stmt.bind(
-        fileId,
-        value,
-        JSON.stringify(metadata),
-        extractedFields.fileName,
-        extractedFields.fileType,
-        extractedFields.fileSize,
-        extractedFields.uploadIP,
-        extractedFields.uploadAddress,
-        extractedFields.listType,
-        extractedFields.timestamp,
-        extractedFields.label,
-        extractedFields.directory,
-        extractedFields.channel,
-        extractedFields.channelName,
-        extractedFields.tgFileId,
-        extractedFields.tgChatId,
-        extractedFields.tgBotToken,
-        extractedFields.isChunked
-    ).run();
+    return this._prepare(
+        'INSERT OR REPLACE INTO files (id, value, metadata, file_name, file_type, file_size, upload_ip, upload_address, list_type, timestamp, label, directory, channel, channel_name, tg_file_id, tg_chat_id, tg_bot_token, is_chunked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(fileId, value, JSON.stringify(metadata), fields.fileName, fields.fileType, fields.fileSize, fields.uploadIP, fields.uploadAddress, fields.listType, fields.timestamp, fields.label, fields.directory, fields.channel, fields.channelName, fields.tgFileId, fields.tgChatId, fields.tgBotToken, fields.isChunked).run();
 };
 
 /**
  * 获取文件记录 (替代 KV.get)
  */
 D1Database.prototype.getFile = function(fileId) {
-    var self = this;
-    var stmt = this.db.prepare('SELECT * FROM files WHERE id = ?');
-    return stmt.bind(fileId).first().then(function(result) {
+    return this._prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first().then(function(result) {
         if (!result) return null;
-        
         return {
             value: result.value,
             metadata: JSON.parse(result.metadata || '{}')
@@ -68,19 +45,12 @@ D1Database.prototype.getFile = function(fileId) {
     });
 };
 
-/**
- * 获取文件记录包含元数据 (替代 KV.getWithMetadata)
- */
 D1Database.prototype.getFileWithMetadata = function(fileId) {
     return this.getFile(fileId);
 };
 
-/**
- * 删除文件记录 (替代 KV.delete)
- */
 D1Database.prototype.deleteFile = function(fileId) {
-    var stmt = this.db.prepare('DELETE FROM files WHERE id = ?');
-    return stmt.bind(fileId).run();
+    return this._prepare('DELETE FROM files WHERE id = ?').bind(fileId).run();
 };
 
 /**
@@ -109,27 +79,20 @@ D1Database.prototype.listFiles = function(options) {
     query += ' ORDER BY id LIMIT ?';
     params.push(limit + 1);
     
-    var stmt = this.db.prepare(query);
+    var stmt = this._prepare(query);
     if (params.length > 0) {
         stmt = stmt.bind.apply(stmt, params);
     }
     return stmt.all().then(function(response) {
         var results = response.results || [];
         var hasMore = results.length > limit;
-        if (hasMore) {
-            results.pop();
-        }
+        if (hasMore) results.pop();
 
-        var keys = results.map(function(row) {
-            return {
-                name: row.id,
-                metadata: JSON.parse(row.metadata || '{}')
-            };
-        });
-        
         return {
-            keys: keys,
-            cursor: hasMore && keys.length > 0 ? keys[keys.length - 1].name : null,
+            keys: results.map(function(row) {
+                return { name: row.id, metadata: JSON.parse(row.metadata || '{}') };
+            }),
+            cursor: hasMore && results.length > 0 ? results[results.length - 1].id : null,
             list_complete: !hasMore
         };
     });
@@ -144,35 +107,19 @@ D1Database.prototype.putSetting = function(key, value, category) {
     if (!category && key.startsWith('manage@sysConfig@')) {
         category = key.split('@')[2];
     }
-    
-    var stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO settings (key, value, category) VALUES (?, ?, ?)'
-    );
-    
-    return stmt.bind(key, value, category).run();
+    return this._prepare('INSERT OR REPLACE INTO settings (key, value, category) VALUES (?, ?, ?)').bind(key, value, category).run();
 };
 
-/**
- * 获取设置 (替代 KV.get)
- */
 D1Database.prototype.getSetting = function(key) {
-    var stmt = this.db.prepare('SELECT value FROM settings WHERE key = ?');
-    return stmt.bind(key).first().then(function(result) {
+    return this._prepare('SELECT value FROM settings WHERE key = ?').bind(key).first().then(function(result) {
         return result ? result.value : null;
     });
 };
 
-/**
- * 删除设置 (替代 KV.delete)
- */
 D1Database.prototype.deleteSetting = function(key) {
-    var stmt = this.db.prepare('DELETE FROM settings WHERE key = ?');
-    return stmt.bind(key).run();
+    return this._prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
 };
 
-/**
- * 列出设置 (替代 KV.list)
- */
 D1Database.prototype.listSettings = function(options) {
     options = options || {};
     var prefix = options.prefix || '';
@@ -189,20 +136,16 @@ D1Database.prototype.listSettings = function(options) {
     query += ' ORDER BY key LIMIT ?';
     params.push(limit);
     
-    var stmt = this.db.prepare(query);
+    var stmt = this._prepare(query);
     if (params.length > 0) {
         stmt = stmt.bind.apply(stmt, params);
     }
     return stmt.all().then(function(response) {
-        var results = response.results || [];
-        var keys = results.map(function(row) {
-            return {
-                name: row.key,
-                value: row.value
-            };
-        });
-
-        return { keys: keys };
+        return {
+            keys: (response.results || []).map(function(row) {
+                return { name: row.key, value: row.value };
+            })
+        };
     });
 };
 
@@ -212,26 +155,12 @@ D1Database.prototype.listSettings = function(options) {
  * 保存索引操作记录
  */
 D1Database.prototype.putIndexOperation = function(operationId, operation) {
-    var stmt = this.db.prepare(
-        'INSERT OR REPLACE INTO index_operations (id, type, timestamp, data) VALUES (?, ?, ?, ?)'
-    );
-    
-    return stmt.bind(
-        operationId,
-        operation.type,
-        operation.timestamp,
-        JSON.stringify(operation.data)
-    ).run();
+    return this._prepare('INSERT OR REPLACE INTO index_operations (id, type, timestamp, data) VALUES (?, ?, ?, ?)').bind(operationId, operation.type, operation.timestamp, JSON.stringify(operation.data)).run();
 };
 
-/**
- * 获取索引操作记录
- */
 D1Database.prototype.getIndexOperation = function(operationId) {
-    var stmt = this.db.prepare('SELECT * FROM index_operations WHERE id = ?');
-    return stmt.bind(operationId).first().then(function(result) {
+    return this._prepare('SELECT * FROM index_operations WHERE id = ?').bind(operationId).first().then(function(result) {
         if (!result) return null;
-        
         return {
             type: result.type,
             timestamp: result.timestamp,
@@ -240,17 +169,10 @@ D1Database.prototype.getIndexOperation = function(operationId) {
     });
 };
 
-/**
- * 删除索引操作记录
- */
 D1Database.prototype.deleteIndexOperation = function(operationId) {
-    var stmt = this.db.prepare('DELETE FROM index_operations WHERE id = ?');
-    return stmt.bind(operationId).run();
+    return this._prepare('DELETE FROM index_operations WHERE id = ?').bind(operationId).run();
 };
 
-/**
- * 列出索引操作记录
- */
 D1Database.prototype.listIndexOperations = function(options) {
     options = options || {};
     var limit = options.limit || 1000;
@@ -267,13 +189,12 @@ D1Database.prototype.listIndexOperations = function(options) {
     query += ' ORDER BY timestamp LIMIT ?';
     params.push(limit);
     
-    var stmt = this.db.prepare(query);
+    var stmt = this._prepare(query);
     if (params.length > 0) {
         stmt = stmt.bind.apply(stmt, params);
     }
     return stmt.all().then(function(response) {
-        var results = response.results || [];
-        return results.map(function(row) {
+        return (response.results || []).map(function(row) {
             return {
                 id: row.id,
                 type: row.type,
