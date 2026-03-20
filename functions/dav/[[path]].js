@@ -6,23 +6,19 @@ export async function onRequest(context) {
     const authResponse = await checkAuth(request, env);
     if (authResponse) return authResponse;
 
-    const url = new URL(request.url);
-    url.pathname = url.pathname.replace(/^\/dav/, '') || '/';
-    const modifiedRequest = new Request(url.toString(), request);
-
-    switch (modifiedRequest.method) {
-        case 'OPTIONS': return handleOptions(modifiedRequest);
-        case 'PROPFIND': return handlePropfind(modifiedRequest, env);
-        case 'PUT': return handlePut(modifiedRequest, env);
-        case 'DELETE': return handleDelete(modifiedRequest, env);
-        case 'GET': return handleGet(modifiedRequest, env);
-        case 'HEAD': return handleHead(modifiedRequest, env);
-        case 'MKCOL': return handleMkcol(modifiedRequest, env);
-        case 'COPY': return handleCopy(modifiedRequest, env);
-        case 'MOVE': return handleMove(modifiedRequest, env);
-        case 'LOCK': return handleLock(modifiedRequest, env);
-        case 'UNLOCK': return handleUnlock(modifiedRequest, env);
-        case 'PROPPATCH': return handleProppatch(modifiedRequest, env);
+    switch (request.method) {
+        case 'OPTIONS': return handleOptions(request);
+        case 'PROPFIND': return handlePropfind(request, env);
+        case 'PUT': return handlePut(request, env);
+        case 'DELETE': return handleDelete(request, env);
+        case 'GET': return handleGet(request, env);
+        case 'HEAD': return handleHead(request, env);
+        case 'MKCOL': return handleMkcol(request, env);
+        case 'COPY': return handleCopy(request, env);
+        case 'MOVE': return handleMove(request, env);
+        case 'LOCK': return handleLock(request, env);
+        case 'UNLOCK': return handleUnlock(request, env);
+        case 'PROPPATCH': return handleProppatch(request, env);
         default: return new Response('Method Not Allowed', { status: 405 });
     }
 }
@@ -56,62 +52,68 @@ async function checkAuth(request, env) {
 
     const authHeader = request.headers.get('Authorization');
     if (!authHeader) {
-        return new Response('Authorization required', {
+        return new Response('Unauthorized', {
             status: 401,
-            headers: { 'WWW-Authenticate': 'Basic realm="WebDAV"' },
+            headers: {
+                'WWW-Authenticate': 'Basic realm="WebDAV"',
+                'Content-Type': 'text/plain',
+            },
         });
     }
 
     const [scheme, encoded] = authHeader.split(' ');
     if (scheme !== 'Basic' || !encoded) {
-        return new Response('Malformed Authorization header', { status: 400 });
+        return new Response('Bad Request', { status: 400 });
     }
 
     const decoded = atob(encoded);
     const colonIndex = decoded.indexOf(':');
     if (colonIndex === -1) {
-        return new Response('Malformed credentials', { status: 400 });
+        return new Response('Bad Request', { status: 400 });
     }
 
     const user = decoded.substring(0, colonIndex);
     const pass = decoded.substring(colonIndex + 1);
 
     if (user !== davUser || pass !== davPass) {
-        return new Response('Invalid credentials', { status: 403 });
+        return new Response('Forbidden', { status: 403 });
     }
 
     return null;
-}
-
-function formatWebDAVDate(date) {
-    return date.toUTCString();
 }
 
 function getNowRFC1123() {
     return new Date().toUTCString();
 }
 
+function getNowISO() {
+    return new Date().toISOString();
+}
+
 function handleOptions(request) {
     return new Response(null, {
         status: 200,
         headers: {
-            'Allow': 'OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, MKCOL, COPY, MOVE, LOCK, UNLOCK, PROPPATCH',
+            'Allow': 'OPTIONS, GET, HEAD, POST, PUT, DELETE, PROPFIND, MKCOL, COPY, MOVE, LOCK, UNLOCK, PROPPATCH',
             'DAV': '1, 2',
             'MS-Author-Via': 'DAV',
             'Content-Length': '0',
+            'Date': getNowRFC1123(),
         },
     });
 }
 
 async function handleHead(request, env) {
-    const path = decodeURIComponent(new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-    if (path.endsWith('/')) {
+    if (path === '/dav/' || path === '/dav') {
         return new Response(null, { status: 200 });
     }
 
     try {
-        const fileUrl = new URL(`/file${path}`, request.url);
+        const filePath = path.replace(/^\/dav/, '');
+        const fileUrl = new URL(`/file${filePath}`, request.url);
         const fileResponse = await fetch(fileUrl.toString(), { method: 'HEAD' });
 
         if (!fileResponse.ok) {
@@ -130,15 +132,16 @@ async function handleHead(request, env) {
 }
 
 async function handleGet(request, env) {
-    const path = decodeURIComponent(new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/dav/, '') || '/';
 
     if (path.endsWith('/')) {
         try {
             const dir = path === '/' ? '' : path.substring(1, path.length - 1);
             const contents = await fetchDirectoryContents(dir, env, request);
             const html = generateDirectoryListingHtml(path, contents);
-            return new Response(html, { 
-                headers: { 'Content-Type': 'text/html; charset=utf-8' } 
+            return new Response(html, {
+                headers: { 'Content-Type': 'text/html; charset=utf-8' }
             });
         } catch (error) {
             return new Response(`Error: ${error.message}`, { status: 500 });
@@ -155,10 +158,7 @@ async function handleGet(request, env) {
             const headers = new Headers(fileResponse.headers);
             headers.set('Access-Control-Allow-Origin', '*');
 
-            return new Response(fileResponse.body, { 
-                status: 200, 
-                headers 
-            });
+            return new Response(fileResponse.body, { status: 200, headers });
         } catch (error) {
             return new Response(`Error: ${error.message}`, { status: 500 });
         }
@@ -166,7 +166,9 @@ async function handleGet(request, env) {
 }
 
 async function handlePut(request, env) {
-    const fullPath = decodeURIComponent(new URL(request.url).pathname.substring(1));
+    const url = new URL(request.url);
+    const fullPath = decodeURIComponent(url.pathname.replace(/^\/dav\/?/, ''));
+
     if (!fullPath || fullPath.endsWith('/')) {
         return new Response('Invalid file name', { status: 400 });
     }
@@ -213,7 +215,9 @@ async function handlePut(request, env) {
 }
 
 async function handleDelete(request, env) {
-    const path = decodeURIComponent(new URL(request.url).pathname.substring(1));
+    const url = new URL(request.url);
+    const path = decodeURIComponent(url.pathname.replace(/^\/dav\/?/, ''));
+
     if (!path) return new Response('Invalid path', { status: 400 });
 
     const isFolder = path.endsWith('/');
@@ -253,7 +257,8 @@ async function handleMove(request, env) {
 const lockTokens = new Map();
 
 async function handleLock(request, env) {
-    const path = decodeURIComponent(new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const path = url.pathname;
     const lockToken = `opaquelocktoken:${crypto.randomUUID()}`;
 
     lockTokens.set(path, {
@@ -266,18 +271,18 @@ async function handleLock(request, env) {
 
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <D:prop xmlns:D="DAV:">
-    <D:lockdiscovery>
-        <D:activelock>
-            <D:locktype><D:write/></D:locktype>
-            <D:lockscope><D:exclusive/></D:lockscope>
-            <D:depth>${depth}</D:depth>
-            <D:owner/>
-            <D:timeout>${timeout}</D:timeout>
-            <D:locktoken>
-                <D:href>${lockToken}</D:href>
-            </D:locktoken>
-        </D:activelock>
-    </D:lockdiscovery>
+<D:lockdiscovery>
+<D:activelock>
+<D:locktype><D:write/></D:locktype>
+<D:lockscope><D:exclusive/></D:lockscope>
+<D:depth>${depth}</D:depth>
+<D:owner/>
+<D:timeout>${timeout}</D:timeout>
+<D:locktoken>
+<D:href>${lockToken}</D:href>
+</D:locktoken>
+</D:activelock>
+</D:lockdiscovery>
 </D:prop>`;
 
     return new Response(xml, {
@@ -291,10 +296,10 @@ async function handleLock(request, env) {
 
 async function handleUnlock(request, env) {
     const lockToken = request.headers.get('Lock-Token');
-    const path = decodeURIComponent(new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const path = url.pathname;
 
     if (lockToken) {
-        const cleanToken = lockToken.replace(/[<>]/g, '');
         lockTokens.delete(path);
     }
 
@@ -302,15 +307,18 @@ async function handleUnlock(request, env) {
 }
 
 async function handleProppatch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <D:multistatus xmlns:D="DAV:">
-    <D:response>
-        <D:href>${encodeURI(decodeURIComponent(new URL(request.url).pathname))}</D:href>
-        <D:propstat>
-            <D:prop/>
-            <D:status>HTTP/1.1 200 OK</D:status>
-        </D:propstat>
-    </D:response>
+<D:response>
+<D:href>${encodeURI(path)}</D:href>
+<D:propstat>
+<D:prop/>
+<D:status>HTTP/1.1 200 OK</D:status>
+</D:propstat>
+</D:response>
 </D:multistatus>`;
 
     return new Response(xml, {
@@ -320,13 +328,14 @@ async function handleProppatch(request, env) {
 }
 
 async function handlePropfind(request, env) {
-    const path = decodeURIComponent(new URL(request.url).pathname);
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/dav/, '') || '/';
     const depth = request.headers.get('Depth') || '1';
 
     try {
         const dir = path === '/' ? '' : path.substring(1, path.endsWith('/') ? path.length - 1 : path.length);
         const contents = await fetchDirectoryContents(dir, env, request);
-        const xml = generateWebDAVXml(path, contents, depth);
+        const xml = generateWebDAVXml(path, contents, depth, request);
         return new Response(xml, {
             status: 207,
             headers: {
@@ -385,74 +394,78 @@ function generateDirectoryListingHtml(basePath, contents) {
 </html>`;
 }
 
-function generateWebDAVXml(basePath, contents, depth) {
+function generateWebDAVXml(basePath, contents, depth, request) {
     let responses = '';
     const now = getNowRFC1123();
     const currentPath = basePath.endsWith('/') ? basePath : `${basePath}/`;
+    const origin = new URL(request.url).origin;
 
-    responses += createCollectionResponse(currentPath, now);
+    responses += createCollectionResponse(origin, '/dav', currentPath, now);
 
     if (depth !== '0') {
         for (const dir of contents.directories) {
             const dirName = dir.split('/').pop();
-            responses += createCollectionResponse(`${currentPath}${encodeURIComponent(dirName)}/`, now);
+            const dirPath = `${currentPath}${dirName}`;
+            responses += createCollectionResponse(origin, '/dav', `${dirPath}/`, now);
         }
         for (const file of contents.files) {
-            responses += createFileResponse(file, currentPath, now);
+            responses += createFileResponse(origin, '/dav', file, currentPath, now);
         }
     }
 
     return `<?xml version="1.0" encoding="utf-8"?>
-<D:multistatus xmlns:D="DAV:" xmlns:ns0="DAV:">
+<D:multistatus xmlns:D="DAV:">
 ${responses}
 </D:multistatus>`;
 }
 
-function createCollectionResponse(href, lastModified) {
+function createCollectionResponse(origin, prefix, path, lastModified) {
+    const fullPath = `${prefix}${path}`;
+    const name = decodeURIComponent(path.split('/').filter(Boolean).pop() || '');
+
     return `<D:response>
-    <D:href>${href}</D:href>
-    <D:propstat>
-        <D:prop>
-            <D:displayname>${decodeURIComponent(href.split('/').filter(Boolean).pop() || '')}</D:displayname>
-            <D:resourcetype><D:collection/></D:resourcetype>
-            <D:creationdate>${lastModified}</D:creationdate>
-            <D:getlastmodified>${lastModified}</D:getlastmodified>
-            <D:supportedlock>
-                <D:lockentry>
-                    <D:locktype><D:write/></D:locktype>
-                    <D:lockscope><D:exclusive/></D:lockscope>
-                </D:lockentry>
-            </D:supportedlock>
-        </D:prop>
-        <D:status>HTTP/1.1 200 OK</D:status>
-    </D:propstat>
-</D:response>`;
+<D:href>${encodeURI(fullPath)}</D:href>
+<D:propstat>
+<D:prop>
+<D:displayname>${escapeXml(name)}</D:displayname>
+<D:resourcetype><D:collection/></D:resourcetype>
+<D:creationdate>${lastModified}</D:creationdate>
+<D:getlastmodified>${lastModified}</D:getlastmodified>
+</D:prop>
+<D:status>HTTP/1.1 200 OK</D:status>
+</D:propstat>
+</D:response>
+`;
 }
 
-function createFileResponse(file, basePath, lastModified) {
+function createFileResponse(origin, prefix, file, basePath, lastModified) {
     const fileName = file.name.split('/').pop();
     const fileSize = file.metadata?.FileSizeBytes || file.metadata?.FileSize || '0';
     const mimeType = file.metadata?.FileType || 'application/octet-stream';
-    const href = `${basePath}${encodeURIComponent(fileName)}`;
+    const fullPath = `${prefix}${basePath}${fileName}`;
 
     return `<D:response>
-    <D:href>${href}</D:href>
-    <D:propstat>
-        <D:prop>
-            <D:displayname>${fileName}</D:displayname>
-            <D:resourcetype/>
-            <D:creationdate>${lastModified}</D:creationdate>
-            <D:getlastmodified>${lastModified}</D:getlastmodified>
-            <D:getcontentlength>${fileSize}</D:getcontentlength>
-            <D:getcontenttype>${mimeType}</D:getcontenttype>
-            <D:supportedlock>
-                <D:lockentry>
-                    <D:locktype><D:write/></D:locktype>
-                    <D:lockscope><D:exclusive/></D:lockscope>
-                </D:lockentry>
-            </D:supportedlock>
-        </D:prop>
-        <D:status>HTTP/1.1 200 OK</D:status>
-    </D:propstat>
-</D:response>`;
+<D:href>${encodeURI(fullPath)}</D:href>
+<D:propstat>
+<D:prop>
+<D:displayname>${escapeXml(fileName)}</D:displayname>
+<D:resourcetype/>
+<D:creationdate>${lastModified}</D:creationdate>
+<D:getlastmodified>${lastModified}</D:getlastmodified>
+<D:getcontentlength>${fileSize}</D:getcontentlength>
+<D:getcontenttype>${mimeType}</D:getcontenttype>
+</D:prop>
+<D:status>HTTP/1.1 200 OK</D:status>
+</D:propstat>
+</D:response>
+`;
+}
+
+function escapeXml(str) {
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
 }
