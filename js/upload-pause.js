@@ -9,6 +9,7 @@
   var statusText = null;
   var uploadCount = 0;
   var pausedUploads = {};
+  var chunkProgress = { uploaded: 0, total: 0 };
 
   function init() {
     createControlPanel();
@@ -112,6 +113,43 @@
     return str.substring(0, len - 3) + '...';
   }
 
+  function extractChunkInfo(args, isFormData) {
+    var chunkIndex = null;
+    var totalChunks = null;
+
+    try {
+      if (isFormData && args[1] && args[1].body) {
+        var formData = args[1].body;
+        if (formData instanceof FormData) {
+          chunkIndex = formData.get('chunkIndex');
+          totalChunks = formData.get('totalChunks');
+        }
+      }
+    } catch (e) {}
+
+    return {
+      chunkIndex: chunkIndex !== null ? parseInt(chunkIndex) : null,
+      totalChunks: totalChunks !== null ? parseInt(totalChunks) : null
+    };
+  }
+
+  function updateChunkProgress(chunkIndex, totalChunks) {
+    if (chunkIndex !== null && totalChunks !== null) {
+      if (chunkProgress.total === 0 || chunkProgress.total !== totalChunks) {
+        chunkProgress.total = totalChunks;
+        chunkProgress.uploaded = 0;
+      }
+      chunkProgress.uploaded = Math.max(chunkProgress.uploaded, chunkIndex + 1);
+    }
+  }
+
+  function getChunkStatusText() {
+    if (chunkProgress.total > 0) {
+      return '上传中... ' + chunkProgress.uploaded + '/' + chunkProgress.total + ' 分块';
+    }
+    return '上传中... (' + uploadCount + ' 个文件)';
+  }
+
   function interceptUploads() {
     var origFetch = window.fetch;
     window.fetch = function() {
@@ -125,7 +163,12 @@
 
         uploadCount++;
         showPanel();
-        setStatus('上传中... (' + uploadCount + ' 个文件)');
+
+        var chunkInfo = extractChunkInfo(args, true);
+        if (chunkInfo.chunkIndex !== null) {
+          updateChunkProgress(chunkInfo.chunkIndex, chunkInfo.totalChunks);
+        }
+        setStatus(getChunkStatusText());
 
         var promise = origFetch.apply(this, args);
         promise.then(function(response) {
@@ -139,12 +182,14 @@
           uploadCount--;
           if (uploadCount <= 0 && !isPaused) {
             uploadCount = 0;
+            chunkProgress = { uploaded: 0, total: 0 };
             setTimeout(function() { hidePanel(); }, 1500);
           }
         }).catch(function(err) {
           uploadCount--;
           if (uploadCount <= 0 && !isPaused) {
             uploadCount = 0;
+            chunkProgress = { uploaded: 0, total: 0 };
             hidePanel();
           }
         });
@@ -171,13 +216,22 @@
         }
         uploadCount++;
         showPanel();
-        setStatus('上传中... (' + uploadCount + ' 个文件)');
+
+        if (data instanceof FormData) {
+          var chunkIndex = data.get('chunkIndex');
+          var totalChunks = data.get('totalChunks');
+          if (chunkIndex !== null && totalChunks !== null) {
+            updateChunkProgress(parseInt(chunkIndex), parseInt(totalChunks));
+          }
+        }
+        setStatus(getChunkStatusText());
 
         var self = this;
         this.addEventListener('loadend', function() {
           uploadCount--;
           if (uploadCount <= 0 && !isPaused) {
             uploadCount = 0;
+            chunkProgress = { uploaded: 0, total: 0 };
             setTimeout(function() { hidePanel(); }, 1500);
           }
         });

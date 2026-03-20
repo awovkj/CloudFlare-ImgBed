@@ -1417,10 +1417,19 @@ function buildTelegramChunkErrorMessage(error, chunkIndex, attempt, maxRetries) 
 }
 
 async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 5) {
+    // 第一次上传不等待，只有失败重试时才等待
+    let lastError = null;
+    
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+        // 只有在重试时才等待（attempt > 0 表示是重试）
+        if (attempt > 0) {
+            const delayMs = calculateTelegramRetryDelayMs(lastError, attempt - 1);
+            console.log(`Chunk ${chunkIndex + 1} retry ${attempt}/${maxRetries - 1}, waiting ${delayMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+
         try {
             const tgAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
-
             const caption = `Part ${chunkIndex + 1}/${totalChunks}`;
 
             const response = await tgAPI.sendFile(chunkBlob, tgChatId, 'sendDocument', 'document', caption, chunkFileName);
@@ -1439,20 +1448,19 @@ async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, 
             };
 
         } catch (error) {
+            lastError = error;
             const currentAttempt = attempt + 1;
             const retryable = isTelegramRetryableError(error);
             const errorMessage = buildTelegramChunkErrorMessage(error, chunkIndex, currentAttempt, maxRetries);
             console.warn(errorMessage);
 
-            if (attempt === maxRetries - 1 || !retryable) {
+            // 不可重试的错误或已达到最大重试次数，直接返回失败
+            if (!retryable || attempt === maxRetries - 1) {
                 return {
                     success: false,
                     error: errorMessage
                 };
             }
-
-            const delayMs = calculateTelegramRetryDelayMs(error, attempt);
-            await new Promise(resolve => setTimeout(resolve, delayMs));
         }
     }
 
