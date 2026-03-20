@@ -18,13 +18,21 @@
                 radial-gradient(circle at 88% 10%, rgba(55, 198, 182, 0.18), transparent 26%),
                 linear-gradient(180deg, #eef5ff 0%, #f6fbff 100%);
             --stats-surface: rgba(255, 255, 255, 0.78);
-            --stats-surface-strong: rgba(255, 255, 255, 0.9);
+            --stats-surface-strong: rgba(255, 255, 255, 0.92);
             --stats-border: rgba(113, 158, 220, 0.18);
+            --stats-border-hover: rgba(113, 158, 220, 0.28);
             --stats-text: #183450;
             --stats-muted: #627d96;
             --stats-primary: #2f89ff;
             --stats-primary-2: #37c6b6;
+            --stats-success: #22c55e;
+            --stats-warning: #f59e0b;
+            --stats-error: #ef4444;
             --stats-shadow: 0 24px 60px rgba(40, 91, 161, 0.12);
+            --stats-shadow-hover: 0 28px 68px rgba(40, 91, 161, 0.16);
+            --stats-blur: 24px;
+            --ease: cubic-bezier(0.22, 1, 0.36, 1);
+            --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
         body {
@@ -33,6 +41,8 @@
             color: var(--stats-text);
             padding: 28px 20px 36px;
             min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
         .container {
@@ -49,8 +59,14 @@
             padding: 32px;
             margin-bottom: 20px;
             box-shadow: var(--stats-shadow);
-            backdrop-filter: blur(22px) saturate(160%);
-            -webkit-backdrop-filter: blur(22px) saturate(160%);
+            backdrop-filter: blur(var(--stats-blur)) saturate(160%);
+            -webkit-backdrop-filter: blur(var(--stats-blur)) saturate(160%);
+            transition: transform var(--ease) 0.3s, box-shadow var(--ease) 0.3s;
+        }
+
+        .stats-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--stats-shadow-hover);
         }
 
         .stats-card::before {
@@ -58,7 +74,7 @@
             position: absolute;
             inset: 0;
             pointer-events: none;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.36), transparent 38%, rgba(55, 198, 182, 0.07));
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.38), transparent 38%, rgba(55, 198, 182, 0.08));
         }
 
         .header {
@@ -100,13 +116,23 @@
             text-align: center;
             box-shadow: 0 20px 36px rgba(47, 137, 255, 0.24);
             border: 1px solid rgba(255, 255, 255, 0.18);
+            transition: transform var(--ease) 0.2s, box-shadow var(--ease) 0.2s;
+        }
+
+        .summary-item:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 24px 44px rgba(47, 137, 255, 0.3);
+        }
+
+        .summary-item:active {
+            transform: translateY(-2px) scale(1);
         }
 
         .summary-item::before {
             content: '';
             position: absolute;
             inset: 0;
-            background: radial-gradient(circle at top right, rgba(255,255,255,0.28), transparent 36%);
+            background: radial-gradient(circle at top right, rgba(255,255,255,0.3), transparent 36%);
         }
 
         .summary-item.alt {
@@ -150,6 +176,12 @@
             padding: 22px;
             box-shadow: 0 18px 34px rgba(38, 86, 150, 0.08);
             border: 1px solid rgba(113, 158, 220, 0.16);
+            transition: transform var(--ease) 0.2s, box-shadow var(--ease) 0.2s;
+        }
+
+        .chart-container:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 22px 42px rgba(38, 86, 150, 0.12);
         }
 
         .chart-title {
@@ -196,19 +228,19 @@
             cursor: pointer;
             display: block;
             margin: 0 auto 24px;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
             box-shadow: 0 18px 30px rgba(36, 104, 234, 0.22);
             position: relative;
             z-index: 1;
         }
 
         .refresh-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 22px 34px rgba(36, 104, 234, 0.28);
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 24px 38px rgba(36, 104, 234, 0.3);
         }
 
         .refresh-btn:active {
-            transform: translateY(0);
+            transform: translateY(-1px) scale(1);
         }
 
         .table-container {
@@ -232,6 +264,13 @@
             background: rgba(47, 137, 255, 0.06);
             font-weight: 700;
             color: var(--stats-text);
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.05em;
+        }
+
+        tr {
+            transition: background var(--ease) 0.15s;
         }
 
         tr:hover {
@@ -247,6 +286,12 @@
             background: linear-gradient(135deg, #2f89ff 0%, #37c6b6 100%);
             color: white;
             box-shadow: 0 8px 18px rgba(47, 137, 255, 0.18);
+            transition: transform var(--ease) 0.15s, box-shadow var(--ease) 0.15s;
+        }
+
+        .badge:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 22px rgba(47, 137, 255, 0.24);
         }
 
         @media (max-width: 768px) {
