@@ -47,13 +47,6 @@ export async function getOthersConfig(db, env) {
     const settingsStr = await db.get('manage@sysConfig@others')
     const settingsKV = settingsStr ? JSON.parse(settingsStr) : {}
 
-    // 远端遥测
-    const kvTelemetry = settingsKV.telemetry || {}
-    settings.telemetry = {
-        enabled: kvTelemetry.enabled ?? !(env.disable_telemetry === 'true'),
-        fixed: false,
-    }
-
     // 随机图API
     const kvRandomImageAPI = settingsKV.randomImageAPI || {}
     settings.randomImageAPI = {

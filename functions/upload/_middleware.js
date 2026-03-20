@@ -1,6 +1,5 @@
-import { errorHandling, telemetryData, checkDatabaseConfig } from '../utils/middleware';
+import { checkDatabaseConfig } from '../utils/middleware';
 
-// CORS 跨域响应头
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -8,7 +7,6 @@ const corsHeaders = {
     'Access-Control-Max-Age': '86400',
 };
 
-// OPTIONS 预检请求处理
 async function handleOptions(context) {
     if (context.request.method === 'OPTIONS') {
         return new Response(null, {
@@ -19,4 +17,4 @@ async function handleOptions(context) {
     return context.next();
 }
 
-export const onRequest = [checkDatabaseConfig, handleOptions, errorHandling, telemetryData];
+export const onRequest = [checkDatabaseConfig, handleOptions];

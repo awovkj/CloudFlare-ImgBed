@@ -8,7 +8,7 @@ import { onRequest as onUploadRequest }        from '../functions/upload/index.j
 import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkStatus.js';
 // chunkUpload.js / chunkMerge.js 是工具函数库，无 onRequest，
 // 已被 upload/index.js 内部调用，不在此单独注册路由。
-import { errorHandling, telemetryData, checkDatabaseConfig } from '../functions/utils/middleware.js';
+import { checkDatabaseConfig } from '../functions/utils/middleware.js';
 
 // file
 import { onRequest as onFileRequest }           from '../functions/file/[[path]].js';
@@ -163,7 +163,7 @@ async function forwardToUploadDO(context) {
 // Workers 冷启动时 Map 查找比遍历 40 条正则快约 10 倍。
 
 // /upload 路由中间件链
-const uploadMiddleware = [checkDatabaseConfig, errorHandling, telemetryData, forwardToUploadDO];
+const uploadMiddleware = [checkDatabaseConfig, forwardToUploadDO];
 
 // /api/manage 路由中间件链
 function apiManageChain(handler) {

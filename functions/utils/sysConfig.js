@@ -124,9 +124,7 @@ export async function fetchOthersConfig(env) {
         return settings;
     } catch (error) {
         console.error('Failed to fetch others config:', error);
-        // 返回默认配置，showStats默认启用
         return {
-            telemetry: { enabled: false },
             showStats: { enabled: true },
         };
     }
