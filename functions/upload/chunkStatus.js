@@ -1,5 +1,5 @@
-import { getDatabase } from '../../utils/databaseAdapter.js';
-import { checkChunkUploadStatuses } from '../../upload/chunkUpload.js';
+import { getDatabase } from '../utils/databaseAdapter.js';
+import { checkChunkUploadStatuses } from './chunkUpload.js';
 
 export async function onRequest(context) {
     const { request, env } = context;
