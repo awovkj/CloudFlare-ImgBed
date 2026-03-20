@@ -346,9 +346,8 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
         }
 
         for (let retry = 0; retry < MAX_RETRIES; retry++) {
-            // 重试前添加指数退避延迟（首次不延迟）
             if (retry > 0) {
-                const delay = Math.min(1000 * Math.pow(2, retry - 1), 8000);
+                const delay = Math.min(600 * Math.pow(2, retry - 1), 5000);
                 console.log(`Chunk ${chunkIndex} retry ${retry}/${MAX_RETRIES}, waiting ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
@@ -490,16 +489,14 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
                 expirationTtl: 3600 // 1小时过期
             });
         } else {
-            // 其他分块需要等待第一个分块完成multipart upload初始化
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 30; // 最多等待60秒
+            const maxRetries = 20;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    // 等待2秒后重试
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                     retryCount++;
                     console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -605,16 +602,14 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
                 expirationTtl: 3600 // 1小时过期
             });
         } else {
-            // 其他分块需要等待第一个分块完成multipart upload初始化
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 30; // 最多等待60秒
+            const maxRetries = 20;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    // 等待2秒后重试
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                     retryCount++;
                     console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -833,11 +828,10 @@ async function uploadChunkToDiscordWithRetry(botToken, channelId, chunkBlob, chu
             }
 
             if (attempt === maxRetries - 1) {
-                return null; // 最后一次尝试也失败了
+                return null;
             }
 
-            // 指数退避延迟
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+            await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
         }
     }
 
@@ -851,9 +845,9 @@ async function uploadChunkToDiscordWithRetry(botToken, channelId, chunkBlob, chu
 export async function retryFailedChunks(context, failedChunks, uploadChannel, options = {}) {
     const {
         maxRetries = 5,
-        retryTimeout = 60000, // 60秒重试超时
-        maxConcurrency = 3, // 最大并发数
-        batchSize = 6 // 每批处理的分块数
+        retryTimeout = 90000,
+        maxConcurrency = 5,
+        batchSize = 10
     } = options;
 
     if (!failedChunks || failedChunks.length === 0) {
@@ -910,9 +904,8 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
 
         results.push(...batchResults);
 
-        // 批次间稍作延迟
         if (i + batchSize < chunksToRetry.length) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
     }
 
@@ -977,9 +970,8 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
     });
 
     while (retryCount < maxRetries) {
-        // 重试前添加指数退避延迟（首次不延迟）
         if (retryCount > 0) {
-            const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
+            const delay = Math.min(600 * Math.pow(2, retryCount - 1), 8000);
             console.log(`Chunk ${chunk.index} retry ${retryCount + 1}/${maxRetries}, waiting ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -1136,7 +1128,7 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 
     const db = getDatabase(env);
 
-    const CHUNK_STATUS_CONCURRENCY = 8;
+    const CHUNK_STATUS_CONCURRENCY = 12;
     for (let offset = 0; offset < totalChunks; offset += CHUNK_STATUS_CONCURRENCY) {
         const indices = [];
         for (let i = offset; i < Math.min(offset + CHUNK_STATUS_CONCURRENCY, totalChunks); i++) {
@@ -1294,7 +1286,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const { env, waitUntil } = context;
     const db = getDatabase(env);
 
-    const CHUNK_SIZE = 45 * 1024 * 1024; // 45MB (TG Bot upload limit: 50MB, leave 5MB safety margin)
+    const CHUNK_SIZE = 49 * 1024 * 1024; // 49MB (TG Bot upload limit: 50MB, optimized for fewer requests)
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
@@ -1407,11 +1399,11 @@ function isTelegramRetryableError(error) {
 function calculateTelegramRetryDelayMs(error, attempt) {
     const retryAfterSeconds = Number(error?.retryAfter || 0);
     if (retryAfterSeconds > 0) {
-        return Math.min(retryAfterSeconds * 1000 + 250, 30000);
+        return Math.min(retryAfterSeconds * 1000 + 150, 20000);
     }
 
-    const exponentialBackoffMs = Math.min(1000 * Math.pow(2, attempt), 15000);
-    const jitterMs = Math.floor(Math.random() * 400);
+    const exponentialBackoffMs = Math.min(800 * Math.pow(2, attempt), 10000);
+    const jitterMs = Math.floor(Math.random() * 300);
     return exponentialBackoffMs + jitterMs;
 }
 

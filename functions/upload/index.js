@@ -392,8 +392,9 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
 
     const telegramAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
 
-    // 45MB 分片阈值 (TG Bot upload limit: 50MB, leave 5MB safety margin)
-    const CHUNK_SIZE = 45 * 1024 * 1024; // 45MB
+    // 49MB 分片阈值 (TG Bot upload limit: 50MB, leave 1MB safety margin)
+    // 优化：增大分片大小以减少请求数，提升上传速度
+    const CHUNK_SIZE = 49 * 1024 * 1024; // 49MB
 
     if (fileSize > CHUNK_SIZE) {
         // 大文件分片上传
