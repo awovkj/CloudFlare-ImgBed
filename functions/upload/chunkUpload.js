@@ -903,10 +903,6 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
         }
 
         results.push(...batchResults);
-
-        if (i + batchSize < chunksToRetry.length) {
-            await new Promise(resolve => setTimeout(resolve, 300));
-        }
     }
 
     // 统计结果
