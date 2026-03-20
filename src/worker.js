@@ -5,6 +5,7 @@ export { UploadDurableObject } from './uploadDurableObject.js';
 
 // upload
 import { onRequest as onUploadRequest }        from '../functions/upload/index.js';
+import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkStatus.js';
 // chunkUpload.js / chunkMerge.js 是工具函数库，无 onRequest，
 // 已被 upload/index.js 内部调用，不在此单独注册路由。
 import { errorHandling, telemetryData, checkDatabaseConfig } from '../functions/utils/middleware.js';
@@ -216,6 +217,7 @@ const STATIC_ROUTES = new Map([
     ['/api/bing/wallpaper',                [checkDatabaseConfig, onBingWallpaperRequest]],
     ['/api/huggingface/getUploadUrl',      [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)]],
     ['/api/huggingface/commitUpload',      [checkDatabaseConfig, postOnly(onHfCommitPost)]],
+    ['/upload/chunkStatus',                [checkDatabaseConfig, onChunkStatusRequest]],
 ]);
 
 // ── 动态路由（需要正则参数提取，仅 ~10 条）──────────────────────────────────
