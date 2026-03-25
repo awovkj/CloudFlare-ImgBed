@@ -15,6 +15,10 @@ export function createFixedLengthBody(body, contentLength) {
     return readable;
 }
 
+export function decodeFilePathParam(path) {
+    return decodeURIComponent(path).split(',').join('/');
+}
+
 // 域名正则表达式缓存（模块生命周期内有效）
 let _domainRegexCache = null;
 let _domainRegexCacheKey = null;

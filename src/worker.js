@@ -126,6 +126,20 @@ function postOnly(handler) {
         return handler(context);
     };
 }
+
+function matchDynamicRoute(pathname) {
+    for (const route of DYNAMIC_ROUTES) {
+        const match = pathname.match(route.pattern);
+        if (match) {
+            return {
+                params: route.params(match),
+                middlewares: route.middlewares,
+            };
+        }
+    }
+
+    return null;
+}
 /**
  * 将上传请求转发到 Durable Object 处理。
  * DO 没有实际的 CPU 时间限制（每次 I/O 重置计时器），适合上传这类长任务。
@@ -251,12 +265,9 @@ export default {
             }
 
             // 第二层：动态路由正则匹配（仅 ~10 条）
-            for (const route of DYNAMIC_ROUTES) {
-                const match = pathname.match(route.pattern);
-                if (match) {
-                    const params = route.params(match);
-                    return await runMiddlewareChain(request, env, ctx, params, route.middlewares);
-                }
+            const dynamicRoute = matchDynamicRoute(pathname);
+            if (dynamicRoute) {
+                return await runMiddlewareChain(request, env, ctx, dynamicRoute.params, dynamicRoute.middlewares);
             }
         } catch (err) {
             console.error(`[worker] Error handling ${pathname}:`, err);

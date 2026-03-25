@@ -5,6 +5,53 @@ import { getOthersConfig } from '../api/manage/sysConfig/others';
 import { getDatabase } from './databaseAdapter.js';
 import { getIndexMeta } from './indexManager.js';
 
+function cloneDefaultValue(defaultValue) {
+    if (Array.isArray(defaultValue)) {
+        return [...defaultValue];
+    }
+
+    if (defaultValue && typeof defaultValue === 'object') {
+        return { ...defaultValue };
+    }
+
+    return defaultValue;
+}
+
+async function fetchConfigWithFallback(env, configName, loader, defaultValue) {
+    try {
+        const db = getDatabase(env);
+        return await loader(db, env);
+    } catch (error) {
+        console.error(`Failed to fetch ${configName} config:`, error);
+        return cloneDefaultValue(defaultValue);
+    }
+}
+
+const DEFAULT_UPLOAD_CONFIG = {
+    telegram: { channels: [] },
+    cfr2: { channels: [] },
+    s3: { channels: [] },
+    discord: { channels: [] },
+    huggingface: { channels: [] }
+};
+
+const DEFAULT_SECURITY_CONFIG = {
+    auth: {
+        user: { authCode: "" },
+        admin: { adminUsername: "", adminPassword: "" }
+    },
+    upload: {
+        moderate: { enabled: false, channel: "default", moderateContentApiKey: "", nsfwApiPath: "" }
+    },
+    access: { allowedDomains: "", whiteListMode: false }
+};
+
+const DEFAULT_PAGE_CONFIG = { config: [] };
+
+const DEFAULT_OTHERS_CONFIG = {
+    showStats: { enabled: true },
+};
+
 /**
  * 根据容量限制过滤渠道
  * @param {Object} context - 上下文对象（包含 env）
@@ -58,74 +105,27 @@ function filterEnabledChannels(settings, channelGroups) {
 }
 
 export async function fetchUploadConfig(env, context = null) {
-    try {
-        const db = getDatabase(env);
-        const settings = await getUploadConfig(db, env);
-        filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface']);
+    const settings = await fetchConfigWithFallback(env, 'upload', getUploadConfig, DEFAULT_UPLOAD_CONFIG);
+    filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface']);
 
-        // 根据容量限制过滤渠道（仅 R2 和 S3）
-        // 需要 context 来调用 getIndexMeta
-        if (context) {
-            settings.cfr2.channels = await filterChannelsByQuota(context, settings.cfr2.channels);
-            settings.s3.channels = await filterChannelsByQuota(context, settings.s3.channels);
-        }
-
-        return settings;
-    } catch (error) {
-        console.error('Failed to fetch upload config:', error);
-        // 返回默认配置
-        return {
-            telegram: { channels: [] },
-            cfr2: { channels: [] },
-            s3: { channels: [] },
-            discord: { channels: [] },
-            huggingface: { channels: [] }
-        };
+    // 根据容量限制过滤渠道（仅 R2 和 S3）
+    // 需要 context 来调用 getIndexMeta
+    if (context) {
+        settings.cfr2.channels = await filterChannelsByQuota(context, settings.cfr2.channels);
+        settings.s3.channels = await filterChannelsByQuota(context, settings.s3.channels);
     }
+
+    return settings;
 }
 
 export async function fetchSecurityConfig(env) {
-    try {
-        const db = getDatabase(env);
-        const settings = await getSecurityConfig(db, env);
-        return settings;
-    } catch (error) {
-        console.error('Failed to fetch security config:', error);
-        // 返回默认配置
-        return {
-            auth: {
-                user: { authCode: "" },
-                admin: { adminUsername: "", adminPassword: "" }
-            },
-            upload: {
-                moderate: { enabled: false, channel: "default", moderateContentApiKey: "", nsfwApiPath: "" }
-            },
-            access: { allowedDomains: "", whiteListMode: false }
-        };
-    }
+    return fetchConfigWithFallback(env, 'security', getSecurityConfig, DEFAULT_SECURITY_CONFIG);
 }
 
 export async function fetchPageConfig(env) {
-    try {
-        const db = getDatabase(env);
-        const settings = await getPageConfig(db, env);
-        return settings;
-    } catch (error) {
-        console.error('Failed to fetch page config:', error);
-        // 返回默认配置
-        return { config: [] };
-    }
+    return fetchConfigWithFallback(env, 'page', getPageConfig, DEFAULT_PAGE_CONFIG);
 }
 
 export async function fetchOthersConfig(env) {
-    try {
-        const db = getDatabase(env);
-        const settings = await getOthersConfig(db, env);
-        return settings;
-    } catch (error) {
-        console.error('Failed to fetch others config:', error);
-        return {
-            showStats: { enabled: true },
-        };
-    }
+    return fetchConfigWithFallback(env, 'others', getOthersConfig, DEFAULT_OTHERS_CONFIG);
 }

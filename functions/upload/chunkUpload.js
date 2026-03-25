@@ -1,5 +1,6 @@
 /* ======= 客户端分块上传处理 ======= */
 import { createResponse, selectConsistentChannel, selectChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
+import { createUploadJsonResponse } from './uploadShared.js';
 import { TelegramAPI } from '../utils/telegramAPI';
 import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
@@ -60,7 +61,7 @@ export async function initializeChunkedUpload(context) {
             expirationTtl: 3600 // 1小时过期
         });
 
-        return createResponse(JSON.stringify({
+        return createUploadJsonResponse({
             success: true,
             uploadId,
             message: 'Chunked upload initialized successfully',
@@ -71,9 +72,6 @@ export async function initializeChunkedUpload(context) {
                 uploadChannel,
                 channelName
             }
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
         });
 
     } catch (error) {
@@ -167,27 +165,21 @@ export async function handleChunkUpload(context) {
         );
 
         if (!uploadOutcome.success) {
-            return createResponse(JSON.stringify({
+            return createUploadJsonResponse({
                 success: true,
                 message: `Chunk ${chunkIndex + 1}/${totalChunks} received; storage upload will be retried during merge`,
                 uploadId,
                 chunkIndex,
                 deferred: true,
                 deferredReason: uploadOutcome.error || 'Unknown upload error'
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
             });
         }
 
-        return createResponse(JSON.stringify({
+        return createUploadJsonResponse({
             success: true,
             message: `Chunk ${chunkIndex + 1}/${totalChunks} received and being uploaded`,
             uploadId,
             chunkIndex
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
         });
 
     } catch (error) {
@@ -202,9 +194,9 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
 
     try {
         if (!uploadId) {
-            return createResponse(JSON.stringify({
+            return createUploadJsonResponse({
                 error: 'Missing uploadId parameter'
-            }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+            }, 400);
         }
 
         const sessionKey = `upload_session_${uploadId}`;
@@ -215,38 +207,32 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
             const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
 
             if (isMerging && isProtectionWindowActive) {
-                return createResponse(JSON.stringify({
+                return createUploadJsonResponse({
                     success: false,
                     code: 'MERGE_IN_PROGRESS',
                     message: 'Merge is still in progress, cleanup skipped to avoid upload loop',
                     uploadId,
                     retryAfterMs: 5000,
                     mergeLastStatusSummary: sessionInfo.mergeLastStatusSummary || {}
-                }), {
-                    status: 409,
-                    headers: { 'Content-Type': 'application/json' }
-                });
+                }, 409);
             }
         }
 
         // 强制清理所有相关数据
         await forceCleanupUpload(context, uploadId, totalChunks);
 
-        return createResponse(JSON.stringify({
+        return createUploadJsonResponse({
             success: true,
             message: `Cleanup completed for upload ${uploadId}`,
             uploadId: uploadId,
             cleanedChunks: totalChunks
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
         });
 
     } catch (error) {
-        return createResponse(JSON.stringify({
+        return createUploadJsonResponse({
             error: `Cleanup failed: ${error.message}`,
             uploadId: uploadId
-        }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        }, 500);
     }
 }
 

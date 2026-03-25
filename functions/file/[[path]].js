@@ -5,7 +5,7 @@ import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
-    returnWithCheck, return404, returnBlockImg, isDomainAllowed, createFixedLengthBody
+    returnWithCheck, return404, returnBlockImg, isDomainAllowed, createFixedLengthBody, decodeFilePathParam
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
 
@@ -23,8 +23,8 @@ export async function onRequest(context) {  // Contents of context object
     // 解码文件ID
     let fileId = '';
     try {
-        params.path = decodeURIComponent(params.path);
-        fileId = params.path.split(',').join('/');
+        params.path = decodeFilePathParam(params.path);
+        fileId = params.path;
     } catch (e) {
         return new Response('Error: Decode Image ID Failed', { status: 400 });
     }

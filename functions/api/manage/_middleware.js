@@ -2,6 +2,7 @@ import { fetchSecurityConfig } from "../../utils/sysConfig";
 import { checkDatabaseConfig } from "../../utils/middleware";
 import { validateApiToken } from "../../utils/tokenValidator";
 import { getDatabase } from "../../utils/databaseAdapter.js";
+import { createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
 
 let securityConfig = {}
 let basicUser = ""
@@ -53,31 +54,27 @@ function basicAuthentication(request) {
 }
 
 function UnauthorizedException(reason) {
-  return new Response(reason, {
-    status: 401,
-    statusText: 'Unauthorized',
-    headers: {
-      'Content-Type': 'text/plain;charset=UTF-8',
-      // Disables caching by default.
-      'Cache-Control': 'no-store',
-      // Returns the "Content-Length" header for HTTP HEAD requests.
-      'Content-Length': reason.length,
-    },
-  });
+  return createNoStoreTextResponse(reason, 401, 'Unauthorized');
 }
 
 function BadRequestException(reason) {
-  return new Response(reason, {
-    status: 400,
-    statusText: 'Bad Request',
-    headers: {
-      'Content-Type': 'text/plain;charset=UTF-8',
-      // Disables caching by default.
-      'Cache-Control': 'no-store',
-      // Returns the "Content-Length" header for HTTP HEAD requests.
-      'Content-Length': reason.length,
-    },
-  });
+  return createNoStoreTextResponse(reason, 400, 'Bad Request');
+}
+
+function isSecurityConfigExpired(now) {
+  return now - securityConfigLoadedAt > SECURITY_CONFIG_TTL_MS;
+}
+
+async function refreshSecurityConfigIfNeeded(env, now = Date.now()) {
+  if (!isSecurityConfigExpired(now)) {
+    return securityConfig;
+  }
+
+  securityConfig = await fetchSecurityConfig(env);
+  basicUser = securityConfig?.auth?.admin?.adminUsername || "";
+  basicPass = securityConfig?.auth?.admin?.adminPassword || "";
+  securityConfigLoadedAt = now;
+  return securityConfig;
 }
 
 
@@ -127,13 +124,7 @@ async function authentication(context) {
     return context.next();
   }
 
-  const now = Date.now();
-  if (now - securityConfigLoadedAt > SECURITY_CONFIG_TTL_MS) {
-    securityConfig = await fetchSecurityConfig(context.env);
-    basicUser = securityConfig?.auth?.admin?.adminUsername || ""
-    basicPass = securityConfig?.auth?.admin?.adminPassword || ""
-    securityConfigLoadedAt = now;
-  }
+  await refreshSecurityConfigIfNeeded(context.env);
 
   if (typeof basicUser == "undefined" || basicUser == null || basicUser == "") {
     // 无需身份验证
@@ -163,15 +154,15 @@ async function authentication(context) {
 
     } else {
       // 要求客户端进行基本认证
-      return new Response('You need to login.', {
-        status: 401,
-        headers: {
-          // Prompts the user for credentials.
-          'WWW-Authenticate': 'Basic realm="my scope", charset="UTF-8"',
-          // 'WWW-Authenticate': 'None',
-        },
-      });
-    }
+        return createTextResponse('You need to login.', {
+          status: 401,
+          headers: {
+            // Prompts the user for credentials.
+            'WWW-Authenticate': 'Basic realm="my scope", charset="UTF-8"',
+            // 'WWW-Authenticate': 'None',
+          },
+        });
+     }
 
   }
 
