@@ -153,7 +153,7 @@ export async function handleChunkMerge(context) {
         }
 
         // 清理临时分块数据
-        waitUntil(cleanupChunkData(env, uploadId, totalChunks));
+        waitUntil(cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true }));
 
         // 清理上传会话
         waitUntil(cleanupUploadSession(env, uploadId));
@@ -242,7 +242,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
         }
 
         // 清理分块数据
-        await cleanupChunkData(env, uploadId, totalChunks);
+        await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
 
         // 清理上传会话
         await cleanupUploadSession(env, uploadId);

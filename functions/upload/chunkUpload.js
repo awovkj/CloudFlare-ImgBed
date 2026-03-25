@@ -190,7 +190,6 @@ export async function handleChunkUpload(context) {
 // 处理清理请求
 export async function handleCleanupRequest(context, uploadId, totalChunks) {
     const { env } = context;
-    const db = getDatabase(env);
 
     try {
         if (!uploadId) {
@@ -199,27 +198,19 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
             }, 400);
         }
 
-        const sessionKey = `upload_session_${uploadId}`;
-        const sessionData = await db.get(sessionKey);
-        if (sessionData) {
-            const sessionInfo = JSON.parse(sessionData);
-            const isMerging = sessionInfo.status === 'merging';
-            const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
-
-            if (isMerging && isProtectionWindowActive) {
-                return createUploadJsonResponse({
-                    success: false,
-                    code: 'MERGE_IN_PROGRESS',
-                    message: 'Merge is still in progress, cleanup skipped to avoid upload loop',
-                    uploadId,
-                    retryAfterMs: 5000,
-                    mergeLastStatusSummary: sessionInfo.mergeLastStatusSummary || {}
-                }, 409);
-            }
-        }
-
         // 强制清理所有相关数据
-        await forceCleanupUpload(context, uploadId, totalChunks);
+        const cleanupResult = await forceCleanupUpload(context, uploadId, totalChunks);
+
+        if (cleanupResult?.skipped && cleanupResult.reason === 'MERGE_IN_PROGRESS') {
+            return createUploadJsonResponse({
+                success: false,
+                code: 'MERGE_IN_PROGRESS',
+                message: 'Merge is still in progress, cleanup skipped to avoid upload loop',
+                uploadId,
+                retryAfterMs: 5000,
+                mergeLastStatusSummary: cleanupResult.sessionInfo?.mergeLastStatusSummary || {}
+            }, 409);
+        }
 
         return createUploadJsonResponse({
             success: true,
@@ -1185,9 +1176,47 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 }
 
 
-// 清理临时分块数据
-export async function cleanupChunkData(env, uploadId, totalChunks) {
+async function isCleanupBlockedByActiveMerge(env, uploadId) {
     try {
+        const db = getDatabase(env);
+        const sessionKey = `upload_session_${uploadId}`;
+        const sessionData = await db.get(sessionKey);
+
+        if (!sessionData) {
+            return { blocked: false, sessionInfo: null };
+        }
+
+        const sessionInfo = JSON.parse(sessionData);
+        const isMerging = sessionInfo.status === 'merging';
+        const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
+
+        return {
+            blocked: isMerging && isProtectionWindowActive,
+            sessionInfo
+        };
+    } catch (error) {
+        console.warn(`Failed to inspect merge cleanup guard for ${uploadId}:`, error);
+        return { blocked: false, sessionInfo: null };
+    }
+}
+
+
+// 清理临时分块数据
+export async function cleanupChunkData(env, uploadId, totalChunks, options = {}) {
+    const { ignoreMergeProtection = false } = options;
+
+    try {
+        if (!ignoreMergeProtection) {
+            const { blocked } = await isCleanupBlockedByActiveMerge(env, uploadId);
+            if (blocked) {
+                console.log(`Skip cleanupChunkData for ${uploadId}: merge is still in progress`);
+                return {
+                    skipped: true,
+                    reason: 'MERGE_IN_PROGRESS'
+                };
+            }
+        }
+
         const db = getDatabase(env);
 
         for (let i = 0; i < totalChunks; i++) {
@@ -1201,8 +1230,16 @@ export async function cleanupChunkData(env, uploadId, totalChunks) {
         const multipartKey = `multipart_${uploadId}`;
         await db.delete(multipartKey);
 
+        return {
+            skipped: false
+        };
+
     } catch (cleanupError) {
         console.warn('Failed to cleanup chunk data:', cleanupError);
+        return {
+            skipped: false,
+            error: cleanupError.message
+        };
     }
 }
 
@@ -1220,11 +1257,24 @@ export async function cleanupUploadSession(env, uploadId) {
 }
 
 // 强制清理所有相关数据（用于彻底清理失败的上传）
-export async function forceCleanupUpload(context, uploadId, totalChunks) {
+export async function forceCleanupUpload(context, uploadId, totalChunks, options = {}) {
     const { env } = context;
     const db = getDatabase(env);
+    const { ignoreMergeProtection = false } = options;
 
     try {
+        if (!ignoreMergeProtection) {
+            const { blocked, sessionInfo } = await isCleanupBlockedByActiveMerge(env, uploadId);
+            if (blocked) {
+                console.log(`Skip forceCleanupUpload for ${uploadId}: merge is still in progress`);
+                return {
+                    skipped: true,
+                    reason: 'MERGE_IN_PROGRESS',
+                    sessionInfo
+                };
+            }
+        }
+
         // 读取 session 信息
         const sessionKey = `upload_session_${uploadId}`;
         const sessionRecord = await db.get(sessionKey);
@@ -1258,8 +1308,16 @@ export async function forceCleanupUpload(context, uploadId, totalChunks) {
         await Promise.allSettled(cleanupPromises);
         console.log(`Force cleanup completed for ${uploadId}`);
 
+        return {
+            skipped: false
+        };
+
     } catch (cleanupError) {
         console.warn('Failed to force cleanup upload:', cleanupError);
+        return {
+            skipped: false,
+            error: cleanupError.message
+        };
     }
 }
 
