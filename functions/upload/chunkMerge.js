@@ -1,14 +1,14 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload, buildReturnLink, selectChannel } from './uploadTools';
+import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload, buildReturnLink } from './uploadTools';
 import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 
-const INITIAL_SETTLE_WAIT_MS = 90000;
-const RETRY_SETTLE_WAIT_MS = 120000;
-const SETTLE_INTERVAL_MS = 1000;
-const FINAL_PENDING_GRACE_MS = 15000;
-const MERGE_PENDING_RETRY_AFTER_MS = 3000;
+const INITIAL_SETTLE_WAIT_MS = 30000;
+const RETRY_SETTLE_WAIT_MS = 45000;
+const SETTLE_INTERVAL_MS = 500;
+const FINAL_PENDING_GRACE_MS = 5000;
+const MERGE_PENDING_RETRY_AFTER_MS = 1000;
 const MERGE_BACKGROUND_MAX_ATTEMPTS = 5;
 const MERGE_CLEANUP_PROTECTION_MS = 10 * 60 * 1000;
 
@@ -629,29 +629,41 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
     try {
         const tgSettings = uploadConfig.telegram;
 
-        // 选择渠道
-        const tgChannel = selectChannel(tgSettings, specifiedChannelName, uploadId);
-        if (!tgChannel) {
-            throw new Error('No Telegram channel provided');
-        }
-
-        console.log(`Merging Telegram chunks for uploadId: ${uploadId}, selected channel: ${tgChannel.name || 'default'}`);
-
-        const tgBotToken = tgChannel.botToken;
-        const tgChatId = tgChannel.chatId;
-
         // 按顺序排列分块
         const sortedChunks = completedChunks.sort((a, b) => a.index - b.index);
 
+        if (sortedChunks.length === 0) {
+            throw new Error('No completed Telegram chunks provided');
+        }
+
         // 计算总大小
         const totalSize = sortedChunks.reduce((sum, chunk) => sum + chunk.uploadResult.size, 0);
+
+        const fallbackChannel = (() => {
+            if (specifiedChannelName) {
+                return tgSettings.channels.find(ch => ch.name === specifiedChannelName) || null;
+            }
+            return tgSettings.channels[0] || null;
+        })();
+
+        const firstChunkUploadResult = sortedChunks[0].uploadResult || {};
+        const topLevelChannelName = firstChunkUploadResult.tgChannel || fallbackChannel?.name;
+        const topLevelChatId = firstChunkUploadResult.tgChatId || fallbackChannel?.chatId;
+        const topLevelBotToken = firstChunkUploadResult.tgBotToken || fallbackChannel?.botToken;
+        const topLevelProxyUrl = firstChunkUploadResult.tgProxyUrl || fallbackChannel?.proxyUrl || '';
+
+        console.log(`Merging Telegram chunks for uploadId: ${uploadId}, primary channel metadata: ${topLevelChannelName || 'default'}`);
 
         // 构建分块信息数组
         const chunks = sortedChunks.map(chunk => ({
             index: chunk.index,
             fileId: chunk.uploadResult.fileId,
             size: chunk.uploadResult.size,
-            fileName: chunk.uploadResult.fileName
+            fileName: chunk.uploadResult.fileName,
+            tgChannel: chunk.uploadResult.tgChannel || topLevelChannelName,
+            tgBotToken: chunk.uploadResult.tgBotToken || topLevelBotToken,
+            tgChatId: chunk.uploadResult.tgChatId || topLevelChatId,
+            tgProxyUrl: chunk.uploadResult.tgProxyUrl || ''
         }));
 
         // 生成 finalFileId
@@ -659,12 +671,18 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
 
         // 更新metadata
         metadata.Channel = "TelegramNew";
-        metadata.ChannelName = tgChannel.name;
-        metadata.TgChatId = tgChatId;
-        metadata.TgBotToken = tgBotToken;
+        if (topLevelChannelName) {
+            metadata.ChannelName = topLevelChannelName;
+        }
+        if (topLevelChatId) {
+            metadata.TgChatId = topLevelChatId;
+        }
+        if (topLevelBotToken) {
+            metadata.TgBotToken = topLevelBotToken;
+        }
         // 保存代理域名配置（如果有）
-        if (tgChannel.proxyUrl) {
-            metadata.TgProxyUrl = tgChannel.proxyUrl;
+        if (topLevelProxyUrl) {
+            metadata.TgProxyUrl = topLevelProxyUrl;
         }
         metadata.IsChunked = true;
         metadata.TotalChunks = completedChunks.length;

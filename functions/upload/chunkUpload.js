@@ -1,13 +1,13 @@
 /* ======= 客户端分块上传处理 ======= */
-import { createResponse, selectConsistentChannel, selectChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
 import { createUploadJsonResponse } from './uploadShared.js';
 import { TelegramAPI } from '../utils/telegramAPI';
 import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 
-const CHUNK_UPLOAD_TIMEOUT_MS = 90000;
-const CHUNK_STATUS_TIMEOUT_GRACE_MS = 60000;
+const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
+const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
 
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
@@ -468,12 +468,12 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 20;
+            const maxRetries = 40;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await new Promise(resolve => setTimeout(resolve, 250));
                     retryCount++;
                     console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -596,12 +596,12 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 20;
+            const maxRetries = 40;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await new Promise(resolve => setTimeout(resolve, 250));
                     retryCount++;
                     console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -677,21 +677,32 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 }
 
 // 上传单个分块到Telegram
-async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
+function selectTelegramChunkChannel(context, uploadId, chunkIndex, fallbackChannel = null) {
     const { uploadConfig, specifiedChannelName } = context;
+    const tgSettings = uploadConfig.telegram;
+    const tgChannels = tgSettings.channels || [];
+
+    if (tgChannels.length === 0) {
+        return null;
+    }
+
+    if (specifiedChannelName) {
+        return tgChannels.find(ch => ch.name === specifiedChannelName) || null;
+    }
+
+    if (!tgSettings.loadBalance?.enabled || tgChannels.length === 1) {
+        return fallbackChannel || tgChannels[0];
+    }
+
+    const channelSelectionKey = `${uploadId}:${chunkIndex}`;
+    return selectConsistentChannel(tgChannels, channelSelectionKey, true);
+}
+
+async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
+    const { uploadConfig } = context;
 
     try {
-        const tgSettings = uploadConfig.telegram;
-        const tgChannels = tgSettings.channels;
-        
-        // 优先使用指定的渠道名称
-        let tgChannel;
-        if (specifiedChannelName) {
-            tgChannel = tgChannels.find(ch => ch.name === specifiedChannelName);
-        }
-        if (!tgChannel) {
-            tgChannel = selectConsistentChannel(tgChannels, uploadId, tgSettings.loadBalance.enabled);
-        }
+        const tgChannel = selectTelegramChunkChannel(context, uploadId, chunkIndex);
 
         if (!tgChannel) {
             return { success: false, error: 'No Telegram channel provided' };
@@ -734,7 +745,10 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
             size: chunkInfo.file_size,
             fileName: chunkFileName,
             uploadTime: Date.now(),
-            tgChannel: tgChannel.name
+            tgChannel: tgChannel.name,
+            tgBotToken,
+            tgChatId,
+            tgProxyUrl
         };
 
     } catch (error) {
@@ -859,7 +873,7 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
     const {
         maxRetries = 5,
         retryTimeout = 90000,
-        maxConcurrency = 5,
+        maxConcurrency = 6,
         batchSize = 10
     } = options;
 
@@ -1363,60 +1377,111 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const db = getDatabase(env);
 
     const CHUNK_SIZE = 19 * 1024 * 1024; // 19MB (TG Bot upload limit: 20MB)
+    const MAX_CONCURRENT_UPLOADS = 3;
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
-    const chunks = [];
+    const chunks = new Array(totalChunks);
     const uploadedChunks = [];
 
     try {
-        // 分片上传
-        for (let i = 0; i < totalChunks; i++) {
-            const start = i * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, fileSize);
-            const chunkBlob = file.slice(start, end);
+        let nextChunkIndex = 0;
+        let uploadFailure = null;
+        const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, totalChunks);
 
-            // 生成分片文件名
-            const chunkFileName = `${fileName}.part${i.toString().padStart(3, '0')}`;
+        const uploadChunkWorker = async () => {
+            while (true) {
+                if (uploadFailure) {
+                    return;
+                }
 
-            // 上传分片（带重试机制）
-            const chunkUploadResult = await uploadChunkToTelegramWithRetry(
-                tgBotToken,
-                tgChatId,
-                tgChannel.proxyUrl || '',
-                chunkBlob,
-                chunkFileName,
-                i,
-                totalChunks
-            );
+                const i = nextChunkIndex;
+                nextChunkIndex += 1;
 
-            if (!chunkUploadResult.success) {
-                throw new Error(chunkUploadResult.error || `Failed to upload chunk ${i + 1}/${totalChunks} after retries`);
+                if (i >= totalChunks) {
+                    return;
+                }
+
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, fileSize);
+                const chunkBlob = file.slice(start, end);
+                const chunkChannel = selectTelegramChunkChannel(context, fullId, i, tgChannel);
+
+                if (!chunkChannel) {
+                    uploadFailure = new Error('No Telegram channel provided');
+                    return;
+                }
+
+                const chunkBotToken = chunkChannel.botToken;
+                const chunkChatId = chunkChannel.chatId;
+                const chunkProxyUrl = chunkChannel.proxyUrl || '';
+
+                // 生成分片文件名
+                const chunkFileName = `${fileName}.part${i.toString().padStart(3, '0')}`;
+
+                // 上传分片（带重试机制）
+                const chunkUploadResult = await uploadChunkToTelegramWithRetry(
+                    chunkBotToken,
+                    chunkChatId,
+                    chunkProxyUrl,
+                    chunkBlob,
+                    chunkFileName,
+                    i,
+                    totalChunks
+                );
+
+                if (!chunkUploadResult.success) {
+                    uploadFailure = new Error(chunkUploadResult.error || `Failed to upload chunk ${i + 1}/${totalChunks} after retries`);
+                    return;
+                }
+
+                const chunkInfo = chunkUploadResult.fileInfo;
+
+                // 验证分片信息完整性
+                if (!chunkInfo.file_id || !chunkInfo.file_size) {
+                    uploadFailure = new Error(`Invalid chunk info for chunk ${i + 1}/${totalChunks}`);
+                    return;
+                }
+
+                chunks[i] = {
+                    index: i,
+                    fileId: chunkInfo.file_id,
+                    size: chunkInfo.file_size,
+                    fileName: chunkFileName,
+                    tgChannel: chunkChannel.name,
+                    tgBotToken: chunkBotToken,
+                    tgChatId: chunkChatId,
+                    tgProxyUrl: chunkProxyUrl
+                };
+
+                uploadedChunks[i] = chunkInfo.file_id;
             }
+        };
 
-            const chunkInfo = chunkUploadResult.fileInfo;
+        await Promise.all(
+            Array.from({ length: workerCount }, () => uploadChunkWorker())
+        );
 
-            // 验证分片信息完整性
-            if (!chunkInfo.file_id || !chunkInfo.file_size) {
-                throw new Error(`Invalid chunk info for chunk ${i + 1}/${totalChunks}`);
-            }
-
-            chunks.push({
-                index: i,
-                fileId: chunkInfo.file_id,
-                size: chunkInfo.file_size,
-                fileName: chunkFileName
-            });
-
-            uploadedChunks.push(chunkInfo.file_id);
+        if (uploadFailure) {
+            throw uploadFailure;
         }
+
+        const primaryChunk = chunks[0] || null;
 
         // 所有分片上传成功，更新metadata
         metadata.Channel = "TelegramNew";
-        metadata.ChannelName = tgChannel.name;
-        metadata.TgChatId = tgChatId;
-        metadata.TgBotToken = tgBotToken;
-        metadata.TgProxyUrl = tgChannel.proxyUrl || '';
+        if (primaryChunk?.tgChannel) {
+            metadata.ChannelName = primaryChunk.tgChannel;
+        }
+        if (primaryChunk?.tgChatId) {
+            metadata.TgChatId = primaryChunk.tgChatId;
+        }
+        if (primaryChunk?.tgBotToken) {
+            metadata.TgBotToken = primaryChunk.tgBotToken;
+        }
+        if (primaryChunk?.tgProxyUrl) {
+            metadata.TgProxyUrl = primaryChunk.tgProxyUrl;
+        }
         metadata.IsChunked = true;
         metadata.TotalChunks = totalChunks;
         metadata.FileSize = (fileSize / 1024 / 1024).toFixed(2);

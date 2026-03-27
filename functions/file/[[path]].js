@@ -180,8 +180,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     const { env, request, url, Referer } = context;
 
     const metadata = imgRecord.metadata;
-    const TgBotToken = metadata.TgBotToken || env.TG_BOT_TOKEN;
-    const TgProxyUrl = metadata.TgProxyUrl || '';
+    const fallbackTgBotToken = metadata.TgBotToken || env.TG_BOT_TOKEN;
+    const fallbackTgProxyUrl = metadata.TgProxyUrl || '';
 
     // 从KV的value中读取分片信息
     let chunks = [];
@@ -279,7 +279,9 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
                         }
 
                         // 获取分片数据（支持代理域名）
-                        const chunkData = await fetchTelegramChunkWithRetry(TgBotToken, chunk, TgProxyUrl, 3);
+                        const chunkBotToken = chunk.tgBotToken || fallbackTgBotToken;
+                        const chunkProxyUrl = chunk.tgProxyUrl || fallbackTgProxyUrl;
+                        const chunkData = await fetchTelegramChunkWithRetry(chunkBotToken, chunk, chunkProxyUrl, 3);
                         if (!chunkData) {
                             throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
                         }
