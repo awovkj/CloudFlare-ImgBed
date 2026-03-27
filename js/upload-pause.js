@@ -150,13 +150,25 @@
     return '上传中... (' + uploadCount + ' 个文件)';
   }
 
+  function isCleanupUrl(url) {
+    return url && url.indexOf('cleanup=true') !== -1;
+  }
+
   function interceptUploads() {
     var origFetch = window.fetch;
     window.fetch = function() {
       var url = (arguments[0] && arguments[0].toString()) || '';
       var args = arguments;
 
-      if (url.indexOf('/upload') !== -1 && url.indexOf('cleanup') === -1 && url.indexOf('chunkStatus') === -1) {
+      if (url.indexOf('/upload') !== -1 && url.indexOf('chunkStatus') === -1) {
+        if (isCleanupUrl(url)) {
+          console.log('[UploadResume] Blocked cleanup request — chunks preserved for retry:', url);
+          return Promise.resolve(new Response(JSON.stringify({ success: true, blocked: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
+
         if (isPaused) {
           return Promise.reject(new Error('Upload paused by user'));
         }
@@ -207,9 +219,13 @@
     };
 
     XMLHttpRequest.prototype.send = function(data) {
-      if (this._uploadUrl && this._uploadUrl.indexOf('/upload') !== -1 && 
-          this._uploadUrl.indexOf('cleanup') === -1 && 
+      if (this._uploadUrl && this._uploadUrl.indexOf('/upload') !== -1 &&
           this._uploadUrl.indexOf('chunkStatus') === -1) {
+        if (isCleanupUrl(this._uploadUrl)) {
+          console.log('[UploadResume] Blocked XHR cleanup request — chunks preserved for retry');
+          return;
+        }
+
         if (isPaused) {
           this.abort();
           return;

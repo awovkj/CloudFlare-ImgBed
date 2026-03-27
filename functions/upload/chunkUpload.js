@@ -6,8 +6,8 @@ import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 
-const CHUNK_UPLOAD_TIMEOUT_MS = 180000;
-const CHUNK_STATUS_TIMEOUT_GRACE_MS = 120000;
+const CHUNK_UPLOAD_TIMEOUT_MS = 90000;
+const CHUNK_STATUS_TIMEOUT_GRACE_MS = 60000;
 
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
@@ -324,7 +324,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
         for (let retry = 0; retry < MAX_RETRIES; retry++) {
             if (retry > 0) {
-                const delay = Math.min(600 * Math.pow(2, retry - 1), 5000);
+                const delay = Math.min(300 * Math.pow(2, retry - 1), 2000);
                 console.log(`Chunk ${chunkIndex} retry ${retry}/${MAX_RETRIES}, waiting ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
@@ -473,7 +473,7 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     retryCount++;
                     console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -485,9 +485,25 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
 
             const multipartInfo = JSON.parse(multipartInfoData);
             finalFileId = multipartInfo.key;
+
+            const multipartUpload = R2DataBase.resumeMultipartUpload(finalFileId, multipartInfo.uploadId);
+            const uploadedPart = await multipartUpload.uploadPart(chunkIndex + 1, chunkData);
+
+            if (!uploadedPart || !uploadedPart.etag) {
+                throw new Error(`Failed to upload part ${chunkIndex + 1} to R2`);
+            }
+
+            return {
+                success: true,
+                partNumber: chunkIndex + 1,
+                etag: uploadedPart.etag,
+                size: chunkData.byteLength,
+                uploadTime: Date.now(),
+                multipartUploadId: multipartInfo.uploadId,
+                key: finalFileId
+            };
         }
 
-        // 获取multipart info
         const multipartInfoData = await db.get(multipartKey);
         if (!multipartInfoData) {
             return { success: false, error: 'Multipart upload not initialized' };
@@ -495,7 +511,6 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
 
         const multipartInfo = JSON.parse(multipartInfoData);
 
-        // 上传分块
         const multipartUpload = R2DataBase.resumeMultipartUpload(finalFileId, multipartInfo.uploadId);
         const uploadedPart = await multipartUpload.uploadPart(chunkIndex + 1, chunkData);
 
@@ -586,7 +601,7 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     retryCount++;
                     console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
@@ -598,9 +613,31 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 
             const multipartInfo = JSON.parse(multipartInfoData);
             finalFileId = multipartInfo.key;
+
+            const uploadResponse = await s3Client.send(new UploadPartCommand({
+                Bucket: bucketName,
+                Key: finalFileId,
+                PartNumber: chunkIndex + 1,
+                UploadId: multipartInfo.uploadId,
+                Body: new Uint8Array(chunkData)
+            }));
+
+            if (!uploadResponse || !uploadResponse.ETag) {
+                throw new Error(`Failed to upload part ${chunkIndex + 1} to S3`);
+            }
+
+            return {
+                success: true,
+                partNumber: chunkIndex + 1,
+                etag: uploadResponse.ETag,
+                size: chunkData.byteLength,
+                uploadTime: Date.now(),
+                s3Channel: s3Channel.name,
+                multipartUploadId: multipartInfo.uploadId,
+                key: finalFileId
+            };
         }
 
-        // 获取multipart info
         const multipartInfoData = await db.get(multipartKey);
         if (!multipartInfoData) {
             return { success: false, error: 'Multipart upload not initialized' };
@@ -608,7 +645,6 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 
         const multipartInfo = JSON.parse(multipartInfoData);
 
-        // 上传分块
         const uploadResponse = await s3Client.send(new UploadPartCommand({
             Bucket: bucketName,
             Key: finalFileId,
@@ -944,7 +980,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
 
     while (retryCount < maxRetries) {
         if (retryCount > 0) {
-            const delay = Math.min(600 * Math.pow(2, retryCount - 1), 8000);
+            const delay = Math.min(300 * Math.pow(2, retryCount - 1), 3000);
             console.log(`Chunk ${chunk.index} retry ${retryCount + 1}/${maxRetries}, waiting ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }

@@ -4,12 +4,12 @@ import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatu
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 
-const INITIAL_SETTLE_WAIT_MS = 180000;
-const RETRY_SETTLE_WAIT_MS = 240000;
-const SETTLE_INTERVAL_MS = 2000;
-const FINAL_PENDING_GRACE_MS = 30000;
-const MERGE_PENDING_RETRY_AFTER_MS = 5000;
-const MERGE_BACKGROUND_MAX_ATTEMPTS = 3;
+const INITIAL_SETTLE_WAIT_MS = 90000;
+const RETRY_SETTLE_WAIT_MS = 120000;
+const SETTLE_INTERVAL_MS = 1000;
+const FINAL_PENDING_GRACE_MS = 15000;
+const MERGE_PENDING_RETRY_AFTER_MS = 3000;
+const MERGE_BACKGROUND_MAX_ATTEMPTS = 5;
 const MERGE_CLEANUP_PROTECTION_MS = 10 * 60 * 1000;
 
 function summarizeChunkStatuses(chunkStatuses) {
@@ -147,17 +147,11 @@ export async function handleChunkMerge(context) {
         return await startMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel);
 
     } catch (error) {
-        // 清理失败的multipart uploads
-        if (uploadChannel === 'cfr2' || uploadChannel === 's3') {
-            waitUntil(cleanupFailedMultipartUploads(context, uploadId, uploadChannel));
-        }
-
-        // 清理临时分块数据
-        waitUntil(cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true }));
-
-        // 清理上传会话
-        waitUntil(cleanupUploadSession(env, uploadId));
-
+        await updateUploadSessionStatus(env, uploadId, {
+            status: 'merge_failed',
+            mergeFailedAt: Date.now(),
+            mergeError: error.message
+        });
         return createResponse(`Error: Failed to merge chunks - ${error.message}`, { status: 500 });
     }
 }
@@ -186,7 +180,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
 
         if (result.success) {
             // 清理临时分块数据
-            await cleanupChunkData(env, uploadId, totalChunks);
+            await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
 
             // 清理上传会话
             await cleanupUploadSession(env, uploadId);
@@ -197,7 +191,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             });
         }
 
-        if (result.code === 'MERGE_IN_PROGRESS') {
+        if (result.code === 'MERGE_IN_PROGRESS' || result.code === 'CHUNKS_INCOMPLETE') {
             await updateUploadSessionStatus(env, uploadId, {
                 status: 'merging',
                 mergeLastPendingAt: Date.now(),
@@ -216,7 +210,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
 
             return createResponse(JSON.stringify({
                 success: false,
-                code: 'MERGE_IN_PROGRESS',
+                code: result.code,
                 message: result.error || 'Merge is still in progress',
                 uploadId,
                 retryAfterMs: result.retryAfterMs || MERGE_PENDING_RETRY_AFTER_MS,
@@ -235,17 +229,6 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             mergeFailedAt: Date.now(),
             mergeError: error.message
         });
-
-        // 清理失败的multipart uploads
-        if (uploadChannel === 'cfr2' || uploadChannel === 's3') {
-            await cleanupFailedMultipartUploads(context, uploadId, uploadChannel);
-        }
-
-        // 清理分块数据
-        await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
-
-        // 清理上传会话
-        await cleanupUploadSession(env, uploadId);
 
         return createResponse(`Error: Failed to merge chunks - ${error.message}`, { status: 500 });
     }
@@ -292,12 +275,12 @@ async function finalizeMergeInBackground(context, params) {
             );
 
             if (result.success) {
-                await cleanupChunkData(env, uploadId, totalChunks);
+                await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
                 await cleanupUploadSession(env, uploadId);
                 return;
             }
 
-            if (result.code === 'MERGE_IN_PROGRESS') {
+            if (result.code === 'MERGE_IN_PROGRESS' || result.code === 'CHUNKS_INCOMPLETE') {
                 retryAfterMs = result.retryAfterMs || MERGE_PENDING_RETRY_AFTER_MS;
 
                 await updateUploadSessionStatus(env, uploadId, {
@@ -320,7 +303,11 @@ async function finalizeMergeInBackground(context, params) {
                 mergeBackgroundAttempt: attempt,
                 mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS
             });
-            return;
+            if (attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS) {
+                return;
+            }
+            retryAfterMs = MERGE_PENDING_RETRY_AFTER_MS;
+            continue;
         }
     }
 
@@ -411,7 +398,13 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
                 };
             }
 
-            throw new Error(`Only ${completedChunks.length}/${totalChunks} chunks completed successfully. Final status: ${JSON.stringify(finalStatusSummary)}`);
+            return {
+                success: false,
+                code: 'CHUNKS_INCOMPLETE',
+                error: `Only ${completedChunks.length}/${totalChunks} chunks completed. Status: ${JSON.stringify(finalStatusSummary)}`,
+                retryAfterMs: MERGE_PENDING_RETRY_AFTER_MS,
+                statusSummary: finalStatusSummary
+            };
         }
 
         // 根据渠道合并分块信息
