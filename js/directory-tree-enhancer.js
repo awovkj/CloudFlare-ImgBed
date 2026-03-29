@@ -38,6 +38,19 @@
     input.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  function resolveLiveInput(input) {
+    if (!input) return null;
+    if (document.contains(input)) return input;
+
+    var wrapper = input.closest && input.closest('.el-input');
+    if (wrapper && document.contains(wrapper)) {
+      var nestedInput = wrapper.querySelector('input');
+      if (nestedInput) return nestedInput;
+    }
+
+    return null;
+  }
+
   function createTriggerButton(text) {
     var button = createElement('button', 'cfbed-tree-inline-button', text || '目录树选择');
     button.type = 'button';
@@ -46,12 +59,14 @@
 
   function bindTrigger(button, input, options) {
     button.addEventListener('click', function () {
+      var liveInput = resolveLiveInput(input) || input;
       openPicker({
         title: options.title,
         subtitle: options.subtitle,
-        initialPath: getInputValue(input),
+        initialPath: getInputValue(liveInput),
         onConfirm: function (value) {
-          setNativeInputValue(input, value);
+          var confirmInput = resolveLiveInput(liveInput) || resolveLiveInput(input) || input;
+          setNativeInputValue(confirmInput, value);
         }
       });
     });
@@ -121,17 +136,15 @@
     line.appendChild(path);
     line.addEventListener('click', function () {
       state.selected = cleanPath;
+      if (hasChildren) {
+        state.expanded[cleanPath] = true;
+      }
       onSelect(cleanPath);
     });
 
     item.appendChild(line);
 
     if (hasChildren) {
-      line.addEventListener('dblclick', function (event) {
-        event.preventDefault();
-        state.expanded[cleanPath] = !state.expanded[cleanPath];
-        state.rerender();
-      });
       toggle.addEventListener('click', function (event) {
         event.stopPropagation();
         state.expanded[cleanPath] = !state.expanded[cleanPath];
