@@ -180,30 +180,47 @@ export class HuggingFaceAPI {
         const chunkSize = parseInt(header.chunk_size);
         const partUrls = this.getMultipartPartUrls(uploadAction);
 
-        const completeParts = [];
+        const partNumbers = Object.keys(partUrls)
+            .map(part => Number(part))
+            .filter(part => Number.isInteger(part) && part > 0)
+            .sort((a, b) => a - b);
 
-        for (const part of Object.keys(partUrls)) {
-            const index = parseInt(part) - 1;
-            const start = index * chunkSize;
+        const concurrency = Math.min(4, partNumbers.length);
+        const completeParts = [];
+        let currentIndex = 0;
+
+        const uploadPart = async (partNumber) => {
+            const start = (partNumber - 1) * chunkSize;
             const end = Math.min(start + chunkSize, file.size);
             const chunk = file.slice(start, end);
-            
-            const response = await fetch(partUrls[part], {
+
+            const response = await fetch(partUrls[String(partNumber)], {
                 method: 'PUT',
                 body: chunk
             });
 
             if (!response.ok) {
-                throw new Error(`Failed to upload part ${part}: ${response.status}`);
+                throw new Error(`Failed to upload part ${partNumber}: ${response.status}`);
             }
 
             const etag = response.headers.get('ETag');
             if (!etag) {
-                throw new Error(`No ETag for part ${part}`);
+                throw new Error(`No ETag for part ${partNumber}`);
             }
 
-            completeParts.push({ partNumber: parseInt(part), etag });
-        }
+            completeParts.push({ partNumber, etag });
+        };
+
+        const workers = Array.from({ length: concurrency }, async () => {
+            while (currentIndex < partNumbers.length) {
+                const partNumber = partNumbers[currentIndex];
+                currentIndex += 1;
+                await uploadPart(partNumber);
+            }
+        });
+
+        await Promise.all(workers);
+        completeParts.sort((a, b) => a.partNumber - b.partNumber);
 
         return await this.completeMultipartUpload(uploadAction, oid, completeParts);
     }
