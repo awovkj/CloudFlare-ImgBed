@@ -176,21 +176,19 @@ export class HuggingFaceAPI {
      * @param {string} oid - 文件的 SHA256 哈希
      */
     async uploadMultipart(uploadAction, file, oid) {
-        const { href: completionUrl, header } = uploadAction;
+        const { header } = uploadAction;
         const chunkSize = parseInt(header.chunk_size);
-        
-        // 获取所有分片的上传 URL
-        const parts = Object.keys(header).filter(key => /^[0-9]+$/.test(key));
+        const partUrls = this.getMultipartPartUrls(uploadAction);
 
         const completeParts = [];
 
-        for (const part of parts) {
+        for (const part of Object.keys(partUrls)) {
             const index = parseInt(part) - 1;
             const start = index * chunkSize;
             const end = Math.min(start + chunkSize, file.size);
             const chunk = file.slice(start, end);
             
-            const response = await fetch(header[part], {
+            const response = await fetch(partUrls[part], {
                 method: 'PUT',
                 body: chunk
             });
@@ -207,7 +205,76 @@ export class HuggingFaceAPI {
             completeParts.push({ partNumber: parseInt(part), etag });
         }
 
-        // 完成分片上传
+        return await this.completeMultipartUpload(uploadAction, oid, completeParts);
+    }
+
+    getMultipartPartUrls(uploadAction) {
+        const header = uploadAction?.header || {};
+        return Object.fromEntries(
+            Object.entries(header).filter(([key, value]) => /^[0-9]+$/.test(key) && typeof value === 'string' && value)
+        );
+    }
+
+    getMultipartCompletionMetadata(uploadAction) {
+        const header = uploadAction?.header || {};
+        return Object.fromEntries(
+            Object.entries(header).filter(([key, value]) => !/^[0-9]+$/.test(key) && key !== 'chunk_size' && typeof value === 'string' && value)
+        );
+    }
+
+    normalizeMultipartParts(multipartParts) {
+        if (!Array.isArray(multipartParts) || multipartParts.length === 0) {
+            throw new Error('Missing multipart parts');
+        }
+
+        return multipartParts.map((part, index) => {
+            const rawPartNumber = part?.partNumber ?? part?.PartNumber ?? part?.number;
+            const rawEtag = part?.etag ?? part?.ETag ?? part?.eTag;
+            const partNumber = Number(rawPartNumber);
+
+            if (!Number.isInteger(partNumber) || partNumber <= 0) {
+                throw new Error(`Invalid multipart part number at index ${index}`);
+            }
+
+            if (typeof rawEtag !== 'string' || rawEtag.trim() === '') {
+                throw new Error(`Missing multipart ETag for part ${partNumber}`);
+            }
+
+            return {
+                partNumber,
+                etag: rawEtag
+            };
+        }).sort((a, b) => a.partNumber - b.partNumber);
+    }
+
+    async getMultipartUploadAction(oid, fileSize) {
+        const batchResult = await this.lfsBatch(oid, fileSize);
+        const obj = batchResult.objects?.[0];
+
+        if (obj?.error) {
+            throw new Error(`LFS error: ${obj.error.message}`);
+        }
+
+        if (!obj?.actions?.upload) {
+            throw new Error('Multipart upload action not found');
+        }
+
+        if (!obj.actions.upload?.header?.chunk_size) {
+            throw new Error('Upload action is not multipart');
+        }
+
+        return obj.actions.upload;
+    }
+
+    async completeMultipartUpload(uploadAction, oid, multipartParts) {
+        const completionUrl = uploadAction?.href;
+        if (!completionUrl) {
+            throw new Error('Missing multipart completion URL');
+        }
+
+        const normalizedParts = this.normalizeMultipartParts(multipartParts);
+        const completionMetadata = this.getMultipartCompletionMetadata(uploadAction);
+
         const completeResponse = await fetch(completionUrl, {
             method: 'POST',
             headers: {
@@ -215,8 +282,9 @@ export class HuggingFaceAPI {
                 'Content-Type': 'application/vnd.git-lfs+json'
             },
             body: JSON.stringify({
-                oid: oid,
-                parts: completeParts
+                oid,
+                parts: normalizedParts,
+                ...completionMetadata
             })
         });
 
@@ -317,7 +385,9 @@ export class HuggingFaceAPI {
             alreadyExists: false,
             oid: sha256,
             filePath,
-            uploadAction: obj.actions.upload
+            uploadAction: obj.actions.upload,
+            isMultipart: Boolean(obj.actions.upload?.header?.chunk_size),
+            multipartChunkSize: obj.actions.upload?.header?.chunk_size
         };
     }
 

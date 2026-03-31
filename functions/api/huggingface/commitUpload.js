@@ -22,7 +22,7 @@ export async function onRequestPost(context) {
         }
 
         const body = await request.json();
-        const { fullId, filePath, sha256, fileSize, fileName, fileType, channelName, multipartParts } = body;
+        const { fullId, filePath, sha256, fileSize, fileName, fileType, channelName, multipartParts, uploadAction } = body;
 
         if (!fullId || !filePath || !sha256 || !fileSize) {
             return new Response(JSON.stringify({
@@ -74,6 +74,8 @@ export async function onRequestPost(context) {
 
         if (multipartParts && multipartParts.length > 0) {
             console.log('Completing multipart upload...');
+            const multipartUploadAction = uploadAction || await huggingfaceAPI.getMultipartUploadAction(sha256, fileSize);
+            await huggingfaceAPI.completeMultipartUpload(multipartUploadAction, sha256, multipartParts);
         }
 
         const commitResult = await huggingfaceAPI.commitLfsFile(
