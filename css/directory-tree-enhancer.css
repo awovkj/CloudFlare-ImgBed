@@ -221,7 +221,33 @@
   color: #fff;
 }
 
+.cfbed-tree-folder-btn {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 12px;
+  background-color: var(--toolbar-button-bg-color, rgba(255,255,255,0.65));
+  box-shadow: var(--toolbar-button-shadow, 0 2px 12px rgba(0,0,0,0.08));
+  backdrop-filter: blur(10px);
+  color: var(--toolbar-button-color, #606266);
+  cursor: pointer;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.cfbed-tree-folder-btn:hover {
+  transform: scale(1.05);
+  box-shadow: var(--toolbar-button-shadow-hover, 0 4px 16px rgba(0,0,0,0.12));
+}
+
 @media (max-width: 768px) {
+  .cfbed-tree-folder-btn svg {
+    width: 13px;
+    height: 13px;
+  }
+
   .cfbed-tree-input-merged {
     align-items: stretch;
   }

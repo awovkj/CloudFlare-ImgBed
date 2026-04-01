@@ -284,6 +284,41 @@
       return;
     }
 
+    // Homepage upload-folder input: place a floating icon button to its left
+    var isHomepageFolder = wrapper.classList && wrapper.classList.contains('upload-folder');
+    if (isHomepageFolder) {
+      if (document.querySelector('.cfbed-tree-folder-btn')) {
+        input.dataset[STYLE_HOOK] = 'true';
+        return;
+      }
+      var folderBtn = createElement('button', 'cfbed-tree-folder-btn');
+      folderBtn.type = 'button';
+      folderBtn.title = '选择目录';
+      folderBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="16" height="16" fill="currentColor"><path d="M64 480H448c35.3 0 64-28.7 64-64V160c0-35.3-28.7-64-64-64H288c-10.1 0-19.6-4.7-25.6-12.8L243.2 57.6C231.1 41.5 212.1 32 192 32H64C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64z"/></svg>';
+      document.body.appendChild(folderBtn);
+
+      // Position the button to the left of the upload-folder input
+      function syncFolderBtnPosition() {
+        var rect = wrapper.getBoundingClientRect();
+        var btnWidth = 40;
+        var gap = 10;
+        folderBtn.style.top = rect.top + 'px';
+        folderBtn.style.right = (window.innerWidth - rect.left + gap) + 'px';
+        folderBtn.style.height = rect.height + 'px';
+        folderBtn.style.width = btnWidth + 'px';
+      }
+      syncFolderBtnPosition();
+      window.addEventListener('resize', syncFolderBtnPosition);
+
+      // Re-sync on scroll or layout changes
+      var folderBtnObserver = new MutationObserver(syncFolderBtnPosition);
+      folderBtnObserver.observe(wrapper, { attributes: true, attributeFilter: ['class', 'style'] });
+
+      input.dataset[STYLE_HOOK] = 'true';
+      bindTrigger(folderBtn, input, options);
+      return;
+    }
+
     if (control.classList && control.classList.contains('el-input__wrapper')) {
       control.classList.add('cfbed-tree-input-merged');
       var inlineButton = createTriggerButton(options.buttonText || '目录树选择');
