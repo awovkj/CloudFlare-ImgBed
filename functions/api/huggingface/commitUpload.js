@@ -74,6 +74,9 @@ export async function onRequestPost(context) {
 
         if (multipartParts && multipartParts.length > 0) {
             console.log('Completing multipart upload...');
+            if (!uploadAction) {
+                console.warn('commitUpload: uploadAction not provided by frontend, re-fetching via lfsBatch (unnecessary API call)');
+            }
             const multipartUploadAction = uploadAction || await huggingfaceAPI.getMultipartUploadAction(sha256, fileSize);
             await huggingfaceAPI.completeMultipartUpload(multipartUploadAction, sha256, multipartParts);
         }
@@ -105,7 +108,6 @@ export async function onRequestPost(context) {
             ListType: "None",
             HfRepo: hfChannel.repo,
             HfFilePath: filePath,
-            HfToken: hfChannel.token,
             HfIsPrivate: hfChannel.isPrivate || false,
             HfFileUrl: fileUrl,
             TimeStamp: Date.now(),

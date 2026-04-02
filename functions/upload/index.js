@@ -617,7 +617,6 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         metadata.ChannelName = hfChannel.name || "HuggingFace_env";
         metadata.HfRepo = hfChannel.repo;
         metadata.HfFilePath = hfFilePath;
-        metadata.HfToken = hfChannel.token;
         metadata.HfIsPrivate = hfChannel.isPrivate || false;
         metadata.HfFileUrl = result.fileUrl;
 

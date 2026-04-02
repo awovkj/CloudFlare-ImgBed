@@ -3,6 +3,7 @@ import { fetchSecurityConfig } from "../utils/sysConfig";
 import { TelegramAPI } from "../utils/telegramAPI";
 import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
+import { resolveHfChannelConfig } from "../utils/sysConfig";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, createFixedLengthBody, decodeFilePathParam
@@ -898,17 +899,20 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
 
 // 处理 HuggingFace 文件读取
 async function handleHuggingFaceFile(context, metadata, encodedFileName, fileType) {
-    const { request, url, Referer } = context;
+    const { request, url, Referer, env } = context;
 
     try {
         const hfRepo = metadata.HfRepo;
         const hfFilePath = metadata.HfFilePath;
-        const hfToken = metadata.HfToken;
-        const hfIsPrivate = metadata.HfIsPrivate || false;
 
         if (!hfRepo || !hfFilePath) {
             return new Response('Error: HuggingFace file info not found', { status: 500 });
         }
+
+        // 从系统配置解析 token（兼容旧数据回退到 metadata）
+        const channelConfig = await resolveHfChannelConfig(env, metadata);
+        const hfToken = channelConfig?.token || null;
+        const hfIsPrivate = channelConfig?.isPrivate ?? (metadata.HfIsPrivate || false);
 
         // 构建文件 URL
         const fileUrl = metadata.HfFileUrl || `https://huggingface.co/datasets/${hfRepo}/resolve/main/${hfFilePath}`;
@@ -922,6 +926,9 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             }
             return handleHeadRequest(headers);
         }
+
+        // 条件请求：如果客户端有缓存，检查 If-None-Match
+        const clientEtag = request.headers.get('If-None-Match');
 
         // 构建请求头
         const fetchHeaders = {};
@@ -946,6 +953,20 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             return new Response(`Error: Failed to fetch from HuggingFace - ${response.status}`, { status: response.status });
         }
 
+        // 获取上游 ETag
+        const upstreamEtag = response.headers.get('ETag');
+
+        // 条件请求：ETag 匹配则返回 304
+        if (clientEtag && upstreamEtag && clientEtag === upstreamEtag) {
+            return new Response(null, {
+                status: 304,
+                headers: {
+                    'ETag': upstreamEtag,
+                    'Cache-Control': hfIsPrivate ? 'private, max-age=3600' : 'public, max-age=86400'
+                }
+            });
+        }
+
         // 构建响应头
         const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
@@ -962,6 +983,12 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         if (!headers.has('Content-Length') && metadata.FileSizeBytes) {
             headers.set('Content-Length', metadata.FileSizeBytes.toString());
         }
+
+        // 缓存控制和 ETag
+        if (upstreamEtag) {
+            headers.set('ETag', upstreamEtag);
+        }
+        headers.set('Cache-Control', hfIsPrivate ? 'private, max-age=3600' : 'public, max-age=86400');
 
         return new Response(response.body, {
             status: response.status,

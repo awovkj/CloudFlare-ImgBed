@@ -1,16 +1,21 @@
 /**
  * Hugging Face Hub API 封装类
  * 手动实现 LFS 上传协议（Cloudflare Workers 兼容）
- * 
+ *
  * HuggingFace 要求二进制文件通过 LFS 协议上传
  * 流程：preupload -> LFS batch -> upload to LFS storage -> commit
- * 
+ *
  * 优化方案：
  * 1. 小文件（<20MB）：前端 → CF Workers → HuggingFace S3
  * 2. 大文件（>=20MB）：前端直接上传到 HuggingFace S3，CF Workers 只负责获取签名 URL 和提交
- * 
+ *
  * SHA256 由前端预计算传入，避免后端 CPU 超时
  */
+
+// 仓库存在性缓存：避免每次上传都检查仓库是否存在
+// key: "repo", value: timestamp (ms)
+const repoExistsCache = new Map();
+const REPO_CACHE_TTL_MS = 10 * 60 * 1000; // 10 分钟
 
 export class HuggingFaceAPI {
     constructor(token, repo, isPrivate = false) {
@@ -18,6 +23,87 @@ export class HuggingFaceAPI {
         this.repo = repo;  // 格式: username/repo-name
         this.isPrivate = isPrivate;
         this.baseURL = 'https://huggingface.co';
+    }
+
+    /**
+     * 带重试和速率限制处理的 fetch 封装
+     * @param {string} url - 请求 URL
+     * @param {object} options - fetch 选项
+     * @param {object} retryOpts - 重试配置
+     * @param {number} retryOpts.maxRetries - 最大重试次数（默认 3）
+     * @param {number} retryOpts.baseDelay - 基础延迟毫秒（默认 1000）
+     * @param {number} retryOpts.timeout - 超时毫秒（默认 30000）
+     * @param {string} retryOpts.context - 错误上下文描述
+     */
+    async _fetchWithRetry(url, options = {}, retryOpts = {}) {
+        const {
+            maxRetries = 3,
+            baseDelay = 1000,
+            timeout = 30000,
+            context = 'HuggingFace API'
+        } = retryOpts;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                // 429 速率限制：解析 Retry-After 并等待
+                if (response.status === 429) {
+                    if (attempt >= maxRetries) {
+                        const error = await response.text().catch(() => '');
+                        throw new Error(`${context}: rate limited (429) after ${maxRetries} retries - ${error}`);
+                    }
+                    const retryAfter = response.headers.get('Retry-After');
+                    const waitMs = retryAfter
+                        ? Math.min(parseFloat(retryAfter) * 1000, 30000)
+                        : baseDelay * Math.pow(2, attempt);
+                    const jitter = Math.random() * 500;
+                    console.warn(`${context}: 429 rate limited, retrying in ${Math.round(waitMs + jitter)}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise(r => setTimeout(r, waitMs + jitter));
+                    continue;
+                }
+
+                // 5xx 服务器错误：自动重试
+                if (response.status >= 500 && attempt < maxRetries) {
+                    const jitter = Math.random() * 500;
+                    const delay = baseDelay * Math.pow(2, attempt) + jitter;
+                    console.warn(`${context}: server error ${response.status}, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+
+                if (error.name === 'AbortError') {
+                    if (attempt >= maxRetries) {
+                        throw new Error(`${context}: request timed out after ${timeout}ms (${maxRetries} retries exhausted)`);
+                    }
+                    console.warn(`${context}: timeout after ${timeout}ms, retrying (attempt ${attempt + 1}/${maxRetries})`);
+                    continue;
+                }
+
+                // 网络错误重试
+                if (attempt < maxRetries) {
+                    const jitter = Math.random() * 500;
+                    const delay = baseDelay * Math.pow(2, attempt) + jitter;
+                    console.warn(`${context}: network error "${error.message}", retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+
+                throw new Error(`${context}: ${error.message} (${maxRetries} retries exhausted)`);
+            }
+        }
     }
 
     /**
@@ -33,14 +119,26 @@ export class HuggingFaceAPI {
     }
 
     /**
-     * 检查仓库是否存在
+     * 检查仓库是否存在（带缓存）
      */
     async repoExists() {
+        // 检查缓存
+        const cached = repoExistsCache.get(this.repo);
+        if (cached && (Date.now() - cached) < REPO_CACHE_TTL_MS) {
+            return true;
+        }
+
         try {
-            const response = await fetch(`${this.baseURL}/api/datasets/${this.repo}`, {
-                headers: { 'Authorization': `Bearer ${this.token}` }
-            });
-            return response.ok;
+            const response = await this._fetchWithRetry(
+                `${this.baseURL}/api/datasets/${this.repo}`,
+                { headers: { 'Authorization': `Bearer ${this.token}` } },
+                { maxRetries: 2, timeout: 15000, context: `repoExists(${this.repo})` }
+            );
+            if (response.ok) {
+                repoExistsCache.set(this.repo, Date.now());
+                return true;
+            }
+            return false;
         } catch (error) {
             console.error('Error checking repo:', error.message);
             return false;
@@ -48,31 +146,42 @@ export class HuggingFaceAPI {
     }
 
     /**
-     * 创建仓库（如果不存在）
+     * 创建仓库（如果不存在，带缓存）
      */
     async createRepoIfNotExists() {
+        // 检查缓存
+        const cached = repoExistsCache.get(this.repo);
+        if (cached && (Date.now() - cached) < REPO_CACHE_TTL_MS) {
+            return true;
+        }
+
         try {
             if (await this.repoExists()) {
                 return true;
             }
 
-            const response = await fetch(`${this.baseURL}/api/repos/create`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
+            const response = await this._fetchWithRetry(
+                `${this.baseURL}/api/repos/create`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: this.repo.split('/')[1],
+                        type: 'dataset',
+                        private: this.isPrivate
+                    })
                 },
-                body: JSON.stringify({
-                    name: this.repo.split('/')[1],
-                    type: 'dataset',
-                    private: this.isPrivate
-                })
-            });
+                { maxRetries: 2, timeout: 15000, context: `createRepo(${this.repo})` }
+            );
 
             if (response.ok || response.status === 409) {
+                repoExistsCache.set(this.repo, Date.now());
                 return true;
             }
-            
+
             const errorText = await response.text();
             throw new Error(`Failed to create repo: ${response.status} - ${errorText}`);
         } catch (error) {
@@ -86,8 +195,8 @@ export class HuggingFaceAPI {
      */
     async preupload(filePath, fileSize, fileSample) {
         const url = `${this.baseURL}/api/datasets/${this.repo}/preupload/main`;
-        
-        const response = await fetch(url, {
+
+        const response = await this._fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.token}`,
@@ -100,11 +209,11 @@ export class HuggingFaceAPI {
                     sample: fileSample
                 }]
             })
-        });
+        }, { context: `preupload(${filePath}, ${fileSize}B)` });
 
         if (!response.ok) {
             const error = await response.text();
-            throw new Error(`Preupload failed: ${response.status} - ${error}`);
+            throw new Error(`Preupload failed [${filePath}, ${fileSize}B]: ${response.status} - ${error}`);
         }
 
         return await response.json();
@@ -115,8 +224,9 @@ export class HuggingFaceAPI {
      */
     async lfsBatch(oid, fileSize) {
         const url = `${this.baseURL}/datasets/${this.repo}.git/info/lfs/objects/batch`;
-        
-        const response = await fetch(url, {
+        const oidPrefix = oid.substring(0, 12);
+
+        const response = await this._fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.token}`,
@@ -130,11 +240,11 @@ export class HuggingFaceAPI {
                 ref: { name: 'main' },
                 objects: [{ oid, size: fileSize }]
             })
-        });
+        }, { context: `lfsBatch(${oidPrefix}..., ${fileSize}B)` });
 
         if (!response.ok) {
             const error = await response.text();
-            throw new Error(`LFS batch failed: ${response.status} - ${error}`);
+            throw new Error(`LFS batch failed [oid=${oidPrefix}..., ${fileSize}B]: ${response.status} - ${error}`);
         }
 
         return await response.json();
@@ -148,22 +258,23 @@ export class HuggingFaceAPI {
      */
     async uploadToLFS(uploadAction, file, oid) {
         const { href, header } = uploadAction;
+        const oidPrefix = oid.substring(0, 12);
 
         // 检查是否是分片上传
         if (header?.chunk_size) {
             return await this.uploadMultipart(uploadAction, file, oid);
         }
 
-        // 基本上传
-        const response = await fetch(href, {
+        // 基本上传（较长超时）
+        const response = await this._fetchWithRetry(href, {
             method: 'PUT',
             headers: header || {},
             body: file
-        });
+        }, { maxRetries: 2, timeout: 120000, context: `uploadToLFS(${oidPrefix}..., ${file.size}B)` });
 
         if (!response.ok) {
             const error = await response.text();
-            throw new Error(`LFS upload failed: ${response.status} - ${error}`);
+            throw new Error(`LFS upload failed [oid=${oidPrefix}..., ${file.size}B]: ${response.status} - ${error}`);
         }
 
         return true;
@@ -179,6 +290,7 @@ export class HuggingFaceAPI {
         const { header } = uploadAction;
         const chunkSize = parseInt(header.chunk_size);
         const partUrls = this.getMultipartPartUrls(uploadAction);
+        const oidPrefix = oid.substring(0, 12);
 
         const partNumbers = Object.keys(partUrls)
             .map(part => Number(part))
@@ -189,33 +301,77 @@ export class HuggingFaceAPI {
         const completeParts = [];
         let currentIndex = 0;
 
-        const uploadPart = async (partNumber) => {
+        const uploadPartWithRetry = async (partNumber) => {
             const start = (partNumber - 1) * chunkSize;
             const end = Math.min(start + chunkSize, file.size);
-            const chunk = file.slice(start, end);
+            const partContext = `uploadPart(${oidPrefix}..., part ${partNumber}/${partNumbers.length}, ${end - start}B)`;
 
-            const response = await fetch(partUrls[String(partNumber)], {
-                method: 'PUT',
-                body: chunk
-            });
+            const maxPartRetries = 3;
+            for (let attempt = 0; attempt <= maxPartRetries; attempt++) {
+                const chunk = file.slice(start, end);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 120000);
 
-            if (!response.ok) {
-                throw new Error(`Failed to upload part ${partNumber}: ${response.status}`);
+                try {
+                    const response = await fetch(partUrls[String(partNumber)], {
+                        method: 'PUT',
+                        body: chunk,
+                        signal: controller.signal
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (response.status === 429 && attempt < maxPartRetries) {
+                        const retryAfter = response.headers.get('Retry-After');
+                        const waitMs = retryAfter ? Math.min(parseFloat(retryAfter) * 1000, 30000) : 1000 * Math.pow(2, attempt);
+                        console.warn(`${partContext}: 429 rate limited, retrying in ${Math.round(waitMs)}ms`);
+                        await new Promise(r => setTimeout(r, waitMs + Math.random() * 500));
+                        continue;
+                    }
+
+                    if (response.status >= 500 && attempt < maxPartRetries) {
+                        const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500;
+                        console.warn(`${partContext}: server error ${response.status}, retrying in ${Math.round(delay)}ms`);
+                        await new Promise(r => setTimeout(r, delay));
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`Failed to upload part ${partNumber}: ${response.status}`);
+                    }
+
+                    const etag = response.headers.get('ETag');
+                    if (!etag) {
+                        throw new Error(`No ETag for part ${partNumber}`);
+                    }
+
+                    completeParts.push({ partNumber, etag });
+                    return;
+                } catch (error) {
+                    clearTimeout(timeoutId);
+
+                    if (error.name === 'AbortError' && attempt < maxPartRetries) {
+                        console.warn(`${partContext}: timeout, retrying (attempt ${attempt + 1}/${maxPartRetries})`);
+                        continue;
+                    }
+
+                    if (attempt < maxPartRetries && (error.name === 'AbortError' || error.message.includes('network'))) {
+                        const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500;
+                        console.warn(`${partContext}: ${error.message}, retrying in ${Math.round(delay)}ms`);
+                        await new Promise(r => setTimeout(r, delay));
+                        continue;
+                    }
+
+                    throw new Error(`${partContext}: ${error.message} (${maxPartRetries} retries exhausted)`);
+                }
             }
-
-            const etag = response.headers.get('ETag');
-            if (!etag) {
-                throw new Error(`No ETag for part ${partNumber}`);
-            }
-
-            completeParts.push({ partNumber, etag });
         };
 
         const workers = Array.from({ length: concurrency }, async () => {
             while (currentIndex < partNumbers.length) {
                 const partNumber = partNumbers[currentIndex];
                 currentIndex += 1;
-                await uploadPart(partNumber);
+                await uploadPartWithRetry(partNumber);
             }
         });
 
@@ -265,11 +421,12 @@ export class HuggingFaceAPI {
     }
 
     async getMultipartUploadAction(oid, fileSize) {
+        const oidPrefix = oid.substring(0, 12);
         const batchResult = await this.lfsBatch(oid, fileSize);
         const obj = batchResult.objects?.[0];
 
         if (obj?.error) {
-            throw new Error(`LFS error: ${obj.error.message}`);
+            throw new Error(`LFS error [oid=${oidPrefix}...]: ${obj.error.message}`);
         }
 
         if (!obj?.actions?.upload) {
@@ -291,8 +448,9 @@ export class HuggingFaceAPI {
 
         const normalizedParts = this.normalizeMultipartParts(multipartParts);
         const completionMetadata = this.getMultipartCompletionMetadata(uploadAction);
+        const oidPrefix = oid.substring(0, 12);
 
-        const completeResponse = await fetch(completionUrl, {
+        const completeResponse = await this._fetchWithRetry(completionUrl, {
             method: 'POST',
             headers: {
                 'Accept': 'application/vnd.git-lfs+json',
@@ -303,11 +461,11 @@ export class HuggingFaceAPI {
                 parts: normalizedParts,
                 ...completionMetadata
             })
-        });
+        }, { maxRetries: 2, timeout: 30000, context: `completeMultipart(${oidPrefix}..., ${normalizedParts.length} parts)` });
 
         if (!completeResponse.ok) {
             const error = await completeResponse.text();
-            throw new Error(`Multipart complete failed: ${completeResponse.status} - ${error}`);
+            throw new Error(`Multipart complete failed [oid=${oidPrefix}..., ${normalizedParts.length} parts]: ${completeResponse.status} - ${error}`);
         }
 
         return true;
@@ -318,7 +476,8 @@ export class HuggingFaceAPI {
      */
     async commitLfsFile(filePath, oid, fileSize, commitMessage) {
         const url = `${this.baseURL}/api/datasets/${this.repo}/commit/main`;
-        
+        const oidPrefix = oid.substring(0, 12);
+
         // NDJSON 格式
         const body = [
             JSON.stringify({
@@ -336,18 +495,18 @@ export class HuggingFaceAPI {
             })
         ].join('\n');
 
-        const response = await fetch(url, {
+        const response = await this._fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.token}`,
                 'Content-Type': 'application/x-ndjson'
             },
             body
-        });
+        }, { maxRetries: 2, context: `commitLfsFile(${filePath}, ${oidPrefix}..., ${fileSize}B)` });
 
         if (!response.ok) {
             const error = await response.text();
-            throw new Error(`Commit failed: ${response.status} - ${error}`);
+            throw new Error(`Commit failed [${filePath}, oid=${oidPrefix}..., ${fileSize}B]: ${response.status} - ${error}`);
         }
 
         return await response.json();
@@ -476,9 +635,9 @@ export class HuggingFaceAPI {
      */
     async commitDirectFile(filePath, file, commitMessage) {
         const url = `${this.baseURL}/api/datasets/${this.repo}/commit/main`;
-        
+
         const content = btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer())));
-        
+
         const body = [
             JSON.stringify({
                 key: 'header',
@@ -494,18 +653,18 @@ export class HuggingFaceAPI {
             })
         ].join('\n');
 
-        const response = await fetch(url, {
+        const response = await this._fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.token}`,
                 'Content-Type': 'application/x-ndjson'
             },
             body
-        });
+        }, { maxRetries: 2, context: `commitDirectFile(${filePath}, ${file.size}B)` });
 
         if (!response.ok) {
             const error = await response.text();
-            throw new Error(`Direct commit failed: ${response.status} - ${error}`);
+            throw new Error(`Direct commit failed [${filePath}, ${file.size}B]: ${response.status} - ${error}`);
         }
 
         return await response.json();
@@ -516,7 +675,7 @@ export class HuggingFaceAPI {
      */
     async deleteFile(filePath, commitMessage = 'Delete file') {
         const url = `${this.baseURL}/api/datasets/${this.repo}/commit/main`;
-        
+
         const body = [
             JSON.stringify({
                 key: 'header',
@@ -528,26 +687,26 @@ export class HuggingFaceAPI {
             })
         ].join('\n');
 
-        const response = await fetch(url, {
+        const response = await this._fetchWithRetry(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.token}`,
                 'Content-Type': 'application/x-ndjson'
             },
             body
-        });
+        }, { maxRetries: 2, context: `deleteFile(${filePath})` });
 
         return response.ok;
     }
 
     /**
-     * 获取文件内容（用于私有仓库代理）
+     * 获取文件内容（用于私有仓库代理，带重试）
      */
     async getFileContent(filePath) {
         const fileUrl = `${this.baseURL}/datasets/${this.repo}/resolve/main/${filePath}`;
-        return await fetch(fileUrl, {
+        return await this._fetchWithRetry(fileUrl, {
             headers: this.isPrivate ? { 'Authorization': `Bearer ${this.token}` } : {}
-        });
+        }, { maxRetries: 2, timeout: 60000, context: `getFileContent(${filePath})` });
     }
 
     /**

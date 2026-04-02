@@ -4,6 +4,7 @@ import { removeFileFromIndex, batchRemoveFilesFromIndex } from "../../../utils/i
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { DiscordAPI } from '../../../utils/discordAPI.js';
 import { HuggingFaceAPI } from '../../../utils/huggingfaceAPI.js';
+import { resolveHfChannelConfig } from '../../../utils/sysConfig.js';
 
 // CORS 跨域响应头
 const corsHeaders = {
@@ -151,7 +152,7 @@ async function deleteFile(env, fileId, cdnUrl, url) {
 
         // HuggingFace 渠道的图片，需要删除 HuggingFace 中对应的文件
         if (img.metadata?.Channel === 'HuggingFace') {
-            await deleteHuggingFaceFile(img);
+            await deleteHuggingFaceFile(env, img);
         }
 
         // 删除数据库中的记录
@@ -226,19 +227,24 @@ async function deleteDiscordFile(img) {
 
 
 // 删除 HuggingFace 渠道的图片
-async function deleteHuggingFaceFile(img) {
-    const token = img.metadata?.HfToken;
+async function deleteHuggingFaceFile(env, img) {
     const repo = img.metadata?.HfRepo;
     const filePath = img.metadata?.HfFilePath;
-    const isPrivate = img.metadata?.HfIsPrivate || false;
 
-    if (!token || !repo || !filePath) {
+    if (!repo || !filePath) {
         console.warn('HuggingFace file missing required metadata for deletion');
         return false;
     }
 
+    // 从系统配置解析 token（兼容旧数据回退到 metadata）
+    const channelConfig = await resolveHfChannelConfig(env, img.metadata);
+    if (!channelConfig?.token) {
+        console.warn('HuggingFace delete: no token found in config or metadata');
+        return false;
+    }
+
     try {
-        const huggingfaceAPI = new HuggingFaceAPI(token, repo, isPrivate);
+        const huggingfaceAPI = new HuggingFaceAPI(channelConfig.token, channelConfig.repo || repo, channelConfig.isPrivate || false);
         const success = await huggingfaceAPI.deleteFile(filePath, `Delete ${filePath}`);
         if (!success) {
             console.error('HuggingFace Delete Failed: API returned false');

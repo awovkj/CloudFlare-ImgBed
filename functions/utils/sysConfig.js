@@ -108,11 +108,12 @@ export async function fetchUploadConfig(env, context = null) {
     const settings = await fetchConfigWithFallback(env, 'upload', getUploadConfig, DEFAULT_UPLOAD_CONFIG);
     filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface']);
 
-    // 根据容量限制过滤渠道（仅 R2 和 S3）
+    // 根据容量限制过滤渠道（R2、S3、HuggingFace）
     // 需要 context 来调用 getIndexMeta
     if (context) {
         settings.cfr2.channels = await filterChannelsByQuota(context, settings.cfr2.channels);
         settings.s3.channels = await filterChannelsByQuota(context, settings.s3.channels);
+        settings.huggingface.channels = await filterChannelsByQuota(context, settings.huggingface.channels);
     }
 
     return settings;
@@ -128,4 +129,52 @@ export async function fetchPageConfig(env) {
 
 export async function fetchOthersConfig(env) {
     return fetchConfigWithFallback(env, 'others', getOthersConfig, DEFAULT_OTHERS_CONFIG);
+}
+
+/**
+ * 根据文件元数据解析 HuggingFace 渠道配置（token、repo 等）
+ * 优先从系统配置中查找，避免依赖 KV metadata 中存储的 token
+ * 兼容旧数据：如果配置中找不到，回退到 metadata 中的 HfToken
+ * @param {Object} env - 环境变量
+ * @param {Object} metadata - 文件元数据
+ * @returns {Object} { token, repo, isPrivate }
+ */
+export async function resolveHfChannelConfig(env, metadata) {
+    const channelName = metadata.ChannelName;
+    const hfRepo = metadata.HfRepo;
+
+    try {
+        const uploadConfig = await fetchUploadConfig(env);
+        const hfChannels = uploadConfig.huggingface?.channels || [];
+
+        // 1. 按渠道名称匹配
+        if (channelName) {
+            const match = hfChannels.find(c => c.name === channelName);
+            if (match?.token) {
+                return { token: match.token, repo: match.repo || hfRepo, isPrivate: match.isPrivate || false };
+            }
+        }
+
+        // 2. 按仓库名称匹配
+        if (hfRepo) {
+            const match = hfChannels.find(c => c.repo === hfRepo);
+            if (match?.token) {
+                return { token: match.token, repo: match.repo, isPrivate: match.isPrivate || false };
+            }
+        }
+
+        // 3. 如果只有一个渠道，直接使用
+        if (hfChannels.length === 1 && hfChannels[0].token) {
+            return { token: hfChannels[0].token, repo: hfChannels[0].repo || hfRepo, isPrivate: hfChannels[0].isPrivate || false };
+        }
+    } catch (error) {
+        console.warn('resolveHfChannelConfig: failed to fetch config, falling back to metadata:', error.message);
+    }
+
+    // 4. 兼容旧数据：回退到 metadata 中的 HfToken
+    if (metadata.HfToken) {
+        return { token: metadata.HfToken, repo: hfRepo, isPrivate: metadata.HfIsPrivate || false };
+    }
+
+    return null;
 }
