@@ -174,12 +174,13 @@
 
     dropdown.appendChild(list);
 
-    // Position below anchor
+    // Position below anchor, match its width
     var rect = anchor.getBoundingClientRect();
+    var ddWidth = Math.max(rect.width, 160);
     dropdown.style.position = 'fixed';
-    dropdown.style.top = (rect.bottom + 4) + 'px';
-    dropdown.style.left = rect.left + 'px';
-    dropdown.style.width = Math.max(rect.width, 200) + 'px';
+    dropdown.style.top = (rect.bottom + 6) + 'px';
+    dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+    dropdown.style.width = ddWidth + 'px';
 
     document.body.appendChild(dropdown);
     activeDropdown = { el: dropdown };
