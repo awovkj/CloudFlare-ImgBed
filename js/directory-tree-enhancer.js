@@ -88,10 +88,18 @@
     if (pageAuthCode) {
       apiUrl += '&authCode=' + encodeURIComponent(pageAuthCode);
     }
+    // Also try cookie-based authCode
+    var cookieMatch = document.cookie.match(/(^| )authCode=([^;]+)/);
+    if (!pageAuthCode && cookieMatch) {
+      apiUrl += '&authCode=' + encodeURIComponent(decodeURIComponent(cookieMatch[2]));
+    }
     return fetch(apiUrl, {
       method: 'GET',
       credentials: 'same-origin',
-      headers: { Accept: 'application/json' }
+      headers: {
+        Accept: 'application/json',
+        authCode: (pageAuthCode || (cookieMatch ? decodeURIComponent(cookieMatch[2]) : ''))
+      }
     }).then(function (response) {
       if (!response.ok) {
         var error = new Error('目录树加载失败');
@@ -131,15 +139,15 @@
     var expanded = !!state.expanded[cleanPath];
     var isSelected = state.selected === cleanPath;
 
-    var toggle = createElement('span', 'cfbed-tree-toggle' + (hasChildren ? '' : ' is-empty'), hasChildren ? (expanded ? '▾' : '▸') : '·');
+    var toggle = createElement('span', 'cfbed-tree-toggle' + (hasChildren ? '' : ' is-empty'), hasChildren ? (expanded ? '▾' : '▸') : '');
+    var icon = createElement('span', 'cfbed-tree-icon', hasChildren ? (expanded ? '📂' : '📁') : '📁');
     var label = createElement('span', 'cfbed-tree-label', node.title || node.label || node.name || cleanPath || '未命名目录');
-    var path = createElement('span', 'cfbed-tree-path', normalizeForInput(cleanPath));
 
     if (isSelected) item.classList.add('is-selected');
 
-    line.appendChild(toggle);
+    if (hasChildren) line.appendChild(toggle);
+    line.appendChild(icon);
     line.appendChild(label);
-    line.appendChild(path);
     line.addEventListener('click', function () {
       state.selected = cleanPath;
       if (hasChildren) {
@@ -173,24 +181,35 @@
 
     var overlay = createElement('div', 'cfbed-tree-overlay');
     var dialog = createElement('div', 'cfbed-tree-dialog');
+
+    // Header
     var header = createElement('div', 'cfbed-tree-header');
     var title = createElement('div', 'cfbed-tree-title', options.title || '选择目录');
-    var subtitle = createElement('div', 'cfbed-tree-subtitle', options.subtitle || '选择目标目录后将自动回填到当前输入框');
     var closeButton = createElement('button', 'cfbed-tree-close', '×');
     closeButton.type = 'button';
-
     header.appendChild(title);
     header.appendChild(closeButton);
 
-    var body = createElement('div', 'cfbed-tree-body');
-    var info = createElement('div', 'cfbed-tree-info', subtitle.textContent);
-    var selected = createElement('div', 'cfbed-tree-current');
+    // Manual input area
+    var inputArea = createElement('div', 'cfbed-tree-input-area');
+    var manualInput = document.createElement('input');
+    manualInput.type = 'text';
+    manualInput.className = 'cfbed-tree-manual-input';
+    manualInput.placeholder = '输入目录路径，如 /photos/2024/';
+    manualInput.value = normalizeForInput(options.initialPath || '');
+    inputArea.appendChild(manualInput);
+
+    // Scrollable tree content
     var content = createElement('div', 'cfbed-tree-content');
+
+    // Footer
     var footer = createElement('div', 'cfbed-tree-footer');
     var cancelButton = createElement('button', 'cfbed-tree-action is-secondary', '取消');
-    var confirmButton = createElement('button', 'cfbed-tree-action is-primary', '使用此目录');
+    var confirmButton = createElement('button', 'cfbed-tree-action is-primary', '确定');
     cancelButton.type = 'button';
     confirmButton.type = 'button';
+    footer.appendChild(cancelButton);
+    footer.appendChild(confirmButton);
 
     var state = {
       selected: normalizeNodePath(options.initialPath || ''),
@@ -198,30 +217,33 @@
       rerender: function () {}
     };
 
-    function updateSelectedText() {
-      selected.textContent = '当前选择：' + normalizeForInput(state.selected);
+    function syncInputToState() {
+      manualInput.value = normalizeForInput(state.selected);
     }
 
     function renderTree(nodes) {
       content.innerHTML = '';
-      var rootButton = createElement('button', 'cfbed-tree-root' + (!state.selected ? ' is-selected' : ''), '根目录 /');
+
+      // Root directory option
+      var rootButton = createElement('button', 'cfbed-tree-root' + (!state.selected ? ' is-selected' : ''));
       rootButton.type = 'button';
+      rootButton.innerHTML = '<span class="cfbed-tree-icon">🏠</span><span>根目录 /</span>';
       rootButton.addEventListener('click', function () {
         state.selected = '';
-        updateSelectedText();
+        syncInputToState();
         renderTree(nodes);
       });
       content.appendChild(rootButton);
 
       if (!nodes.length) {
-        content.appendChild(createElement('div', 'cfbed-tree-empty', '当前还没有可选目录，将使用根目录。'));
+        content.appendChild(createElement('div', 'cfbed-tree-empty', '暂无已有目录，可直接输入新目录路径'));
         return;
       }
 
       nodes.forEach(function (node) {
         content.appendChild(buildTreeItem(node, state, function (path) {
           state.selected = path;
-          updateSelectedText();
+          syncInputToState();
           renderTree(nodes);
         }));
       });
@@ -233,43 +255,50 @@
       }
     };
 
-    footer.appendChild(cancelButton);
-    footer.appendChild(confirmButton);
-    body.appendChild(info);
-    body.appendChild(selected);
-    body.appendChild(content);
+    // Assemble dialog
     dialog.appendChild(header);
-    dialog.appendChild(body);
+    dialog.appendChild(inputArea);
+    dialog.appendChild(content);
     dialog.appendChild(footer);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
     activePicker = { overlay: overlay };
 
-    updateSelectedText();
-    content.appendChild(createElement('div', 'cfbed-tree-loading', '正在加载目录树...'));
+    content.appendChild(createElement('div', 'cfbed-tree-loading', '加载中...'));
 
+    // Events
     closeButton.addEventListener('click', closePicker);
     cancelButton.addEventListener('click', closePicker);
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) closePicker();
     });
+
+    // Manual input changes update selection
+    manualInput.addEventListener('input', function () {
+      state.selected = normalizeNodePath(manualInput.value);
+    });
+
     confirmButton.addEventListener('click', function () {
-      options.onConfirm(normalizeForInput(state.selected));
+      var value = manualInput.value.trim();
+      if (!value || value === '/') {
+        options.onConfirm('/');
+      } else {
+        options.onConfirm(normalizeForInput(value));
+      }
       closePicker();
     });
 
+    // Load tree
     fetchTree().then(function (nodes) {
       renderTree(nodes);
-      updateSelectedText();
-    }).catch(function (error) {
-      var message = '目录树加载失败，请继续手动输入目录';
-      if (error && (error.status === 401 || error.status === 403)) {
-        message = '当前环境未开放目录树选择，请继续手动输入目录';
-      }
+    }).catch(function () {
       content.innerHTML = '';
-      content.appendChild(createElement('div', 'cfbed-tree-empty is-error', message));
+      content.appendChild(createElement('div', 'cfbed-tree-empty', '目录列表加载失败，请直接输入目录路径'));
     });
+
+    // Focus the input
+    setTimeout(function () { manualInput.focus(); manualInput.select(); }, 50);
   }
 
   function insertTrigger(input, options) {
@@ -325,7 +354,7 @@
     candidates.forEach(function (input) {
       insertTrigger(input, {
         title: '选择上传目录',
-        subtitle: '上传页面与上传设置都会复用同一个目录树选择器。',
+        subtitle: '选择目录后将自动填充到上传目录输入框。',
         buttonText: '选择上传目录',
         helperText: '可视化浏览已有目录，选择后会自动填充到上传目录输入框。'
       });
@@ -382,14 +411,13 @@
       var target = event.target;
       var folderWrapper = target.closest && target.closest('.upload-folder');
       if (!folderWrapper) return;
-      // Ensure it's an el-input upload-folder on the homepage
       if (!folderWrapper.classList.contains('el-input')) return;
       event.preventDefault();
       event.stopPropagation();
       var input = folderWrapper.querySelector('input');
       openPicker({
         title: '选择上传目录',
-        subtitle: '选择目录后将自动填充到上传目录输入框。',
+        subtitle: '选择目录后将自动填充。',
         initialPath: getInputValue(input),
         onConfirm: function (value) {
           var liveInput = folderWrapper.querySelector('input') || input;
