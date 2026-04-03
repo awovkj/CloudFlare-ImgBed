@@ -83,8 +83,14 @@
     if (treeCache && Date.now() - treeCacheAt < treeCacheTtl) {
       return Promise.resolve(treeCache);
     }
-    return fetch(TREE_API_URL, {
+    var apiUrl = TREE_API_URL;
+    var pageAuthCode = new URLSearchParams(window.location.search).get('authCode');
+    if (pageAuthCode) {
+      apiUrl += '&authCode=' + encodeURIComponent(pageAuthCode);
+    }
+    return fetch(apiUrl, {
       method: 'GET',
+      credentials: 'same-origin',
       headers: { Accept: 'application/json' }
     }).then(function (response) {
       if (!response.ok) {
