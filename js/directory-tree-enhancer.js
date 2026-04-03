@@ -290,25 +290,10 @@
       return;
     }
 
-    // Homepage upload-folder input: click on the input itself opens the picker
+    // Homepage upload-folder input is handled by event delegation, skip it here
     var isHomepageFolder = wrapper.classList && wrapper.classList.contains('upload-folder');
     if (isHomepageFolder) {
       input.dataset[STYLE_HOOK] = 'true';
-      input.style.cursor = 'pointer';
-      wrapper.addEventListener('click', function (event) {
-        event.preventDefault();
-        event.stopPropagation();
-        var liveInput = resolveLiveInput(input) || input;
-        openPicker({
-          title: options.title,
-          subtitle: options.subtitle,
-          initialPath: getInputValue(liveInput),
-          onConfirm: function (value) {
-            var confirmInput = resolveLiveInput(liveInput) || resolveLiveInput(input) || input;
-            setNativeInputValue(confirmInput, value);
-          }
-        });
-      });
       return;
     }
 
@@ -390,7 +375,32 @@
     });
   }
 
+  // Event delegation: clicking on the homepage .upload-folder input opens the picker
+  function initHomepageFolderDelegate() {
+    document.addEventListener('click', function (event) {
+      if (activePicker) return;
+      var target = event.target;
+      var folderWrapper = target.closest && target.closest('.upload-folder');
+      if (!folderWrapper) return;
+      // Ensure it's an el-input upload-folder on the homepage
+      if (!folderWrapper.classList.contains('el-input')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var input = folderWrapper.querySelector('input');
+      openPicker({
+        title: '选择上传目录',
+        subtitle: '选择目录后将自动填充到上传目录输入框。',
+        initialPath: getInputValue(input),
+        onConfirm: function (value) {
+          var liveInput = folderWrapper.querySelector('input') || input;
+          setNativeInputValue(liveInput, value);
+        }
+      });
+    }, true);
+  }
+
   function init() {
+    initHomepageFolderDelegate();
     enhancePage();
     observer = new MutationObserver(function (mutations) {
       if (shouldProcessMutations(mutations)) {
