@@ -23,6 +23,7 @@ import { onRequest as onPublicListRequest }     from '../functions/api/public/li
 import { onRequest as onBingWallpaperRequest }  from '../functions/api/bing/wallpaper/index.js';
 import { onRequestPost as onHfGetUploadUrlPost }from '../functions/api/huggingface/getUploadUrl.js';
 import { onRequestPost as onHfCommitPost }      from '../functions/api/huggingface/commitUpload.js';
+import { onRequestGet as onDirectoryTreeGet }    from '../functions/api/directoryTree.js';
 
 // api/manage — 子路由
 import { onRequest as onManageMiddleware }     from '../functions/api/manage/_middleware.js';
@@ -121,6 +122,26 @@ function postOnly(handler) {
             });
         }
         if (context.request.method !== 'POST') {
+            return new Response('Method Not Allowed', { status: 405 });
+        }
+        return handler(context);
+    };
+}
+
+function getOnly(handler) {
+    return async function(context) {
+        if (context.request.method === 'OPTIONS') {
+            return new Response(null, {
+                status: 204,
+                headers: {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, authCode',
+                    'Access-Control-Max-Age': '86400',
+                },
+            });
+        }
+        if (context.request.method !== 'GET') {
             return new Response('Method Not Allowed', { status: 405 });
         }
         return handler(context);
@@ -231,6 +252,7 @@ const STATIC_ROUTES = new Map([
     ['/api/bing/wallpaper',                [checkDatabaseConfig, onBingWallpaperRequest]],
     ['/api/huggingface/getUploadUrl',      [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)]],
     ['/api/huggingface/commitUpload',      [checkDatabaseConfig, postOnly(onHfCommitPost)]],
+    ['/api/directoryTree',                 [checkDatabaseConfig, getOnly(onDirectoryTreeGet)]],
     ['/upload/chunkStatus',                [checkDatabaseConfig, onChunkStatusRequest]],
 ]);
 

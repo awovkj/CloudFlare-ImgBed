@@ -6,7 +6,7 @@
   var treeCache = null;
   var treeCacheAt = 0;
   var treeCacheTtl = 60 * 1000;
-  var activePicker = null;
+  var activeDropdown = null;
   var observer = null;
   var enhanceScheduled = false;
 
@@ -41,13 +41,11 @@
   function resolveLiveInput(input) {
     if (!input) return null;
     if (document.contains(input)) return input;
-
     var wrapper = input.closest && input.closest('.el-input');
     if (wrapper && document.contains(wrapper)) {
       var nestedInput = wrapper.querySelector('input');
       if (nestedInput) return nestedInput;
     }
-
     return null;
   }
 
@@ -85,20 +83,17 @@
     }
     var apiUrl = TREE_API_URL;
     var pageAuthCode = new URLSearchParams(window.location.search).get('authCode');
-    if (pageAuthCode) {
-      apiUrl += '&authCode=' + encodeURIComponent(pageAuthCode);
-    }
-    // Also try cookie-based authCode
     var cookieMatch = document.cookie.match(/(^| )authCode=([^;]+)/);
-    if (!pageAuthCode && cookieMatch) {
-      apiUrl += '&authCode=' + encodeURIComponent(decodeURIComponent(cookieMatch[2]));
+    var authCode = pageAuthCode || (cookieMatch ? decodeURIComponent(cookieMatch[2]) : '');
+    if (authCode) {
+      apiUrl += '&authCode=' + encodeURIComponent(authCode);
     }
     return fetch(apiUrl, {
       method: 'GET',
       credentials: 'same-origin',
       headers: {
         Accept: 'application/json',
-        authCode: (pageAuthCode || (cookieMatch ? decodeURIComponent(cookieMatch[2]) : ''))
+        authCode: authCode
       }
     }).then(function (response) {
       if (!response.ok) {
@@ -120,13 +115,94 @@
     });
   }
 
-  function closePicker() {
-    if (!activePicker) return;
-    var overlay = activePicker.overlay;
-    activePicker = null;
-    if (overlay && overlay.parentNode) {
-      overlay.parentNode.removeChild(overlay);
+  // ── Inline dropdown (for homepage .upload-folder) ──
+
+  function closeDropdown() {
+    if (!activeDropdown) return;
+    var el = activeDropdown.el;
+    activeDropdown = null;
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
     }
+  }
+
+  function buildDropdownItem(node, depth, onSelect) {
+    var item = createElement('div', 'cfbed-dd-item');
+    item.style.paddingLeft = (8 + depth * 16) + 'px';
+    var icon = createElement('span', 'cfbed-dd-icon', '📁');
+    var label = createElement('span', 'cfbed-dd-label', node.title || node.label || node.name || '');
+    item.appendChild(icon);
+    item.appendChild(label);
+
+    var cleanPath = normalizeNodePath(node.path || node.value || node.key || '');
+    item.addEventListener('click', function (e) {
+      e.stopPropagation();
+      onSelect(cleanPath);
+    });
+
+    var fragment = document.createDocumentFragment();
+    fragment.appendChild(item);
+
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      node.children.forEach(function (child) {
+        fragment.appendChild(buildDropdownItem(child, depth + 1, onSelect));
+      });
+    }
+
+    return fragment;
+  }
+
+  function openDropdown(anchor, onSelect, currentValue) {
+    closeDropdown();
+
+    var dropdown = createElement('div', 'cfbed-dd');
+    var list = createElement('div', 'cfbed-dd-list');
+
+    // Root option
+    var rootItem = createElement('div', 'cfbed-dd-item cfbed-dd-root');
+    rootItem.appendChild(createElement('span', 'cfbed-dd-icon', '🏠'));
+    rootItem.appendChild(createElement('span', 'cfbed-dd-label', '根目录 /'));
+    rootItem.addEventListener('click', function (e) {
+      e.stopPropagation();
+      onSelect('');
+    });
+    list.appendChild(rootItem);
+
+    // Loading state
+    var loading = createElement('div', 'cfbed-dd-msg', '加载中...');
+    list.appendChild(loading);
+
+    dropdown.appendChild(list);
+
+    // Position below anchor
+    var rect = anchor.getBoundingClientRect();
+    dropdown.style.position = 'fixed';
+    dropdown.style.top = (rect.bottom + 4) + 'px';
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.width = Math.max(rect.width, 200) + 'px';
+
+    document.body.appendChild(dropdown);
+    activeDropdown = { el: dropdown };
+
+    fetchTree().then(function (nodes) {
+      list.removeChild(loading);
+      if (!nodes.length) {
+        list.appendChild(createElement('div', 'cfbed-dd-msg', '暂无目录'));
+        return;
+      }
+      nodes.forEach(function (node) {
+        list.appendChild(buildDropdownItem(node, 0, onSelect));
+      });
+    }).catch(function () {
+      list.removeChild(loading);
+      list.appendChild(createElement('div', 'cfbed-dd-msg', '加载失败'));
+    });
+  }
+
+  // ── Modal picker (for settings/move dialogs) ──
+
+  function closePicker() {
+    closeDropdown();
   }
 
   function buildTreeItem(node, state, onSelect) {
@@ -139,15 +215,15 @@
     var expanded = !!state.expanded[cleanPath];
     var isSelected = state.selected === cleanPath;
 
-    var toggle = createElement('span', 'cfbed-tree-toggle' + (hasChildren ? '' : ' is-empty'), hasChildren ? (expanded ? '▾' : '▸') : '');
-    var icon = createElement('span', 'cfbed-tree-icon', hasChildren ? (expanded ? '📂' : '📁') : '📁');
+    var toggle = createElement('span', 'cfbed-tree-toggle' + (hasChildren ? '' : ' is-empty'), hasChildren ? (expanded ? '▾' : '▸') : '·');
     var label = createElement('span', 'cfbed-tree-label', node.title || node.label || node.name || cleanPath || '未命名目录');
+    var path = createElement('span', 'cfbed-tree-path', normalizeForInput(cleanPath));
 
     if (isSelected) item.classList.add('is-selected');
 
-    if (hasChildren) line.appendChild(toggle);
-    line.appendChild(icon);
+    line.appendChild(toggle);
     line.appendChild(label);
+    line.appendChild(path);
     line.addEventListener('click', function () {
       state.selected = cleanPath;
       if (hasChildren) {
@@ -181,8 +257,6 @@
 
     var overlay = createElement('div', 'cfbed-tree-overlay');
     var dialog = createElement('div', 'cfbed-tree-dialog');
-
-    // Header
     var header = createElement('div', 'cfbed-tree-header');
     var title = createElement('div', 'cfbed-tree-title', options.title || '选择目录');
     var closeButton = createElement('button', 'cfbed-tree-close', '×');
@@ -190,7 +264,6 @@
     header.appendChild(title);
     header.appendChild(closeButton);
 
-    // Manual input area
     var inputArea = createElement('div', 'cfbed-tree-input-area');
     var manualInput = document.createElement('input');
     manualInput.type = 'text';
@@ -199,10 +272,7 @@
     manualInput.value = normalizeForInput(options.initialPath || '');
     inputArea.appendChild(manualInput);
 
-    // Scrollable tree content
     var content = createElement('div', 'cfbed-tree-content');
-
-    // Footer
     var footer = createElement('div', 'cfbed-tree-footer');
     var cancelButton = createElement('button', 'cfbed-tree-action is-secondary', '取消');
     var confirmButton = createElement('button', 'cfbed-tree-action is-primary', '确定');
@@ -223,11 +293,9 @@
 
     function renderTree(nodes) {
       content.innerHTML = '';
-
-      // Root directory option
       var rootButton = createElement('button', 'cfbed-tree-root' + (!state.selected ? ' is-selected' : ''));
       rootButton.type = 'button';
-      rootButton.innerHTML = '<span class="cfbed-tree-icon">🏠</span><span>根目录 /</span>';
+      rootButton.innerHTML = '<span class="cfbed-dd-icon">🏠</span><span>根目录 /</span>';
       rootButton.addEventListener('click', function () {
         state.selected = '';
         syncInputToState();
@@ -236,7 +304,7 @@
       content.appendChild(rootButton);
 
       if (!nodes.length) {
-        content.appendChild(createElement('div', 'cfbed-tree-empty', '暂无已有目录，可直接输入新目录路径'));
+        content.appendChild(createElement('div', 'cfbed-tree-empty', '暂无已有目录，可直接输入'));
         return;
       }
 
@@ -250,12 +318,9 @@
     }
 
     state.rerender = function () {
-      if (treeCache) {
-        renderTree(treeCache);
-      }
+      if (treeCache) renderTree(treeCache);
     };
 
-    // Assemble dialog
     dialog.appendChild(header);
     dialog.appendChild(inputArea);
     dialog.appendChild(content);
@@ -263,43 +328,35 @@
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    activePicker = { overlay: overlay };
+    activeDropdown = { el: overlay };
 
-    content.appendChild(createElement('div', 'cfbed-tree-loading', '加载中...'));
+    content.appendChild(createElement('div', 'cfbed-dd-msg', '加载中...'));
 
-    // Events
     closeButton.addEventListener('click', closePicker);
     cancelButton.addEventListener('click', closePicker);
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) closePicker();
     });
-
-    // Manual input changes update selection
     manualInput.addEventListener('input', function () {
       state.selected = normalizeNodePath(manualInput.value);
     });
-
     confirmButton.addEventListener('click', function () {
       var value = manualInput.value.trim();
-      if (!value || value === '/') {
-        options.onConfirm('/');
-      } else {
-        options.onConfirm(normalizeForInput(value));
-      }
+      options.onConfirm(!value || value === '/' ? '/' : normalizeForInput(value));
       closePicker();
     });
 
-    // Load tree
     fetchTree().then(function (nodes) {
       renderTree(nodes);
     }).catch(function () {
       content.innerHTML = '';
-      content.appendChild(createElement('div', 'cfbed-tree-empty', '目录列表加载失败，请直接输入目录路径'));
+      content.appendChild(createElement('div', 'cfbed-dd-msg', '目录列表加载失败，请直接输入'));
     });
 
-    // Focus the input
     setTimeout(function () { manualInput.focus(); manualInput.select(); }, 50);
   }
+
+  // ── Enhance non-homepage inputs (settings, move dialogs) ──
 
   function insertTrigger(input, options) {
     if (!input || input.dataset[STYLE_HOOK]) return;
@@ -319,7 +376,7 @@
       return;
     }
 
-    // Homepage upload-folder input is handled by event delegation, skip it here
+    // Homepage upload-folder input is handled by event delegation
     var isHomepageFolder = wrapper.classList && wrapper.classList.contains('upload-folder');
     if (isHomepageFolder) {
       input.dataset[STYLE_HOOK] = 'true';
@@ -339,11 +396,9 @@
     var container = createElement('div', 'cfbed-tree-inline-trigger');
     var button = createTriggerButton(options.buttonText || '目录树选择');
     container.appendChild(button);
-
     if (options.helperText) {
       container.appendChild(createElement('div', 'cfbed-tree-inline-helper', options.helperText));
     }
-
     wrapper.parentElement.insertBefore(container, wrapper.nextSibling);
     input.dataset[STYLE_HOOK] = 'true';
     bindTrigger(button, input, options);
@@ -354,7 +409,7 @@
     candidates.forEach(function (input) {
       insertTrigger(input, {
         title: '选择上传目录',
-        subtitle: '选择目录后将自动填充到上传目录输入框。',
+        subtitle: '选择目录后将自动填充。',
         buttonText: '选择上传目录',
         helperText: '可视化浏览已有目录，选择后会自动填充到上传目录输入框。'
       });
@@ -395,35 +450,46 @@
 
   function shouldProcessMutations(mutations) {
     return mutations.some(function (mutation) {
-      if (!mutation.addedNodes || mutation.addedNodes.length === 0) {
-        return false;
-      }
+      if (!mutation.addedNodes || mutation.addedNodes.length === 0) return false;
       return Array.prototype.some.call(mutation.addedNodes, function (node) {
         return node && node.nodeType === 1;
       });
     });
   }
 
-  // Event delegation: clicking on the homepage .upload-folder input opens the picker
+  // ── Event delegation for homepage .upload-folder ──
+
   function initHomepageFolderDelegate() {
     document.addEventListener('click', function (event) {
-      if (activePicker) return;
+      // Close dropdown if clicking outside
+      if (activeDropdown && activeDropdown.el && !activeDropdown.el.classList.contains('cfbed-tree-overlay')) {
+        var ddEl = activeDropdown.el;
+        if (!ddEl.contains(event.target)) {
+          var folderWrapper = event.target.closest && event.target.closest('.upload-folder');
+          if (!folderWrapper) {
+            closeDropdown();
+            return;
+          }
+        }
+      }
+
       var target = event.target;
       var folderWrapper = target.closest && target.closest('.upload-folder');
       if (!folderWrapper) return;
       if (!folderWrapper.classList.contains('el-input')) return;
+
+      // If dropdown already open, don't reopen
+      if (activeDropdown && activeDropdown.el && activeDropdown.el.classList.contains('cfbed-dd')) return;
+
       event.preventDefault();
       event.stopPropagation();
+
       var input = folderWrapper.querySelector('input');
-      openPicker({
-        title: '选择上传目录',
-        subtitle: '选择目录后将自动填充。',
-        initialPath: getInputValue(input),
-        onConfirm: function (value) {
-          var liveInput = folderWrapper.querySelector('input') || input;
-          setNativeInputValue(liveInput, value);
-        }
-      });
+      openDropdown(folderWrapper, function (path) {
+        var liveInput = folderWrapper.querySelector('input') || input;
+        setNativeInputValue(liveInput, normalizeForInput(path));
+        closeDropdown();
+      }, getInputValue(input));
     }, true);
   }
 
@@ -449,7 +515,7 @@
 
   window.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') {
-      closePicker();
+      closeDropdown();
     }
   });
 
