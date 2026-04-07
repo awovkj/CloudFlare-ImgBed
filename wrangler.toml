@@ -8,6 +8,15 @@ main               = "src/worker.js"
 compatibility_date = "2025-01-01"
 workers_dev        = true
 
+# 性能优化：启用更激进的 TCP 连接复用
+# 文档：https://developers.cloudflare.com/workers/configuration/compatibility-dates/
+compatibility_flags = ["fetcher_no_external_redirect"]
+
+# 性能优化：增加 CPU 毫秒限制，提升大文件处理能力
+# 文档：https://developers.cloudflare.com/workers/platform/limits/#cpu-milliseconds
+[limits]
+cpu_ms = 30
+
 # Dashboard 手动配置的绑定不会被下次部署覆盖
 keep_vars = true
 

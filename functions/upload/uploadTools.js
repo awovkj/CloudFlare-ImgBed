@@ -2,6 +2,7 @@ import { fetchSecurityConfig } from "../utils/sysConfig";
 import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../utils/purgeCache";
 import { addFileToIndex } from "../utils/indexManager.js";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { resolveHfChannelConfig } from '../utils/sysConfig.js';
 
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -94,6 +95,8 @@ export function sanitizeUploadFolder(folder) {
     }
 
     normalizedFolder = normalizedFolder.replace(/\.\./g, '_');
+    // 新增：将单独的 . 路径段替换为 _（例如 /./）
+    normalizedFolder = normalizedFolder.split('/').map(seg => seg === '.' ? '_' : seg).join('/');
     normalizedFolder = normalizedFolder.replace(/\\/g, '/');
     normalizedFolder = normalizedFolder.replace(/\/{2,}/g, '/');
     normalizedFolder = normalizedFolder.replace(/^\/+/, '').replace(/\/+$/, '');
