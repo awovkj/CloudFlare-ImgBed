@@ -79,6 +79,7 @@ export async function onRequest(context) {  // Contents of context object
 // 通用文件上传处理函数
 async function processFileUpload(context, formdata = null) {
     const { request, url } = context;
+    const HUGGINGFACE_DIRECT_THRESHOLD = 20 * 1024 * 1024;
 
     // 解析表单数据
     formdata = formdata || await request.formData();
@@ -186,7 +187,12 @@ async function processFileUpload(context, formdata = null) {
     const res = await dispatcher(context, fullId, metadata, returnLink);
 
     // External 渠道不支持自动重试
-    if (res.status === 200 || !autoRetry || uploadChannel === 'External') {
+    if (
+        res.status === 200 ||
+        !autoRetry ||
+        uploadChannel === 'External' ||
+        (uploadChannel === 'HuggingFace' && res.status === 413 && fileSizeBytes >= HUGGINGFACE_DIRECT_THRESHOLD)
+    ) {
         return res;
     }
 
@@ -583,6 +589,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
 async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
     const { env, waitUntil, uploadConfig, formdata, specifiedChannelName } = context;
     const db = getDatabase(env);
+    const HUGGINGFACE_DIRECT_THRESHOLD = 20 * 1024 * 1024;
 
     // 获取 HuggingFace 渠道配置
     const hfSettings = uploadConfig.huggingface;
@@ -599,6 +606,20 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
 
     const file = formdata.get('file');
     const fileName = metadata.FileName;
+
+    if (file.size >= HUGGINGFACE_DIRECT_THRESHOLD) {
+        return createUploadJsonResponse({
+            error: 'HuggingFace large files must use the direct upload flow',
+            requiresDirectUpload: true,
+            channel: 'HuggingFace',
+            thresholdBytes: HUGGINGFACE_DIRECT_THRESHOLD,
+            endpoints: {
+                getUploadUrl: '/api/huggingface/getUploadUrl',
+                commitUpload: '/api/huggingface/commitUpload'
+            }
+        }, 413);
+    }
+
     // 获取前端预计算的 SHA256（如果有）
     const precomputedSha256 = formdata.get('sha256') || null;
     // 构建文件路径：直接使用 fullId（与其他渠道保持一致）
