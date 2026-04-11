@@ -481,7 +481,7 @@
             content.style.display = 'none';
 
             try {
-                const response = await fetch('/api/manage/stats', {
+                const response = await fetch('/api/site/storage-overview', {
                     signal: statsAbortController.signal,
                     cache: 'no-store'
                 });

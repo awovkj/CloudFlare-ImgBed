@@ -253,6 +253,8 @@ const STATIC_ROUTES = new Map([
     ['/api/huggingface/getUploadUrl',      [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)]],
     ['/api/huggingface/commitUpload',      [checkDatabaseConfig, postOnly(onHfCommitPost)]],
     ['/api/directoryTree',                 [checkDatabaseConfig, getOnly(onDirectoryTreeGet)]],
+    ['/api/site/storage-overview',         [checkDatabaseConfig, getOnly(onManageStatsRequest)]],
+    ['/api/site/storage-panel',            [checkDatabaseConfig, getOnly(onManageSysConfigShowStats)]],
     ['/upload/chunkStatus',                [checkDatabaseConfig, onChunkStatusRequest]],
 ]);
 

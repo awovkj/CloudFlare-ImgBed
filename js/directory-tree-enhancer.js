@@ -2,7 +2,7 @@
   'use strict';
 
   var TREE_API_URL = '/api/directoryTree?cacheTime=60';
-  var STYLE_HOOK = 'cfbed-tree-enhancer';
+  var STYLE_HOOK = 'cfbedTreeEnhancer';
   var treeCache = null;
   var treeCacheAt = 0;
   var treeCacheTtl = 60 * 1000;
