@@ -90,6 +90,13 @@ export async function getOthersConfig(db, env) {
         fixed: false,
     }
 
+    // Chat 页面
+    const kvChatPage = settingsKV.chatPage || {}
+    settings.chatPage = {
+        enabled: kvChatPage.enabled ?? false,
+        fixed: false,
+    }
+
     // 音乐播放器
     const kvMusicPlayer = settingsKV.musicPlayer || {}
     settings.musicPlayer = {

@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat Transfer</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --qq-blue:#12b7f5;
+  --qq-blue-deep:#0b9fe0;
+  --qq-blue-soft:rgba(18,183,245,0.14);
+  --qq-sky:#6dd6ff;
+  --qq-navy:#3b4e68;
+  --qq-bg:#eaf4ff;
+  --qq-bg-strong:#dbeeff;
+  --qq-panel:rgba(255,255,255,0.78);
+  --qq-panel-strong:rgba(255,255,255,0.92);
+  --qq-panel-soft:rgba(255,255,255,0.64);
+  --qq-border:rgba(106,154,200,0.22);
+  --qq-border-strong:rgba(18,183,245,0.28);
+  --qq-text:#1f2f46;
+  --qq-text-muted:rgba(31,47,70,0.7);
+  --qq-text-dim:rgba(31,47,70,0.48);
+  --qq-success:#1fbf84;
+  --qq-warning:#ff9f43;
+  --qq-danger:#ff5c5c;
+  --shadow-xs:0 8px 20px rgba(61,103,155,0.08);
+  --shadow-sm:0 18px 40px rgba(61,103,155,0.1);
+  --shadow-md:0 28px 72px rgba(61,103,155,0.14);
+  --shadow-lg:0 40px 110px rgba(61,103,155,0.16);
+  --radius-sm:14px;
+  --radius-md:18px;
+  --radius-lg:24px;
+  --radius-xl:30px;
+  --radius-full:9999px;
+  --ease:cubic-bezier(0.22,1,0.36,1);
+}
+html{background:var(--qq-bg);color-scheme:light}
+body{
+  min-height:100vh;
+  font-family:-apple-system,"SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--qq-text);
+  background:
+    radial-gradient(circle at 10% 8%,rgba(109,214,255,0.34),transparent 24%),
+    radial-gradient(circle at 86% 12%,rgba(18,183,245,0.18),transparent 22%),
+    radial-gradient(circle at 50% 100%,rgba(255,255,255,0.92),transparent 34%),
+    linear-gradient(180deg,#f4faff 0%,#ebf5ff 48%,#e4f1ff 100%);
+  padding:22px;
+}
+body::before,
+body::after{
+  content:"";
+  position:fixed;
+  width:40vw;
+  height:40vw;
+  border-radius:50%;
+  filter:blur(96px);
+  opacity:.28;
+  pointer-events:none;
+}
+body::before{left:-12vw;top:-14vw;background:#8adfff}
+body::after{right:-12vw;bottom:-14vw;background:#7fcfff}
+
+.app-shell{
+  width:min(1500px,100%);
+  min-height:calc(100vh - 44px);
+  margin:0 auto;
+  border-radius:34px;
+  overflow:hidden;
+  border:1px solid var(--qq-border);
+  background:linear-gradient(180deg,rgba(255,255,255,0.75),rgba(255,255,255,0.58));
+  backdrop-filter:blur(26px);
+  -webkit-backdrop-filter:blur(26px);
+  box-shadow:var(--shadow-lg);
+}
+
+.loading,.empty-state{
+  min-height:calc(100vh - 44px);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  text-align:center;
+  padding:48px 26px;
+  color:var(--qq-text-muted);
+}
+.loading-spinner{
+  width:54px;
+  height:54px;
+  border-radius:50%;
+  border:4px solid rgba(18,183,245,0.14);
+  border-top-color:var(--qq-blue);
+  animation:spin .8s linear infinite;
+  box-shadow:0 0 0 10px rgba(255,255,255,0.38);
+}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.empty-state .icon{font-size:52px;opacity:.72}
+.empty-state p,.loading p{font-size:18px;font-weight:700;color:var(--qq-text)}
+.empty-state .hint{font-size:13px;line-height:1.7;max-width:420px;color:var(--qq-text-muted)}
+
+.auth-card{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:10px;
+}
+.auth-card input{
+  width:min(240px,100%);
+  height:46px;
+  padding:0 14px;
+  border:1px solid var(--qq-border);
+  border-radius:14px;
+  background:rgba(255,255,255,0.92);
+  color:var(--qq-text);
+  font-size:14px;
+  outline:none;
+}
+.auth-card button,.primary-btn,.secondary-btn,.danger-btn,.icon-btn,.attach-btn,.send-btn{
+  border:none;
+  cursor:pointer;
+  transition:transform .2s var(--ease),box-shadow .2s var(--ease),background .2s var(--ease),border-color .2s var(--ease),opacity .2s var(--ease);
+}
+.auth-card button,.primary-btn,.send-btn{
+  color:#fff;
+  background:linear-gradient(135deg,var(--qq-blue),var(--qq-blue-deep));
+  box-shadow:0 18px 34px rgba(18,183,245,0.22);
+}
+.auth-card button:hover,.primary-btn:hover,.send-btn:hover{transform:translateY(-2px)}
+.auth-card button,.primary-btn,.secondary-btn,.danger-btn{height:42px;padding:0 16px;border-radius:14px;font-size:13px;font-weight:700}
+.secondary-btn,.icon-btn,.attach-btn{
+  background:rgba(255,255,255,0.78);
+  border:1px solid var(--qq-border);
+  color:var(--qq-text-muted);
+  box-shadow:var(--shadow-xs);
+}
+.secondary-btn:hover,.icon-btn:hover,.attach-btn:hover{transform:translateY(-2px);background:var(--qq-panel-strong);color:var(--qq-text)}
+.danger-btn{
+  background:rgba(255,92,92,0.1);
+  color:#da4b4b;
+  border:1px solid rgba(255,92,92,0.14);
+}
+.danger-btn:hover{transform:translateY(-2px);background:rgba(255,92,92,0.14)}
+button:disabled{opacity:.55;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+
+.chat-layout{
+  display:grid;
+  grid-template-columns:320px minmax(0,1fr);
+  min-height:calc(100vh - 44px);
+}
+
+.sidebar{
+  border-right:1px solid var(--qq-border);
+  background:linear-gradient(180deg,rgba(255,255,255,0.58),rgba(255,255,255,0.48));
+  padding:24px 18px;
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+.brand-card,
+.panel-card,
+.status-card,
+.history-summary{
+  background:var(--qq-panel);
+  border:1px solid rgba(255,255,255,0.66);
+  border-radius:24px;
+  box-shadow:var(--shadow-sm);
+}
+.brand-card{
+  padding:20px 18px;
+  display:flex;
+  gap:14px;
+  align-items:flex-start;
+}
+.brand-avatar{
+  width:54px;
+  height:54px;
+  border-radius:18px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:linear-gradient(135deg,var(--qq-blue),#62d6ff);
+  color:#fff;
+  font-size:24px;
+  box-shadow:0 18px 38px rgba(18,183,245,0.26);
+}
+.brand-copy h1{font-size:24px;letter-spacing:-.03em}
+.brand-copy p{margin-top:8px;font-size:13px;line-height:1.7;color:var(--qq-text-muted)}
+.sidebar-label{
+  font-size:12px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.12em;
+  color:var(--qq-text-dim);
+}
+.panel-card{padding:16px}
+.channel-row{display:flex;flex-direction:column;gap:10px}
+.channel-select,.composer textarea{
+  width:100%;
+  border:1px solid var(--qq-border);
+  border-radius:16px;
+  background:rgba(255,255,255,0.9);
+  color:var(--qq-text);
+  outline:none;
+}
+.channel-select{
+  height:46px;
+  padding:0 14px;
+  font-size:14px;
+}
+.channel-select:focus,.composer textarea:focus{border-color:var(--qq-border-strong);box-shadow:0 0 0 4px rgba(18,183,245,0.08)}
+.sidebar-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.sidebar-actions .danger-btn{grid-column:1/-1}
+
+.status-card{padding:16px}
+.status-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.status-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:8px 12px;
+  border-radius:var(--radius-full);
+  font-size:12px;
+  font-weight:700;
+  background:rgba(255,255,255,0.72);
+  border:1px solid var(--qq-border);
+}
+.status-chip::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.status-chip.idle{color:var(--qq-success)}
+.status-chip.loading{color:var(--qq-blue)}
+.status-chip.warning{color:var(--qq-warning)}
+.status-chip.error{color:var(--qq-danger)}
+.status-text{margin-top:10px;font-size:13px;line-height:1.7;color:var(--qq-text-muted);min-height:42px}
+.progress-wrap{margin-top:10px;display:none}
+.progress-wrap.show{display:block}
+.progress-track{width:100%;height:10px;border-radius:999px;background:rgba(18,183,245,0.1);overflow:hidden}
+.progress-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--qq-blue),#7bdeff);border-radius:999px;transition:width .2s var(--ease)}
+.progress-caption{margin-top:8px;font-size:12px;color:var(--qq-text-dim)}
+
+.history-summary{padding:16px;display:grid;grid-template-columns:1fr;gap:12px}
+.stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.stat-pill{
+  border-radius:18px;
+  padding:14px 12px;
+  background:rgba(255,255,255,0.72);
+  border:1px solid var(--qq-border);
+}
+.stat-pill span{display:block;font-size:12px;color:var(--qq-text-dim)}
+.stat-pill strong{display:block;margin-top:6px;font-size:22px;letter-spacing:-.03em}
+.summary-hint{font-size:12px;line-height:1.7;color:var(--qq-text-muted)}
+
+.main-pane{
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr) auto;
+  min-width:0;
+  background:linear-gradient(180deg,rgba(255,255,255,0.24),rgba(255,255,255,0.12));
+}
+.topbar{
+  padding:20px 22px 16px;
+  border-bottom:1px solid rgba(106,154,200,0.16);
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:16px;
+  background:rgba(255,255,255,0.28);
+}
+.topbar-copy h2{font-size:28px;letter-spacing:-.04em}
+.topbar-copy p{margin-top:8px;font-size:13px;line-height:1.7;color:var(--qq-text-muted)}
+.topbar-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.meta-pill{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  border-radius:var(--radius-full);
+  background:rgba(255,255,255,0.8);
+  border:1px solid var(--qq-border);
+  font-size:12px;
+  color:var(--qq-text-muted);
+}
+.meta-pill strong{font-size:13px;color:var(--qq-text)}
+
+.message-scroll{
+  min-height:0;
+  overflow:auto;
+  padding:24px 26px 20px;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+.message-scroll::-webkit-scrollbar{width:7px}
+.message-scroll::-webkit-scrollbar-thumb{background:rgba(72,129,182,0.22);border-radius:999px}
+.timeline-tip{
+  align-self:center;
+  padding:8px 14px;
+  border-radius:var(--radius-full);
+  font-size:12px;
+  color:var(--qq-text-dim);
+  background:rgba(255,255,255,0.62);
+  border:1px solid rgba(106,154,200,0.12);
+}
+.message-row{display:flex;justify-content:flex-end}
+.message-card{
+  max-width:min(72%,780px);
+  border-radius:22px 22px 6px 22px;
+  padding:14px 16px 12px;
+  background:linear-gradient(135deg,rgba(18,183,245,0.16),rgba(109,214,255,0.18));
+  border:1px solid rgba(18,183,245,0.14);
+  box-shadow:var(--shadow-xs);
+}
+.message-card.file{background:linear-gradient(135deg,rgba(255,255,255,0.88),rgba(233,246,255,0.92));border-color:rgba(106,154,200,0.18)}
+.message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:11px;color:var(--qq-text-dim)}
+.message-channel{display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--qq-blue-deep)}
+.message-channel::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.message-time{white-space:nowrap}
+.message-text{
+  font-size:14px;
+  line-height:1.8;
+  color:var(--qq-text);
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.file-card-link{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-decoration:none;
+  color:inherit;
+}
+.file-icon{
+  flex:none;
+  width:44px;
+  height:44px;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--qq-blue-soft);
+  color:var(--qq-blue-deep);
+  font-size:20px;
+}
+.file-copy{min-width:0;display:flex;flex-direction:column;gap:5px}
+.file-name{font-size:14px;font-weight:700;color:var(--qq-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-desc{font-size:12px;color:var(--qq-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.message-card.file:hover{transform:translateY(-2px)}
+.empty-chat{
+  margin:auto 0;
+  padding:34px 26px;
+  border-radius:26px;
+  text-align:center;
+  background:rgba(255,255,255,0.5);
+  border:1px dashed rgba(106,154,200,0.24);
+  color:var(--qq-text-muted);
+}
+.empty-chat .icon{font-size:54px;display:block;margin-bottom:10px;opacity:.66}
+.empty-chat p{font-size:18px;font-weight:700;color:var(--qq-text)}
+.empty-chat .hint{margin-top:8px;font-size:13px;line-height:1.7}
+
+.composer-wrap{
+  border-top:1px solid rgba(106,154,200,0.16);
+  padding:18px 22px 22px;
+  background:rgba(255,255,255,0.4);
+}
+.composer{
+  background:var(--qq-panel-strong);
+  border:1px solid rgba(255,255,255,0.7);
+  border-radius:28px;
+  box-shadow:var(--shadow-md);
+  padding:16px;
+}
+.composer textarea{
+  min-height:114px;
+  resize:none;
+  padding:14px 16px;
+  font-size:15px;
+  line-height:1.75;
+}
+.composer-toolbar{
+  margin-top:14px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:12px;
+  align-items:center;
+}
+.toolbar-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.toolbar-right{display:flex;align-items:center;gap:10px;justify-content:flex-end}
+.attach-btn,.icon-btn,.send-btn{
+  height:44px;
+  padding:0 16px;
+  border-radius:16px;
+  font-size:13px;
+  font-weight:700;
+}
+.attach-btn input{display:none}
+.send-btn{min-width:124px}
+.composer-hint{font-size:12px;color:var(--qq-text-dim);line-height:1.7}
+.queue-list{margin-top:12px;display:none;flex-direction:column;gap:8px}
+.queue-list.show{display:flex}
+.queue-item{
+  padding:10px 12px;
+  border-radius:16px;
+  background:rgba(18,183,245,0.08);
+  border:1px solid rgba(18,183,245,0.12);
+  font-size:12px;
+  color:var(--qq-text-muted);
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+}
+.queue-item strong{color:var(--qq-text);font-size:13px}
+
+@media(max-width:1120px){
+  .chat-layout{grid-template-columns:1fr}
+  .sidebar{border-right:none;border-bottom:1px solid var(--qq-border)}
+}
+@media(max-width:720px){
+  body{padding:0}
+  .app-shell{min-height:100vh;border-radius:0;border-left:none;border-right:none}
+  .topbar,.composer-wrap,.message-scroll{padding-left:16px;padding-right:16px}
+  .sidebar{padding:16px}
+  .topbar{flex-direction:column;align-items:flex-start}
+  .topbar-meta{justify-content:flex-start}
+  .message-card{max-width:100%}
+  .composer-toolbar{grid-template-columns:1fr}
+  .toolbar-right{justify-content:flex-start}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+</style>
+</head>
+<body>
+<div class="app-shell" id="app">
+  <div class="loading" id="loadingState">
+    <div class="loading-spinner"></div>
+    <p>Loading...</p>
+  </div>
+</div>
+
+<script>
+(function(){
+  const SETTINGS_KEY = 'chatPageSettings';
+  const DEFAULT_CHUNK_SIZE = 18 * 1024 * 1024;
+  const state = {
+    channels: [],
+    selectedChannel: '',
+    items: [],
+    chunkSizeBytes: DEFAULT_CHUNK_SIZE,
+    busy: false,
+    statusText: '准备就绪，可发送文本或文件。',
+    statusTone: 'idle',
+    progress: 0,
+    queue: []
+  };
+
+  const ui = {
+    app: document.getElementById('app'),
+    loadingState: document.getElementById('loadingState')
+  };
+
+  function getAuthCode() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('authCode') || '';
+  }
+
+  function escHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str == null ? '' : String(str);
+    return d.innerHTML;
+  }
+
+  function getAuthHeaders(headers) {
+    const finalHeaders = headers ? { ...headers } : {};
+    const authCode = getAuthCode();
+    if (authCode) finalHeaders.authCode = authCode;
+    return finalHeaders;
+  }
+
+  function withAuthUrl(path) {
+    const authCode = getAuthCode();
+    const url = new URL(path, window.location.origin);
+    if (authCode) url.searchParams.set('authCode', authCode);
+    return url.toString();
+  }
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.selectedChannel === 'string') {
+        state.selectedChannel = parsed.selectedChannel;
+      }
+    } catch {}
+  }
+
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ selectedChannel: state.selectedChannel }));
+    } catch {}
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '--:--';
+    const date = new Date(Number(ts));
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    return hh + ':' + mm;
+  }
+
+  function formatDateTime(ts) {
+    if (!ts) return '--';
+    const date = new Date(Number(ts));
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return month + '-' + day + ' ' + formatTime(ts);
+  }
+
+  function formatSize(value) {
+    const numeric = Number(value);
+    if (!numeric || Number.isNaN(numeric)) return '文本记录';
+    if (numeric < 1) return (numeric * 1024).toFixed(0) + ' KB';
+    if (numeric < 1024) return numeric.toFixed(numeric >= 100 ? 0 : 2) + ' MB';
+    return (numeric / 1024).toFixed(2) + ' GB';
+  }
+
+  function getSummary() {
+    const total = state.items.length;
+    const textCount = state.items.filter(item => item.type === 'text').length;
+    const fileCount = total - textCount;
+    return { total, textCount, fileCount };
+  }
+
+  function setStatus(text, tone, progress) {
+    state.statusText = text;
+    state.statusTone = tone || 'idle';
+    state.progress = typeof progress === 'number' ? progress : 0;
+    syncStatusUi();
+  }
+
+  function setQueue(queue) {
+    state.queue = queue || [];
+    renderQueue();
+  }
+
+  function syncStatusUi() {
+    if (!ui.statusChip) return;
+    ui.statusChip.className = 'status-chip ' + (state.statusTone || 'idle');
+    ui.statusChip.textContent = state.busy ? '处理中' : '在线';
+    ui.statusText.textContent = state.statusText || '';
+    const showProgress = state.progress > 0 && state.progress < 100;
+    ui.progressWrap.classList.toggle('show', showProgress);
+    ui.progressFill.style.width = Math.max(0, Math.min(100, state.progress)) + '%';
+    ui.progressCaption.textContent = showProgress ? ('进度 ' + Math.round(state.progress) + '%') : '';
+  }
+
+  function renderQueue() {
+    if (!ui.queueList) return;
+    if (!state.queue.length) {
+      ui.queueList.classList.remove('show');
+      ui.queueList.innerHTML = '';
+      return;
+    }
+    ui.queueList.classList.add('show');
+    ui.queueList.innerHTML = state.queue.map(item =>
+      '<div class="queue-item"><strong>' + escHtml(item.name) + '</strong><span>' + escHtml(item.status) + '</span></div>'
+    ).join('');
+  }
+
+  function showAuthPrompt() {
+    ui.app.innerHTML =
+      '<div class="empty-state">' +
+        '<div class="icon">🔐</div>' +
+        '<p>需要认证</p>' +
+        '<div class="hint">请输入访问密码后继续使用 Chat 页面。</div>' +
+        '<div class="auth-card">' +
+          '<input type="password" id="authInput" placeholder="密码">' +
+          '<button id="authSubmitBtn">确定</button>' +
+        '</div>' +
+      '</div>';
+    const input = document.getElementById('authInput');
+    const submit = document.getElementById('authSubmitBtn');
+    function applyAuth() {
+      const code = input.value.trim();
+      if (!code) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('authCode', code);
+      window.location.href = url.toString();
+    }
+    input.focus();
+    input.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter') applyAuth();
+    });
+    submit.addEventListener('click', applyAuth);
+  }
+
+  function showDisabledState(message) {
+    ui.app.innerHTML =
+      '<div class="empty-state">' +
+        '<div class="icon">🚫</div>' +
+        '<p>Chat 页面未启用</p>' +
+        '<div class="hint">' + escHtml(message || '请先在后台管理 - 其他设置中开启 Chat 页面。') + '</div>' +
+      '</div>';
+  }
+
+  function showErrorState(message) {
+    ui.app.innerHTML =
+      '<div class="empty-state">' +
+        '<div class="icon">⚠️</div>' +
+        '<p>' + escHtml(message || '加载失败') + '</p>' +
+        '<div class="hint">请检查网络连接，或稍后刷新重试。</div>' +
+      '</div>';
+  }
+
+  async function parseErrorResponse(response) {
+    let message = '';
+    try {
+      const data = await response.clone().json();
+      message = data.error || data.message || '';
+    } catch {}
+    if (!message) {
+      try {
+        message = (await response.text()).trim();
+      } catch {}
+    }
+    return message || ('请求失败（' + response.status + '）');
+  }
+
+  async function authedFetch(url, options) {
+    const opts = { ...(options || {}) };
+    opts.headers = getAuthHeaders(opts.headers || {});
+    const response = await fetch(url, opts);
+    if (response.status === 401) {
+      showAuthPrompt();
+      throw new Error('Unauthorized');
+    }
+    if (response.status === 403) {
+      let message = 'Chat 页面未启用';
+      try {
+        const data = await response.clone().json();
+        message = data.error || message;
+      } catch {
+        message = await parseErrorResponse(response);
+      }
+      showDisabledState(message);
+      throw new Error(message);
+    }
+    return response;
+  }
+
+  function buildUploadUrl(extraParams) {
+    const url = new URL('/upload', window.location.origin);
+    url.searchParams.set('sourceApp', 'chat');
+    url.searchParams.set('recordType', 'chat_transfer');
+    url.searchParams.set('messageType', 'file');
+    url.searchParams.set('uploadFolder', '__chat__');
+    url.searchParams.set('uploadChannel', 'telegram');
+    if (state.selectedChannel) url.searchParams.set('channelName', state.selectedChannel);
+    Object.entries(extraParams || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, value);
+      }
+    });
+    return url.toString();
+  }
+
+  function renderApp() {
+    const summary = getSummary();
+    const hasChannels = state.channels.length > 0;
+    ui.app.innerHTML = `
+      <div class="chat-layout">
+        <aside class="sidebar">
+          <section class="brand-card">
+            <div class="brand-avatar">💬</div>
+            <div class="brand-copy">
+              <h1>Chat</h1>
+              <p>独立传输页，支持 Telegram 文本与文件发送，记录与主页上传完全隔离。</p>
+            </div>
+          </section>
+
+          <section class="panel-card channel-row">
+            <div class="sidebar-label">Telegram 渠道</div>
+            <select class="channel-select" id="channelSelect" ${hasChannels ? '' : 'disabled'}>
+              ${state.channels.map(channel => '<option value="' + escHtml(channel.name) + '" ' + (channel.name === state.selectedChannel ? 'selected' : '') + '>' + escHtml(channel.name || 'default') + '</option>').join('')}
+            </select>
+            <div class="sidebar-actions">
+              <button class="secondary-btn" id="refreshBtn">刷新记录</button>
+              <button class="primary-btn" id="jumpBottomBtn">最新消息</button>
+              <button class="danger-btn" id="clearBtn">清空传输记录</button>
+            </div>
+          </section>
+
+          <section class="status-card">
+            <div class="status-head">
+              <div class="sidebar-label">状态</div>
+              <div class="status-chip ${state.statusTone}">${state.busy ? '处理中' : '在线'}</div>
+            </div>
+            <div class="status-text" id="statusText">${escHtml(state.statusText)}</div>
+            <div class="progress-wrap ${state.progress > 0 && state.progress < 100 ? 'show' : ''}" id="progressWrap">
+              <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:${Math.max(0, Math.min(100, state.progress))}%"></div></div>
+              <div class="progress-caption" id="progressCaption">${state.progress > 0 && state.progress < 100 ? ('进度 ' + Math.round(state.progress) + '%') : ''}</div>
+            </div>
+          </section>
+
+          <section class="history-summary">
+            <div class="sidebar-label">传输统计</div>
+            <div class="stat-grid">
+              <div class="stat-pill"><span>全部记录</span><strong id="statTotal">${summary.total}</strong></div>
+              <div class="stat-pill"><span>文本</span><strong id="statText">${summary.textCount}</strong></div>
+              <div class="stat-pill"><span>文件</span><strong id="statFile">${summary.fileCount}</strong></div>
+              <div class="stat-pill"><span>当前渠道</span><strong id="statChannel">${escHtml(state.selectedChannel || '-') }</strong></div>
+            </div>
+            <div class="summary-hint">仅展示并清理带有 chat 标记的记录，不会影响主页上传文件。</div>
+          </section>
+        </aside>
+
+        <main class="main-pane">
+          <header class="topbar">
+            <div class="topbar-copy">
+              <h2>QQ 风格传输窗口</h2>
+              <p>支持文本发送、文件上传、历史回看与一键清空。Enter 发送，Shift + Enter 换行。</p>
+            </div>
+            <div class="topbar-meta">
+              <div class="meta-pill"><span>渠道</span><strong id="topbarChannel">${escHtml(state.selectedChannel || '未选择')}</strong></div>
+              <div class="meta-pill"><span>分块阈值</span><strong>${escHtml((state.chunkSizeBytes / 1024 / 1024).toFixed(0))} MB</strong></div>
+            </div>
+          </header>
+
+          <section class="message-scroll" id="messageScroll"></section>
+
+          <section class="composer-wrap">
+            <div class="composer">
+              <textarea id="messageInput" placeholder="输入想发送到 Telegram 的文本…" ${hasChannels ? '' : 'disabled'}></textarea>
+              <div class="composer-toolbar">
+                <div class="toolbar-left">
+                  <label class="attach-btn">
+                    选择文件
+                    <input type="file" id="fileInput" multiple ${hasChannels ? '' : 'disabled'}>
+                  </label>
+                  <button class="icon-btn" id="clearInputBtn" ${hasChannels ? '' : 'disabled'}>清空输入</button>
+                  <div class="composer-hint">${hasChannels ? '文件将自动复用现有 /upload 流程，大文件使用分块上传。' : '未检测到 Telegram 渠道，请先在上传设置中配置。'}</div>
+                </div>
+                <div class="toolbar-right">
+                  <button class="send-btn" id="sendBtn" ${hasChannels ? '' : 'disabled'}>发送文本</button>
+                </div>
+              </div>
+              <div class="queue-list" id="queueList"></div>
+            </div>
+          </section>
+        </main>
+      </div>`;
+
+    ui.channelSelect = document.getElementById('channelSelect');
+    ui.refreshBtn = document.getElementById('refreshBtn');
+    ui.jumpBottomBtn = document.getElementById('jumpBottomBtn');
+    ui.clearBtn = document.getElementById('clearBtn');
+    ui.statusChip = ui.app.querySelector('.status-chip');
+    ui.statusText = document.getElementById('statusText');
+    ui.progressWrap = document.getElementById('progressWrap');
+    ui.progressFill = document.getElementById('progressFill');
+    ui.progressCaption = document.getElementById('progressCaption');
+    ui.messageScroll = document.getElementById('messageScroll');
+    ui.messageInput = document.getElementById('messageInput');
+    ui.fileInput = document.getElementById('fileInput');
+    ui.sendBtn = document.getElementById('sendBtn');
+    ui.clearInputBtn = document.getElementById('clearInputBtn');
+    ui.queueList = document.getElementById('queueList');
+    ui.statTotal = document.getElementById('statTotal');
+    ui.statText = document.getElementById('statText');
+    ui.statFile = document.getElementById('statFile');
+    ui.statChannel = document.getElementById('statChannel');
+    ui.topbarChannel = document.getElementById('topbarChannel');
+
+    bindUiEvents();
+    syncStatusUi();
+    renderQueue();
+    renderMessages(true);
+  }
+
+  function bindUiEvents() {
+    ui.channelSelect && ui.channelSelect.addEventListener('change', function() {
+      state.selectedChannel = this.value;
+      saveSettings();
+      if (ui.statChannel) ui.statChannel.textContent = state.selectedChannel || '-';
+      if (ui.topbarChannel) ui.topbarChannel.textContent = state.selectedChannel || '未选择';
+      setStatus('已切换到渠道：' + (state.selectedChannel || 'default'), 'idle', 0);
+    });
+
+    ui.refreshBtn && ui.refreshBtn.addEventListener('click', function() {
+      refreshHistory(true);
+    });
+
+    ui.jumpBottomBtn && ui.jumpBottomBtn.addEventListener('click', function() {
+      scrollToBottom();
+    });
+
+    ui.clearBtn && ui.clearBtn.addEventListener('click', function() {
+      clearHistory();
+    });
+
+    ui.sendBtn && ui.sendBtn.addEventListener('click', function() {
+      sendText();
+    });
+
+    ui.clearInputBtn && ui.clearInputBtn.addEventListener('click', function() {
+      ui.messageInput.value = '';
+      ui.messageInput.focus();
+    });
+
+    ui.messageInput && ui.messageInput.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendText();
+      }
+    });
+
+    ui.fileInput && ui.fileInput.addEventListener('change', function(event) {
+      const files = Array.from(event.target.files || []);
+      if (files.length) uploadFiles(files);
+      event.target.value = '';
+    });
+  }
+
+  function renderMessages(scrollAfterRender) {
+    if (!ui.messageScroll) return;
+    const sortedItems = [...state.items].sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+    if (!sortedItems.length) {
+      ui.messageScroll.innerHTML =
+        '<div class="timeline-tip">当前仅展示 Chat 传输记录</div>' +
+        '<div class="empty-chat">' +
+          '<span class="icon">📭</span>' +
+          '<p>还没有发送记录</p>' +
+          '<div class="hint">发送一条文本或选择文件后，这里会以聊天气泡的形式展示历史记录。</div>' +
+        '</div>';
+    } else {
+      const firstTime = sortedItems[0] ? formatDateTime(sortedItems[0].timestamp) : '--';
+      ui.messageScroll.innerHTML =
+        '<div class="timeline-tip">开始记录 · ' + escHtml(firstTime) + '</div>' +
+        sortedItems.map(renderMessageItem).join('');
+    }
+    const summary = getSummary();
+    if (ui.statTotal) ui.statTotal.textContent = String(summary.total);
+    if (ui.statText) ui.statText.textContent = String(summary.textCount);
+    if (ui.statFile) ui.statFile.textContent = String(summary.fileCount);
+    if (scrollAfterRender) scrollToBottom();
+  }
+
+  function renderMessageItem(item) {
+    const channel = item.channel || state.selectedChannel || 'default';
+    const timeText = formatDateTime(item.timestamp);
+    if (item.type === 'text') {
+      return '<div class="message-row">' +
+        '<div class="message-card text">' +
+          '<div class="message-meta"><span class="message-channel">' + escHtml(channel) + '</span><span class="message-time">' + escHtml(timeText) + '</span></div>' +
+          '<div class="message-text">' + escHtml(item.text || '') + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+    const fileUrl = item.url ? withAuthUrl(item.url) : '#';
+    const fileType = item.fileType || 'unknown';
+    const fileSize = formatSize(item.fileSize);
+    return '<div class="message-row">' +
+      '<div class="message-card file">' +
+        '<div class="message-meta"><span class="message-channel">' + escHtml(channel) + '</span><span class="message-time">' + escHtml(timeText) + '</span></div>' +
+        '<a class="file-card-link" href="' + escHtml(fileUrl) + '" target="_blank" rel="noopener noreferrer">' +
+          '<span class="file-icon">📎</span>' +
+          '<span class="file-copy">' +
+            '<span class="file-name">' + escHtml(item.fileName || '未命名文件') + '</span>' +
+            '<span class="file-desc">' + escHtml(fileType) + ' · ' + escHtml(fileSize) + '</span>' +
+          '</span>' +
+        '</a>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function scrollToBottom() {
+    if (!ui.messageScroll) return;
+    requestAnimationFrame(function() {
+      ui.messageScroll.scrollTop = ui.messageScroll.scrollHeight;
+    });
+  }
+
+  async function loadConfig() {
+    loadSettings();
+    try {
+      const response = await authedFetch('/api/chat/config', { method: 'GET' });
+      if (!response.ok) throw new Error(await parseErrorResponse(response));
+      const data = await response.json();
+      state.channels = Array.isArray(data.channels) ? data.channels : [];
+      state.chunkSizeBytes = Number(data.chunkSizeBytes) || DEFAULT_CHUNK_SIZE;
+      const channelNames = state.channels.map(item => item.name);
+      if (!channelNames.includes(state.selectedChannel)) {
+        state.selectedChannel = data.defaultChannel || channelNames[0] || '';
+      }
+      saveSettings();
+      renderApp();
+      await refreshHistory(false);
+      setStatus(state.channels.length ? '已连接，可开始发送。' : '未配置 Telegram 渠道。', state.channels.length ? 'idle' : 'warning', 0);
+    } catch (error) {
+      if (error.message === 'Unauthorized') return;
+      if (error.message && error.message.indexOf('未启用') !== -1) return;
+      if (ui.app === ui.loadingState?.parentNode || !document.getElementById('channelSelect')) {
+        showErrorState(error.message || '加载失败');
+      } else {
+        setStatus(error.message || '加载配置失败', 'error', 0);
+      }
+    }
+  }
+
+  async function refreshHistory(showStatus) {
+    try {
+      if (showStatus) setStatus('正在刷新传输记录…', 'loading', 0);
+      const response = await authedFetch('/api/chat/history', { method: 'GET' });
+      if (!response.ok) throw new Error(await parseErrorResponse(response));
+      const data = await response.json();
+      state.items = Array.isArray(data.items) ? data.items : [];
+      renderMessages(true);
+      if (showStatus) setStatus('记录已刷新。', 'idle', 0);
+    } catch (error) {
+      if (error.message === 'Unauthorized') return;
+      setStatus(error.message || '刷新记录失败', 'error', 0);
+    }
+  }
+
+  async function sendText() {
+    if (state.busy) return;
+    const text = ui.messageInput.value.trim();
+    if (!text) {
+      setStatus('请输入要发送的文本。', 'warning', 0);
+      ui.messageInput.focus();
+      return;
+    }
+    state.busy = true;
+    ui.sendBtn.disabled = true;
+    setStatus('正在发送文本…', 'loading', 0);
+    try {
+      const response = await authedFetch('/api/chat/sendText', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text, channelName: state.selectedChannel })
+      });
+      if (!response.ok) throw new Error(await parseErrorResponse(response));
+      ui.messageInput.value = '';
+      await refreshHistory(false);
+      setStatus('文本已发送到 Telegram。', 'idle', 0);
+    } catch (error) {
+      if (error.message !== 'Unauthorized') {
+        setStatus(error.message || '文本发送失败', 'error', 0);
+      }
+    } finally {
+      state.busy = false;
+      ui.sendBtn.disabled = false;
+    }
+  }
+
+  async function clearHistory() {
+    if (state.busy) return;
+    if (!window.confirm('确认清空当前 Chat 传输记录吗？这不会影响主页上传文件。')) return;
+    state.busy = true;
+    ui.clearBtn.disabled = true;
+    setStatus('正在清空传输记录…', 'loading', 0);
+    try {
+      const response = await authedFetch('/api/chat/clear', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+      if (!response.ok) throw new Error(await parseErrorResponse(response));
+      const data = await response.json();
+      state.items = [];
+      renderMessages(true);
+      setStatus('已清空 ' + String(data.deletedCount || 0) + ' 条记录。', 'idle', 0);
+    } catch (error) {
+      if (error.message !== 'Unauthorized') {
+        setStatus(error.message || '清空失败', 'error', 0);
+      }
+    } finally {
+      state.busy = false;
+      ui.clearBtn.disabled = false;
+    }
+  }
+
+  async function uploadFiles(files) {
+    if (!files || !files.length) return;
+    if (state.busy) {
+      setStatus('当前仍有任务处理中，请稍后再试。', 'warning', 0);
+      return;
+    }
+    state.busy = true;
+    ui.sendBtn.disabled = true;
+    setQueue(files.map(file => ({ name: file.name, status: '等待上传' })));
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        updateQueueItem(i, '上传中');
+        await uploadSingleFile(file, i, files.length);
+        updateQueueItem(i, '已完成');
+      }
+      await refreshHistory(false);
+      setStatus('文件发送完成。', 'idle', 0);
+    } catch (error) {
+      if (error.message !== 'Unauthorized') {
+        setStatus(error.message || '文件发送失败', 'error', 0);
+      }
+    } finally {
+      state.busy = false;
+      ui.sendBtn.disabled = false;
+      setTimeout(function(){ setQueue([]); }, 1200);
+    }
+  }
+
+  function updateQueueItem(index, status) {
+    if (!state.queue[index]) return;
+    state.queue[index].status = status;
+    renderQueue();
+  }
+
+  async function uploadSingleFile(file, index, total) {
+    if (file.size > state.chunkSizeBytes) {
+      return uploadChunkedFile(file, index, total);
+    }
+    return uploadDirectFile(file, index, total);
+  }
+
+  async function uploadDirectFile(file, index, total) {
+    setStatus('正在上传文件（' + (index + 1) + '/' + total + '）：' + file.name, 'loading', ((index) / total) * 100);
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    const response = await authedFetch(buildUploadUrl(), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData
+    });
+    if (!response.ok) throw new Error(await parseErrorResponse(response));
+    await response.json().catch(() => []);
+    setStatus('文件已发送：' + file.name, 'idle', ((index + 1) / total) * 100);
+  }
+
+  async function uploadChunkedFile(file, index, total) {
+    const totalChunks = Math.ceil(file.size / state.chunkSizeBytes);
+    setStatus('正在初始化大文件上传：' + file.name, 'loading', ((index) / total) * 100);
+
+    const initForm = new FormData();
+    initForm.append('originalFileName', file.name);
+    initForm.append('originalFileType', file.type || 'application/octet-stream');
+    initForm.append('totalChunks', String(totalChunks));
+
+    const initResponse = await authedFetch(buildUploadUrl({ initChunked: 'true' }), {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: initForm
+    });
+    if (!initResponse.ok) throw new Error(await parseErrorResponse(initResponse));
+    const initData = await initResponse.json();
+    const uploadId = initData.uploadId;
+    if (!uploadId) throw new Error('分块上传初始化失败');
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * state.chunkSizeBytes;
+      const end = Math.min(start + state.chunkSizeBytes, file.size);
+      const chunkBlob = file.slice(start, end);
+      const chunkForm = new FormData();
+      chunkForm.append('file', chunkBlob, file.name + '.part' + String(chunkIndex).padStart(3, '0'));
+      chunkForm.append('chunkIndex', String(chunkIndex));
+      chunkForm.append('totalChunks', String(totalChunks));
+      chunkForm.append('uploadId', uploadId);
+      chunkForm.append('originalFileName', file.name);
+      chunkForm.append('originalFileType', file.type || 'application/octet-stream');
+
+      const overallProgress = ((index + (chunkIndex + 1) / totalChunks) / total) * 100;
+      setStatus('正在上传分片 ' + (chunkIndex + 1) + '/' + totalChunks + '：' + file.name, 'loading', overallProgress);
+      const chunkResponse = await authedFetch(buildUploadUrl({ chunked: 'true' }), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: chunkForm
+      });
+      if (!chunkResponse.ok) throw new Error(await parseErrorResponse(chunkResponse));
+      await chunkResponse.json().catch(() => ({}));
+    }
+
+    await mergeChunkedFile(file, uploadId, totalChunks, index, total);
+    setStatus('大文件已发送：' + file.name, 'idle', ((index + 1) / total) * 100);
+  }
+
+  async function mergeChunkedFile(file, uploadId, totalChunks, index, total) {
+    const mergeForm = new FormData();
+    mergeForm.append('uploadId', uploadId);
+    mergeForm.append('totalChunks', String(totalChunks));
+    mergeForm.append('originalFileName', file.name);
+    mergeForm.append('originalFileType', file.type || 'application/octet-stream');
+
+    let attempt = 0;
+    while (attempt < 20) {
+      attempt++;
+      const response = await authedFetch(buildUploadUrl({ chunked: 'true', merge: 'true' }), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: mergeForm
+      });
+
+      if (response.ok) {
+        await response.json().catch(() => []);
+        return;
+      }
+
+      if (response.status !== 409) {
+        throw new Error(await parseErrorResponse(response));
+      }
+
+      const pending = await response.json().catch(() => ({}));
+      const retryAfterMs = Number(pending.retryAfterMs || 1000);
+      const overallProgress = ((index + 0.98) / total) * 100;
+      setStatus('正在合并分片：' + file.name + '（第 ' + attempt + ' 次检查）', 'loading', overallProgress);
+      await new Promise(resolve => setTimeout(resolve, retryAfterMs));
+    }
+
+    throw new Error('分块合并超时，请稍后刷新记录确认结果');
+  }
+
+  loadConfig();
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { userAuthCheck, UnauthorizedResponse } from "../utils/userAuth";
-import { fetchUploadConfig, fetchSecurityConfig } from "../utils/sysConfig";
+import { fetchUploadConfig, fetchSecurityConfig, fetchOthersConfig } from "../utils/sysConfig";
 import {
     createResponse, getUploadIp, getIPAddress, resolveFileExt,
     moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
@@ -13,6 +13,7 @@ import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
+import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -43,6 +44,14 @@ export async function onRequest(context) {  // Contents of context object
     const isBlockedIp = await isBlockedUploadIp(env, uploadIp);
     if (isBlockedIp) {
         return createResponse('Error: Your IP is blocked', { status: 403 });
+    }
+
+    const isChatRequest = isChatRequestFromUrl(url);
+    if (isChatRequest) {
+        const othersConfig = await fetchOthersConfig(env);
+        if (!othersConfig.chatPage?.enabled) {
+            return createResponse('Error: Chat page is disabled', { status: 403 });
+        }
     }
 
     // 检查是否为清理请求
@@ -104,6 +113,10 @@ async function processFileUpload(context, formdata = null) {
     uploadFolder = sanitizeUploadFolder(uploadFolder);
 
     const uploadChannel = resolveUploadChannel(urlParamUploadChannel);
+    const isChatRequest = isChatRequestFromUrl(url);
+    if (isChatRequest && !isChatUploadChannel(uploadChannel)) {
+        return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+    }
 
     // 将指定的渠道名称存入 context，供后续上传函数使用
     context.specifiedChannelName = urlParamChannelName || null;
@@ -154,6 +167,10 @@ async function processFileUpload(context, formdata = null) {
         Directory: normalizedFolder === '' ? '' : normalizedFolder + '/',
         Tags: []
     };
+
+    if (isChatRequest) {
+        applyChatTransferMetadata(metadata, url.searchParams.get('messageType') || 'file');
+    }
 
     // 添加图片尺寸信息
     if (imageDimensions) {

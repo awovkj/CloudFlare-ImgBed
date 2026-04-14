@@ -1,10 +1,5 @@
-import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../../../utils/purgeCache";
 import { removeFileFromIndex, batchRemoveFilesFromIndex } from "../../../utils/indexManager.js";
-import { getDatabase } from '../../../utils/databaseAdapter.js';
-import { DiscordAPI } from '../../../utils/discordAPI.js';
-import { HuggingFaceAPI } from '../../../utils/huggingfaceAPI.js';
-import { resolveHfChannelConfig } from '../../../utils/sysConfig.js';
+import { deleteStoredFile } from '../../../utils/deleteFile.js';
 
 // CORS 跨域响应头
 const corsHeaders = {
@@ -48,7 +43,7 @@ export async function onRequest(context) {
                     const fileId = file.name;
                     const cdnUrl = `https://${url.hostname}/file/${fileId}`;
 
-                    const success = await deleteFile(env, fileId, cdnUrl, url);
+                    const success = await deleteStoredFile(env, fileId, cdnUrl, url);
                     if (success) {
                         deletedFiles.push(fileId);
                     } else {
@@ -96,7 +91,7 @@ export async function onRequest(context) {
         const fileId = params.path.split(',').join('/');
         const cdnUrl = `https://${url.hostname}/file/${fileId}`;
 
-        const success = await deleteFile(env, fileId, cdnUrl, url);
+        const success = await deleteStoredFile(env, fileId, cdnUrl, url);
         if (!success) {
             throw new Error('Delete file failed');
         } else {
@@ -121,137 +116,3 @@ export async function onRequest(context) {
     }
 }
 
-// 删除单个文件的核心函数
-async function deleteFile(env, fileId, cdnUrl, url) {
-    try {
-        // 读取图片信息
-        const db = getDatabase(env);
-        const img = await db.getWithMetadata(fileId);
-
-        // 如果文件记录不存在，直接返回成功（幂等删除）
-        if (!img) {
-            console.warn(`File ${fileId} not found in database, skipping delete`);
-            return true;
-        }
-
-        // 如果是R2渠道的图片，需要删除R2中对应的图片
-        if (img.metadata?.Channel === 'CloudflareR2') {
-            const R2DataBase = env.img_r2;
-            await R2DataBase.delete(fileId);
-        }
-
-        // S3 渠道的图片，需要删除S3中对应的图片
-        if (img.metadata?.Channel === 'S3') {
-            await deleteS3File(img);
-        }
-
-        // Discord 渠道的图片，需要删除 Discord 中对应的消息
-        if (img.metadata?.Channel === 'Discord') {
-            await deleteDiscordFile(img);
-        }
-
-        // HuggingFace 渠道的图片，需要删除 HuggingFace 中对应的文件
-        if (img.metadata?.Channel === 'HuggingFace') {
-            await deleteHuggingFaceFile(env, img);
-        }
-
-        // 删除数据库中的记录
-        // 注意：容量统计现在由索引自动维护，删除文件后索引更新时会自动重新计算
-        await db.delete(fileId);
-
-        // 清除CDN缓存
-        await purgeCFCache(env, cdnUrl);
-
-        // 清除 api/randomFileList 等API缓存
-        const normalizedFolder = fileId.split('/').slice(0, -1).join('/');
-        await purgeRandomFileListCache(url.origin, normalizedFolder);
-        await purgePublicFileListCache(url.origin, normalizedFolder);
-
-        return true;
-    } catch (e) {
-        console.error('Delete file failed:', e);
-        return false;
-    }
-}
-
-// 删除 S3 渠道的图片
-async function deleteS3File(img) {
-    const s3Client = new S3Client({
-        region: img.metadata?.S3Region || "auto",
-        endpoint: img.metadata?.S3Endpoint,
-        credentials: {
-            accessKeyId: img.metadata?.S3AccessKeyId,
-            secretAccessKey: img.metadata?.S3SecretAccessKey
-        },
-        forcePathStyle: img.metadata?.S3PathStyle || false // 是否启用路径风格
-    });
-
-    const bucketName = img.metadata?.S3BucketName;
-    const key = img.metadata?.S3FileKey;
-
-    try {
-        await s3Client.send(new DeleteObjectCommand({
-            Bucket: bucketName,
-            Key: key,
-        }));
-        return true;
-    } catch (error) {
-        console.error("S3 Delete Failed:", error);
-        return false;
-    }
-}
-
-// 删除 Discord 渠道的图片（删除 Discord 消息）
-async function deleteDiscordFile(img) {
-    const botToken = img.metadata?.DiscordBotToken;
-    const channelId = img.metadata?.DiscordChannelId;
-    const messageId = img.metadata?.DiscordMessageId;
-
-    if (!botToken || !channelId || !messageId) {
-        console.warn('Discord file missing required metadata for deletion');
-        return false;
-    }
-
-    try {
-        const discordAPI = new DiscordAPI(botToken);
-        const success = await discordAPI.deleteMessage(channelId, messageId);
-        if (!success) {
-            console.error('Discord Delete Failed: API returned false');
-        }
-        return success;
-    } catch (error) {
-        console.error("Discord Delete Failed:", error);
-        return false;
-    }
-}
-
-
-// 删除 HuggingFace 渠道的图片
-async function deleteHuggingFaceFile(env, img) {
-    const repo = img.metadata?.HfRepo;
-    const filePath = img.metadata?.HfFilePath;
-
-    if (!repo || !filePath) {
-        console.warn('HuggingFace file missing required metadata for deletion');
-        return false;
-    }
-
-    // 从系统配置解析 token（兼容旧数据回退到 metadata）
-    const channelConfig = await resolveHfChannelConfig(env, img.metadata);
-    if (!channelConfig?.token) {
-        console.warn('HuggingFace delete: no token found in config or metadata');
-        return false;
-    }
-
-    try {
-        const huggingfaceAPI = new HuggingFaceAPI(channelConfig.token, channelConfig.repo || repo, channelConfig.isPrivate || false);
-        const success = await huggingfaceAPI.deleteFile(filePath, `Delete ${filePath}`);
-        if (!success) {
-            console.error('HuggingFace Delete Failed: API returned false');
-        }
-        return success;
-    } catch (error) {
-        console.error("HuggingFace Delete Failed:", error);
-        return false;
-    }
-}

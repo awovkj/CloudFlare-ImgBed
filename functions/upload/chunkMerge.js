@@ -3,6 +3,7 @@ import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, bui
 import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
 const RETRY_SETTLE_WAIT_MS = 45000;
@@ -124,6 +125,9 @@ export async function handleChunkMerge(context) {
 
         // 使用会话中的上传渠道，或者从URL参数获取
         uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
+        if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
+            return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+        }
 
         // 获取指定的渠道名称（优先URL参数，其次会话信息）
         const channelName = url.searchParams.get('channelName') || sessionInfo.channelName || '';
@@ -343,6 +347,10 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             Directory: normalizedFolder === '' ? '' : normalizedFolder + '/',
             Tags: []
         };
+
+        if (isChatRequestFromUrl(url)) {
+            applyChatTransferMetadata(metadata, 'file');
+        }
 
         let chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
             maxWaitMs: INITIAL_SETTLE_WAIT_MS,

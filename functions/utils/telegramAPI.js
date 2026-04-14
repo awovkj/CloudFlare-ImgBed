@@ -78,6 +78,26 @@ export class TelegramAPI {
         return responseData;
     }
 
+    async sendMessage(chatId, text) {
+        const response = await fetch(`${this.baseURL}/sendMessage`, {
+            method: 'POST',
+            headers: {
+                ...this.defaultHeaders,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text
+            })
+        });
+
+        if (!response.ok) {
+            throw await this.parseTelegramErrorResponse(response);
+        }
+
+        return response.json();
+    }
+
     /**
      * 获取文件信息
      * @param {Object} responseData - Telegram API响应数据

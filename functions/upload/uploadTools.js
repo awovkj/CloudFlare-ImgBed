@@ -3,6 +3,7 @@ import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from
 import { addFileToIndex } from "../utils/indexManager.js";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { resolveHfChannelConfig } from '../utils/sysConfig.js';
+import { CHAT_DIRECTORY, isChatRequestFromUrl } from '../utils/chat.js';
 
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -290,6 +291,10 @@ export async function isBlockedUploadIp(env, uploadIp) {
 export async function buildUniqueFileId(context, fileName, fileType = 'application/octet-stream') {
     const { env, url } = context;
     const db = getDatabase(env);
+
+    if (isChatRequestFromUrl(url) && !url.searchParams.get('uploadFolder')) {
+        url.searchParams.set('uploadFolder', CHAT_DIRECTORY);
+    }
 
     let fileExt = fileName.split('.').pop();
     if (!fileExt || fileExt === fileName) {

@@ -5,6 +5,7 @@ import { TelegramAPI } from '../utils/telegramAPI';
 import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
+import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
@@ -39,6 +40,10 @@ export async function initializeChunkedUpload(context) {
         const uploadChannel = url.searchParams.get('uploadChannel') || 'telegram';
         // 获取指定的渠道名称
         const channelName = url.searchParams.get('channelName') || '';
+
+        if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
+            return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+        }
 
         // 存储上传会话信息
         const sessionInfo = {
@@ -124,6 +129,10 @@ export async function handleChunkUpload(context) {
         const uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
         // 获取指定的渠道名称
         const channelName = url.searchParams.get('channelName') || sessionInfo.channelName || '';
+
+        if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
+            return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+        }
 
         // 将渠道名称存入 context
         context.specifiedChannelName = channelName;
@@ -1469,6 +1478,9 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
         const primaryChunk = chunks[0] || null;
 
         // 所有分片上传成功，更新metadata
+        if (isChatRequestFromUrl(context.url)) {
+            applyChatTransferMetadata(metadata, 'file');
+        }
         metadata.Channel = "TelegramNew";
         if (primaryChunk?.tgChannel) {
             metadata.ChannelName = primaryChunk.tgChannel;

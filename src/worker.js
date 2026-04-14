@@ -65,6 +65,12 @@ import { onRequest as onMusicListRequest }         from '../functions/api/music/
 // video
 import { onRequest as onVideoListRequest }         from '../functions/api/video/list.js';
 
+// chat
+import { onRequest as onChatConfigRequest }        from '../functions/api/chat/config.js';
+import { onRequest as onChatSendTextRequest }      from '../functions/api/chat/sendText.js';
+import { onRequest as onChatHistoryRequest }       from '../functions/api/chat/history.js';
+import { onRequest as onChatClearRequest }         from '../functions/api/chat/clear.js';
+
 // random
 import { onRequest as onRandomRequest }        from '../functions/random/index.js';
 
@@ -249,6 +255,10 @@ const STATIC_ROUTES = new Map([
     ['/api/public/list',                   [checkDatabaseConfig, onPublicListRequest]],
     ['/api/music/list',                    [checkDatabaseConfig, onMusicListRequest]],
     ['/api/video/list',                    [checkDatabaseConfig, onVideoListRequest]],
+    ['/api/chat/config',                   [checkDatabaseConfig, onChatConfigRequest]],
+    ['/api/chat/sendText',                 [checkDatabaseConfig, onChatSendTextRequest]],
+    ['/api/chat/history',                  [checkDatabaseConfig, onChatHistoryRequest]],
+    ['/api/chat/clear',                    [checkDatabaseConfig, onChatClearRequest]],
     ['/api/bing/wallpaper',                [checkDatabaseConfig, onBingWallpaperRequest]],
     ['/api/huggingface/getUploadUrl',      [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)]],
     ['/api/huggingface/commitUpload',      [checkDatabaseConfig, postOnly(onHfCommitPost)]],
