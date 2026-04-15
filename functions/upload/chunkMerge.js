@@ -7,6 +7,8 @@ import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } 
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
 const RETRY_SETTLE_WAIT_MS = 45000;
+const CHAT_INITIAL_SETTLE_WAIT_MS = 120000;
+const CHAT_RETRY_SETTLE_WAIT_MS = 180000;
 const SETTLE_INTERVAL_MS = 500;
 const FINAL_PENDING_GRACE_MS = 5000;
 const MERGE_PENDING_RETRY_AFTER_MS = 1000;
@@ -348,12 +350,16 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             Tags: []
         };
 
-        if (isChatRequestFromUrl(url)) {
+        const isChatUpload = isChatRequestFromUrl(url);
+        if (isChatUpload) {
             applyChatTransferMetadata(metadata, 'file');
         }
 
+        const initialSettleWaitMs = isChatUpload ? CHAT_INITIAL_SETTLE_WAIT_MS : INITIAL_SETTLE_WAIT_MS;
+        const retrySettleWaitMs = isChatUpload ? CHAT_RETRY_SETTLE_WAIT_MS : RETRY_SETTLE_WAIT_MS;
+
         let chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
-            maxWaitMs: INITIAL_SETTLE_WAIT_MS,
+            maxWaitMs: initialSettleWaitMs,
             intervalMs: SETTLE_INTERVAL_MS
         });
         let completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
@@ -384,7 +390,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             await retryFailedChunks(context, failedChunks, uploadChannel);
 
             chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
-                maxWaitMs: RETRY_SETTLE_WAIT_MS,
+                maxWaitMs: retrySettleWaitMs,
                 intervalMs: SETTLE_INTERVAL_MS
             });
             completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');

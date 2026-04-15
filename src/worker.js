@@ -66,6 +66,7 @@ import { onRequest as onMusicListRequest }         from '../functions/api/music/
 import { onRequest as onVideoListRequest }         from '../functions/api/video/list.js';
 
 // chat
+import { onRequest as onChatPageRequest }          from '../functions/chat/index.js';
 import { onRequest as onChatConfigRequest }        from '../functions/api/chat/config.js';
 import { onRequest as onChatSendTextRequest }      from '../functions/api/chat/sendText.js';
 import { onRequest as onChatHistoryRequest }       from '../functions/api/chat/history.js';
@@ -255,6 +256,9 @@ const STATIC_ROUTES = new Map([
     ['/api/public/list',                   [checkDatabaseConfig, onPublicListRequest]],
     ['/api/music/list',                    [checkDatabaseConfig, onMusicListRequest]],
     ['/api/video/list',                    [checkDatabaseConfig, onVideoListRequest]],
+    ['/chat',                              [checkDatabaseConfig, onChatPageRequest]],
+    ['/chat/',                             [checkDatabaseConfig, onChatPageRequest]],
+    ['/chat.html',                         [checkDatabaseConfig, onChatPageRequest]],
     ['/api/chat/config',                   [checkDatabaseConfig, onChatConfigRequest]],
     ['/api/chat/sendText',                 [checkDatabaseConfig, onChatSendTextRequest]],
     ['/api/chat/history',                  [checkDatabaseConfig, onChatHistoryRequest]],

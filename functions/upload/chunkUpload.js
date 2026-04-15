@@ -9,6 +9,14 @@ import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } 
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
+const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 3600;
+const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+function getChunkRecordTtlSeconds(contextOrUrl) {
+    const url = contextOrUrl?.url || contextOrUrl;
+    return isChatRequestFromUrl(url) ? CHAT_UPLOAD_SESSION_TTL_SECONDS : DEFAULT_UPLOAD_SESSION_TTL_SECONDS;
+}
 
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
@@ -45,6 +53,10 @@ export async function initializeChunkedUpload(context) {
             return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
         }
 
+        const isChatUpload = isChatRequestFromUrl(url);
+        const sessionTtlMs = isChatUpload ? CHAT_UPLOAD_SESSION_TTL_MS : 3600000;
+        const sessionTtlSeconds = getChunkRecordTtlSeconds(url);
+
         // 存储上传会话信息
         const sessionInfo = {
             uploadId,
@@ -57,13 +69,13 @@ export async function initializeChunkedUpload(context) {
             ipAddress,
             status: 'initialized',
             createdAt: timestamp,
-            expiresAt: timestamp + 3600000 // 1小时过期
+            expiresAt: timestamp + sessionTtlMs
         };
 
         // 保存会话信息
         const sessionKey = `upload_session_${uploadId}`;
         await db.put(sessionKey, JSON.stringify(sessionInfo), {
-            expirationTtl: 3600 // 1小时过期
+            expirationTtl: sessionTtlSeconds
         });
 
         return createUploadJsonResponse({
@@ -157,9 +169,10 @@ export async function handleChunkUpload(context) {
 
         // 立即保存分块记录和数据，设置过期时间
         const { usingD1 } = checkDatabaseConfig(env);
+        const chunkTtlSeconds = getChunkRecordTtlSeconds(url);
         await db.put(chunkKey, usingD1 ? '' : chunkData, {
             metadata: initialChunkMetadata,
-            expirationTtl: 3600 // 1小时过期
+            expirationTtl: chunkTtlSeconds
         });
 
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
@@ -287,7 +300,7 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
 
                 await db.put(chunkKey, fallbackChunkValue, {
                     metadata: errorMetadata,
-                    expirationTtl: 3600
+                    expirationTtl: getChunkRecordTtlSeconds(context)
                 });
             }
         } catch (metaError) {
@@ -369,8 +382,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 // 只保存metadata，不保存原始数据，设置过期时间
                 await db.put(chunkKey, '', {
                     metadata: updatedMetadata,
-                    expirationTtl: 3600 // 1小时过期
-                });
+                    expirationTtl: getChunkRecordTtlSeconds(context)                });
 
                 console.log(`Chunk ${chunkIndex} uploaded successfully to ${uploadChannel}${retry > 0 ? ` (after ${retry} retries)` : ''}`);
 
@@ -391,8 +403,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 // 保留原始数据以便重试，设置过期时间
                 await db.put(chunkKey, chunkData, {
                     metadata: failedMetadata,
-                    expirationTtl: 3600 // 1小时过期
-                });
+                    expirationTtl: getChunkRecordTtlSeconds(context)                });
 
                 console.warn(`Chunk ${chunkIndex} upload failed after ${MAX_RETRIES} attempts: ${failedMetadata.error}`);
 
@@ -430,8 +441,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
                 await db.put(chunkKey, fallbackChunkValue, {
                     metadata: errorMetadata,
-                    expirationTtl: 3600 // 1小时过期
-                });
+                    expirationTtl: getChunkRecordTtlSeconds(context)                });
             }
         } catch (metaError) {
             console.error('Failed to save error metadata:', metaError);
@@ -472,8 +482,7 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
 
             // 保存multipart info
             await db.put(multipartKey, JSON.stringify(multipartInfo), {
-                expirationTtl: 3600 // 1小时过期
-            });
+                expirationTtl: getChunkRecordTtlSeconds(context)            });
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
@@ -600,8 +609,7 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 
             // 保存multipart info
             await db.put(multipartKey, JSON.stringify(multipartInfo), {
-                expirationTtl: 3600 // 1小时过期
-            });
+                expirationTtl: getChunkRecordTtlSeconds(context)            });
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
@@ -998,7 +1006,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
 
     await db.put(chunk.key, chunkData, {
         metadata: retryMetadata,
-        expirationTtl: 3600
+        expirationTtl: getChunkRecordTtlSeconds(context)
     });
 
     while (retryCount < maxRetries) {
@@ -1045,7 +1053,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                 // 删除原始数据，只保留上传结果，设置过期时间
                 await db.put(chunk.key, '', {
                     metadata: updatedMetadata,
-                    expirationTtl: 3600
+                    expirationTtl: getChunkRecordTtlSeconds(context)
                 });
 
                 console.log(`Chunk ${chunk.index} retry successful after ${retryCount + 1} attempts`);
@@ -1077,7 +1085,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
 
             await db.put(chunk.key, finalRecord.value || '', {
                 metadata: failedRetryMetadata,
-                expirationTtl: 3600
+                expirationTtl: getChunkRecordTtlSeconds(context)
             });
         }
     } catch (metaError) {
@@ -1186,7 +1194,7 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 
                         await db.put(chunkKey, chunkRecord.value, {
                             metadata: timeoutMetadata,
-                            expirationTtl: 3600
+                            expirationTtl: getChunkRecordTtlSeconds(context)
                         }).catch(err => console.warn(`Failed to update timeout status for chunk ${i}:`, err));
                     }
 

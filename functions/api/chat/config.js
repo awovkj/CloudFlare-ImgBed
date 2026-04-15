@@ -1,6 +1,6 @@
 import { ensureChatAccess, getChatTelegramChannels, jsonResponse } from './shared.js';
 
-const CHAT_CHUNK_SIZE_BYTES = 18 * 1024 * 1024;
+const CHAT_CHUNK_SIZE_BYTES = 19 * 1024 * 1024;
 
 export async function onRequest(context) {
     const access = await ensureChatAccess(context);

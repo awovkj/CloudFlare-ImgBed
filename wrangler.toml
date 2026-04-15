@@ -38,6 +38,7 @@ run_worker_first = [
   "/api/*",
   "/chat",
   "/chat/*",
+  "/chat.html",
   "/random",
   "/random/*",
   "/dav",
