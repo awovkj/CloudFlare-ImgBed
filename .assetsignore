@@ -4,6 +4,7 @@
 
 # Worker 源码
 src/
+_worker.js
 
 # Functions 源码（Workers 模式下由 src/worker.js 直接 import）
 functions/

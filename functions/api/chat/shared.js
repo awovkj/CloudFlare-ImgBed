@@ -102,11 +102,20 @@ export async function storeChatTextRecord(env, context, metadata) {
 }
 
 export async function listChatHistory(context) {
-    const indexResult = await readIndex(context, {
-        directory: CHAT_DIRECTORY,
-        count: -1,
-        includeSubdirFiles: true,
-    });
+    let indexResult = { files: [] };
+
+    try {
+        indexResult = await readIndex(context, {
+            directory: CHAT_DIRECTORY,
+            count: -1,
+            includeSubdirFiles: true,
+        });
+    } catch (error) {
+        const message = String(error?.message || '');
+        if (!message.includes('Index metadata not found') && !message.includes('Failed to get index')) {
+            throw error;
+        }
+    }
 
     const files = (indexResult.files || []).filter(file => isChatTransferRecord(file.metadata));
 
