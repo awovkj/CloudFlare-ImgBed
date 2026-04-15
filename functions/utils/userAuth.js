@@ -12,10 +12,18 @@ import { getDatabase } from './databaseAdapter.js';
  */
 export async function userAuthCheck(env, url, request, requiredPermission = null) {
     // 并行发起 Token 验证和传统认证配置读取，单次 I/O 往返
-    const [tokenValidation, securityConfig] = await Promise.all([
-        validateApiToken(request, getDatabase(env), requiredPermission).catch(() => ({ valid: false })),
-        fetchSecurityConfig(env).catch(() => ({ auth: { user: { authCode: '' } } }))
-    ]);
+    let tokenValidation;
+    let securityConfig;
+
+    try {
+        [tokenValidation, securityConfig] = await Promise.all([
+            validateApiToken(request, getDatabase(env), requiredPermission).catch(() => ({ valid: false })),
+            fetchSecurityConfig(env)
+        ]);
+    } catch (error) {
+        console.error('Failed to load security config for user auth:', error);
+        return false;
+    }
 
     if (tokenValidation.valid) {
         return true;

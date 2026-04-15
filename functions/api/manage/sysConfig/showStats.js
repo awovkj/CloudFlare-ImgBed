@@ -24,7 +24,8 @@ export async function onRequest(context) {
     try {
         const config = await fetchOthersConfig(env);
         const enabled = config.showStats?.enabled ?? true;
-        return new Response(JSON.stringify({ enabled }), {
+        const configSource = config.__configSource || 'configured';
+        return new Response(JSON.stringify({ enabled, configSource }), {
             status: 200,
             headers: {
                 'Content-Type': 'application/json',
@@ -34,7 +35,7 @@ export async function onRequest(context) {
         });
     } catch (e) {
         // 出错时默认启用，不影响正常显示
-        return new Response(JSON.stringify({ enabled: true }), {
+        return new Response(JSON.stringify({ enabled: true, configSource: 'fallback' }), {
             status: 200,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
         });

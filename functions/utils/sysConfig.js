@@ -17,13 +17,30 @@ function cloneDefaultValue(defaultValue) {
     return defaultValue;
 }
 
-async function fetchConfigWithFallback(env, configName, loader, defaultValue) {
+function markConfigFallback(defaultValue) {
+    const cloned = cloneDefaultValue(defaultValue);
+
+    if (cloned && typeof cloned === 'object' && !Array.isArray(cloned)) {
+        cloned.__configSource = 'fallback';
+    }
+
+    return cloned;
+}
+
+async function fetchConfigWithFallback(env, configName, loader, defaultValue, options = {}) {
+    const { failClosed = false } = options;
+
     try {
         const db = getDatabase(env);
         return await loader(db, env);
     } catch (error) {
         console.error(`Failed to fetch ${configName} config:`, error);
-        return cloneDefaultValue(defaultValue);
+
+        if (failClosed) {
+            throw new Error(`Failed to fetch ${configName} config`);
+        }
+
+        return markConfigFallback(defaultValue);
     }
 }
 
@@ -121,7 +138,9 @@ export async function fetchUploadConfig(env, context = null) {
 }
 
 export async function fetchSecurityConfig(env) {
-    return fetchConfigWithFallback(env, 'security', getSecurityConfig, DEFAULT_SECURITY_CONFIG);
+    return fetchConfigWithFallback(env, 'security', getSecurityConfig, DEFAULT_SECURITY_CONFIG, {
+        failClosed: true
+    });
 }
 
 export async function fetchPageConfig(env) {
@@ -129,7 +148,13 @@ export async function fetchPageConfig(env) {
 }
 
 export async function fetchOthersConfig(env) {
-    return fetchConfigWithFallback(env, 'others', getOthersConfig, DEFAULT_OTHERS_CONFIG);
+    const config = await fetchConfigWithFallback(env, 'others', getOthersConfig, DEFAULT_OTHERS_CONFIG);
+
+    if (!config.__configSource) {
+        config.__configSource = 'configured';
+    }
+
+    return config;
 }
 
 /**

@@ -1194,7 +1194,7 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 
                         await db.put(chunkKey, chunkRecord.value, {
                             metadata: timeoutMetadata,
-                            expirationTtl: getChunkRecordTtlSeconds(context)
+                            expirationTtl: getChunkRecordTtlSeconds(uploadId)
                         }).catch(err => console.warn(`Failed to update timeout status for chunk ${i}:`, err));
                     }
 

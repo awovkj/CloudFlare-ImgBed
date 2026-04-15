@@ -2,7 +2,7 @@ import { fetchSecurityConfig } from "../../utils/sysConfig";
 import { checkDatabaseConfig } from "../../utils/middleware";
 import { validateApiToken } from "../../utils/tokenValidator";
 import { getDatabase } from "../../utils/databaseAdapter.js";
-import { createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
+import { createJsonResponse, createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
 
 let securityConfig = {}
 let basicUser = ""
@@ -14,7 +14,16 @@ async function errorHandling(context) {
   try {
     return await context.next();
   } catch (err) {
-    return new Response(`${err.message}\n${err.stack}`, { status: 500 });
+    console.error('Manage API unhandled error:', err);
+    return createJsonResponse({
+      error: 'Internal server error'
+    }, {
+      status: 500,
+      headers: {
+        ...corsHeaders,
+        'Cache-Control': 'no-store'
+      }
+    });
   }
 }
 
@@ -120,7 +129,7 @@ async function authentication(context) {
   }
 
   const pathname = new URL(context.request.url).pathname;
-  if (pathname === '/api/manage/stats' || pathname === '/api/manage/sysConfig/showStats') {
+  if (pathname === '/api/manage/sysConfig/showStats') {
     return context.next();
   }
 

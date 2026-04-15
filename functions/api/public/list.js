@@ -57,6 +57,8 @@ function isAllowedDirectory(dir, allowedDirs) {
  */
 async function getPublicFileList(context, url, dir, recursive, options = {}) {
     const { start = 0, count = 50, search = '', fileType = '' } = options;
+    const safeStart = Math.max(0, start);
+    const safeCount = Math.min(Math.max(1, count), 200);
     const hasAdvancedFilter = Boolean(search || fileType);
 
     if (hasAdvancedFilter) {
@@ -64,15 +66,15 @@ async function getPublicFileList(context, url, dir, recursive, options = {}) {
         const result = await readIndex(context, {
             directory: dir,
             search,
-            start,
-            count,
+            start: safeStart,
+            count: safeCount,
             includeSubdirFiles: recursive,
             accessStatus: 'normal',
             fileType: typeFilters
         });
 
         if (!result.success) {
-            return { files: [], directories: [], totalCount: 0, fromCache: false };
+            return { files: [], directories: [], totalCount: 0, returnedCount: 0, fromCache: false };
         }
 
         const files = (result.files || []).map(file => ({
@@ -88,13 +90,14 @@ async function getPublicFileList(context, url, dir, recursive, options = {}) {
             files,
             directories: result.directories || [],
             totalCount: result.totalCount || 0,
+            returnedCount: result.returnedCount || files.length,
             fromCache: false,
         };
     }
 
     // 构建缓存键（目录格式去掉末尾的/，与清除缓存时的格式一致）
     const cacheDir = dir.replace(/\/$/, '');
-    const cacheKey = `${url.origin}/api/publicFileList?dir=${cacheDir}&recursive=${recursive}`;
+    const cacheKey = `${url.origin}/api/publicFileList?dir=${cacheDir}&recursive=${recursive}&start=${safeStart}&count=${safeCount}`;
 
     // 检查缓存中是否有记录
     const cache = caches.default;
@@ -105,17 +108,17 @@ async function getPublicFileList(context, url, dir, recursive, options = {}) {
         return data;
     }
 
-    // 读取文件列表
+    // 读取当前页文件列表
     const result = await readIndex(context, {
         directory: dir,
-        start: 0,
-        count: -1,
+        start: safeStart,
+        count: safeCount,
         includeSubdirFiles: recursive,
         accessStatus: 'normal', // 只返回正常可访问的内容
     });
 
     if (!result.success) {
-        return { files: [], directories: [], totalCount: 0, fromCache: false };
+        return { files: [], directories: [], totalCount: 0, returnedCount: 0, fromCache: false };
     }
 
     // 转换文件格式（只保留必要信息）
@@ -132,6 +135,7 @@ async function getPublicFileList(context, url, dir, recursive, options = {}) {
         files,
         directories: result.directories,
         totalCount: result.totalCount,
+        returnedCount: result.returnedCount || files.length,
     };
 
     // 缓存结果，缓存时间为24小时
@@ -228,13 +232,8 @@ export async function onRequest(context) {
             return isAllowedDirectory(subDir, allowedDirs);
         });
 
-        let filteredFiles = cachedData.files;
-        let filteredTotalCount = cachedData.totalCount;
-
-        if (!search && !fileType) {
-            filteredFiles = filteredFiles.slice(start, start + count);
-            filteredTotalCount = cachedData.totalCount;
-        }
+        const filteredFiles = cachedData.files;
+        const filteredTotalCount = cachedData.totalCount;
 
         // 转换文件格式
         const safeFiles = filteredFiles.map(file => ({
@@ -246,7 +245,7 @@ export async function onRequest(context) {
             files: safeFiles,
             directories: filteredDirectories,
             totalCount: filteredTotalCount,
-            returnedCount: safeFiles.length,
+            returnedCount: cachedData.returnedCount || safeFiles.length,
             allowedDirs: allowedDirs, // 返回允许的目录列表供前端使用
             fromCache: cachedData.fromCache,
         }), {

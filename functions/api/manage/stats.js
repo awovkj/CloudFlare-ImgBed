@@ -1,16 +1,11 @@
-import { getDatabase } from '../../utils/databaseAdapter.js';
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
+import { getIndexMeta, readIndex } from '../../utils/indexManager.js';
+
+const ALL_ACCESS_STATUSES = ['normal', 'blocked'];
 
 const STATS_CACHE_TTL_MS = 30000;
 let cachedStats = null;
 let cachedAt = 0;
-
-function shouldSkipKey(name) {
-    return name.startsWith('manage@') ||
-        name.startsWith('chunk_') ||
-        name.startsWith('index_') ||
-        name.startsWith('operation_');
-}
 
 function extractFileExtension(fileName, fileType) {
     const dotIndex = fileName.lastIndexOf('.');
@@ -26,6 +21,25 @@ function extractFileExtension(fileName, fileType) {
     }
 
     return 'unknown';
+}
+
+function getChannelLabel(metadata = {}) {
+    return metadata.ChannelName || metadata.Channel || 'Unknown';
+}
+
+function sortStatsEntries(entries, key) {
+    return entries.sort((a, b) => (b[key] - a[key]) || String(a.ext || a.channel).localeCompare(String(b.ext || b.channel)));
+}
+
+function formatStatsResponse(baseStats, fileTypes, channels) {
+    return JSON.stringify({
+        totalFiles: baseStats.totalFiles,
+        totalSize: parseFloat(baseStats.totalSize.toFixed(2)),
+        fileTypes,
+        channels,
+        fileTypesList: sortStatsEntries(fileTypes, 'count'),
+        channelsList: sortStatsEntries(channels, 'count')
+    });
 }
 
 // CORS 跨域响应头
@@ -80,96 +94,60 @@ export async function onRequest(context) {
     }
 
     try {
-        const db = getDatabase(env);
-        
-        // 统计数据结构
-        const stats = {
-            totalFiles: 0,
-            totalSize: 0, // MB
-            fileTypes: {}, // { ext: { count, size } }
-            channels: {} // { channel: { count, size } }
+        const meta = await getIndexMeta(context);
+        const baseStats = {
+            totalFiles: meta.totalCount || 0,
+            totalSize: Number(meta.totalSizeMB) || 0
         };
 
-        let cursor = null;
-        const limit = 1000;
+        const detailResult = await readIndex(context, {
+            count: -1,
+            includeSubdirFiles: true,
+            accessStatus: ALL_ACCESS_STATUSES,
+            countOnly: false
+        });
 
-        // 遍历所有文件
-        while (true) {
-            const response = await db.list({
-                limit: limit,
-                cursor: cursor
-            });
-
-            if (!response || !response.keys || !Array.isArray(response.keys)) {
-                break;
-            }
-
-            cursor = response.cursor;
-
-            for (const item of response.keys) {
-                // 跳过管理相关的键
-                if (shouldSkipKey(item.name)) {
-                    continue;
-                }
-
-                // 跳过没有元数据的文件
-                if (!item.metadata || !item.metadata.TimeStamp) {
-                    continue;
-                }
-
-                const metadata = item.metadata;
-                const fileSize = parseFloat(metadata.FileSize) || 0;
-                const fileName = metadata.FileName || item.name;
-                const fileType = metadata.FileType || 'unknown';
-                const channel = metadata.Channel || 'Unknown';
-                const ext = extractFileExtension(fileName, fileType);
-
-                // 统计总数
-                stats.totalFiles++;
-                stats.totalSize += fileSize;
-
-                // 按文件类型统计
-                if (!stats.fileTypes[ext]) {
-                    stats.fileTypes[ext] = { count: 0, size: 0 };
-                }
-                stats.fileTypes[ext].count++;
-                stats.fileTypes[ext].size += fileSize;
-
-                // 按上传渠道统计
-                if (!stats.channels[channel]) {
-                    stats.channels[channel] = { count: 0, size: 0 };
-                }
-                stats.channels[channel].count++;
-                stats.channels[channel].size += fileSize;
-            }
-
-            if (!cursor) break;
-
-            // 添加协作点，避免超时
-            await new Promise(resolve => setTimeout(resolve, 10));
+        if (!detailResult.success) {
+            throw new Error('Failed to read index for stats');
         }
 
-        // 转换为数组并排序
-        stats.fileTypesList = Object.entries(stats.fileTypes)
-            .map(([ext, data]) => ({
-                ext: ext,
-                count: data.count,
-                size: parseFloat(data.size.toFixed(2))
-            }))
-            .sort((a, b) => b.count - a.count);
+        const fileTypesMap = {};
+        const channelsMap = {};
 
-        stats.channelsList = Object.entries(stats.channels)
-            .map(([channel, data]) => ({
-                channel: channel,
-                count: data.count,
-                size: parseFloat(data.size.toFixed(2))
-            }))
-            .sort((a, b) => b.count - a.count);
+        for (const file of detailResult.files || []) {
+            const metadata = file.metadata || {};
+            const fileSize = parseFloat(metadata.FileSize) || 0;
+            const fileName = metadata.FileName || file.id;
+            const fileType = metadata.FileType || 'unknown';
+            const ext = extractFileExtension(fileName, fileType);
+            const channel = getChannelLabel(metadata);
 
-        // 格式化总大小
-        stats.totalSize = parseFloat(stats.totalSize.toFixed(2));
+            if (!fileTypesMap[ext]) {
+                fileTypesMap[ext] = { count: 0, size: 0 };
+            }
+            fileTypesMap[ext].count++;
+            fileTypesMap[ext].size += fileSize;
 
-        const responseBody = JSON.stringify(stats);
+            if (!channelsMap[channel]) {
+                channelsMap[channel] = { count: 0, size: 0 };
+            }
+            channelsMap[channel].count++;
+            channelsMap[channel].size += fileSize;
+        }
+
+        const fileTypes = Object.entries(fileTypesMap).map(([ext, data]) => ({
+            ext,
+            count: data.count,
+            size: parseFloat(data.size.toFixed(2))
+        }));
+
+        const channels = Object.entries(channelsMap).map(([channel, data]) => ({
+            channel,
+            count: data.count,
+            size: parseFloat(data.size.toFixed(2))
+        }));
+
+        const responseBody = formatStatsResponse(baseStats, fileTypes, channels);
         cachedStats = responseBody;
         cachedAt = now;
 
