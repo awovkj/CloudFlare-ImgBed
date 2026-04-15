@@ -112,7 +112,6 @@ button:disabled{opacity:.55;cursor:not-allowed}
   border-bottom:1px solid var(--border);
 }
 .page-header h1{font-size:22px}
-.page-header p{margin-top:6px;font-size:13px;color:var(--text-muted);line-height:1.6}
 .control-bar{
   display:flex;
   gap:10px;
@@ -157,7 +156,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
   background:#eef4ff;
 }
 .message-card.file{background:#fff}
-.message-meta{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:11px;color:var(--text-muted)}
+.message-meta{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px;font-size:11px;color:var(--text-muted)}
+.message-meta-main{display:flex;align-items:center;gap:8px;min-width:0}
 .message-channel{font-weight:600;color:var(--text)}
 .message-time{white-space:nowrap}
 .message-body{display:flex;flex-direction:column;gap:10px}
@@ -199,34 +199,36 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .empty-chat .icon{font-size:42px;display:block;margin-bottom:8px}
 .empty-chat p{font-size:18px;font-weight:700;color:var(--text)}
 .empty-chat .hint{margin-top:8px;font-size:13px;line-height:1.7}
-.status-strip{
-  padding:12px 20px;
-  border-top:1px solid var(--border);
-  background:var(--panel-soft);
-}
-.status-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.status-chip{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:6px 10px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:700;
+.status-strip{display:none;padding:0 20px}
+.status-strip.show{display:block;padding:10px 20px 0}
+.status-text{
+  padding:10px 12px;
+  border-radius:12px;
   border:1px solid var(--border);
-  background:#fff;
+  background:#f8fafc;
+  color:var(--text-muted);
+  font-size:12px;
+  line-height:1.6;
 }
-.status-chip::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
-.status-chip.idle{color:var(--success)}
-.status-chip.loading{color:var(--primary)}
-.status-chip.warning{color:var(--warning)}
-.status-chip.error{color:var(--danger)}
-.status-text{margin-top:8px;font-size:13px;line-height:1.6;color:var(--text-muted)}
-.progress-wrap{margin-top:10px;display:none}
-.progress-wrap.show{display:block}
-.progress-track{width:100%;height:8px;border-radius:999px;background:#e5e7eb;overflow:hidden}
-.progress-fill{height:100%;width:0%;background:var(--primary)}
-.progress-caption{margin-top:6px;font-size:12px;color:var(--text-muted)}
+.status-text.info{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
+.status-text.error{background:#fef2f2;border-color:#fecaca;color:var(--danger)}
+.status-text.warning{background:#fff7ed;border-color:#fed7aa;color:var(--warning)}
+.pending-state{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--text-muted)}
+.pending-state::before{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  border:2px solid currentColor;
+  border-right-color:transparent;
+  animation:spin .7s linear infinite;
+}
+.pending-state.error{color:var(--danger)}
+.pending-state.error::before{animation:none;border-right-color:currentColor}
+.message-card.pending{border-style:dashed}
+.message-card.pending.text{background:#f3f7ff}
+.message-card.pending.file{background:#fdfefe}
+.message-actions.compact{margin-top:-2px}
 .composer-wrap{padding:16px 20px 20px;border-top:1px solid var(--border)}
 .composer{
   border:1px solid var(--border);
@@ -254,20 +256,6 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .toolbar-right{justify-content:flex-end}
 .attach-btn input{display:none}
 .composer-hint{font-size:12px;line-height:1.6;color:var(--text-muted)}
-.queue-list{margin-top:10px;display:none;flex-direction:column;gap:8px}
-.queue-list.show{display:flex}
-.queue-item{
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid var(--border);
-  background:var(--panel-soft);
-  display:flex;
-  justify-content:space-between;
-  gap:10px;
-  font-size:12px;
-  color:var(--text-muted);
-}
-.queue-item strong{font-size:13px;color:var(--text)}
 @media(max-width:720px){
   body{padding:0}
   .app-shell{width:100%;min-height:100vh;border-radius:0;border-left:none;border-right:none}
@@ -296,12 +284,11 @@ button:disabled{opacity:.55;cursor:not-allowed}
     channels: [],
     selectedChannel: '',
     items: [],
+    pendingItems: [],
     chunkSizeBytes: DEFAULT_CHUNK_SIZE,
     busy: false,
-    statusText: '准备就绪，可发送文本或文件。',
-    statusTone: 'idle',
-    progress: 0,
-    queue: []
+    statusText: '',
+    statusTone: ''
   };
 
   const ui = {
@@ -327,22 +314,22 @@ button:disabled{opacity:.55;cursor:not-allowed}
   async function copyMessageText(text) {
     try {
       await navigator.clipboard.writeText(String(text || ''));
-      setStatus('文本已复制。', 'idle', 0);
+      setStatus('文本已复制。', 'info');
     } catch (error) {
-      setStatus(error.message || '复制失败，请手动选择文本。', 'error', 0);
+      setStatus(error.message || '复制失败，请手动选择文本。', 'error');
     }
   }
 
   function triggerDownload(url, filename) {
     if (!url) {
-      setStatus('下载链接不可用。', 'warning', 0);
+      setStatus('下载链接不可用。', 'warning');
       return;
     }
     const a = document.createElement('a');
     a.href = url;
     a.download = filename || 'download';
     a.click();
-    setStatus('开始下载：' + (filename || '文件'), 'idle', 0);
+    setStatus('开始下载：' + (filename || '文件'), 'info');
   }
 
   function getAuthHeaders(headers) {
@@ -394,53 +381,129 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
   function formatSize(value) {
     const numeric = Number(value);
-    if (!numeric || Number.isNaN(numeric)) return '文本记录';
+    if (Number.isNaN(numeric) || numeric < 0) return '--';
     if (numeric < 1) return (numeric * 1024).toFixed(0) + ' KB';
     if (numeric < 1024) return numeric.toFixed(numeric >= 100 ? 0 : 2) + ' MB';
     return (numeric / 1024).toFixed(2) + ' GB';
   }
 
-  function getSummary() {
-    const total = state.items.length;
-    const textCount = state.items.filter(item => item.type === 'text').length;
-    const fileCount = total - textCount;
-    return { total, textCount, fileCount };
+  function createLocalId(prefix) {
+    return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   }
 
-  function setStatus(text, tone, progress) {
-    state.statusText = text;
-    state.statusTone = tone || 'idle';
-    state.progress = typeof progress === 'number' ? progress : 0;
+  function setStatus(text, tone) {
+    state.statusText = text || '';
+    state.statusTone = tone === 'error' ? 'error' : tone === 'warning' ? 'warning' : 'info';
     syncStatusUi();
   }
 
-  function setQueue(queue) {
-    state.queue = queue || [];
-    renderQueue();
+  function clearStatus() {
+    state.statusText = '';
+    state.statusTone = '';
+    syncStatusUi();
   }
 
   function syncStatusUi() {
-    if (!ui.statusChip) return;
-    ui.statusChip.className = 'status-chip ' + (state.statusTone || 'idle');
-    ui.statusChip.textContent = state.busy ? '处理中' : '在线';
+    if (!ui.statusStrip || !ui.statusText) return;
+    const show = !!state.statusText;
+    ui.statusStrip.className = 'status-strip' + (show ? ' show' : '');
+    ui.statusText.className = 'status-text' + (show && state.statusTone ? ' ' + state.statusTone : '');
     ui.statusText.textContent = state.statusText || '';
-    const showProgress = state.progress > 0 && state.progress < 100;
-    ui.progressWrap.classList.toggle('show', showProgress);
-    ui.progressFill.style.width = Math.max(0, Math.min(100, state.progress)) + '%';
-    ui.progressCaption.textContent = showProgress ? ('进度 ' + Math.round(state.progress) + '%') : '';
   }
 
-  function renderQueue() {
-    if (!ui.queueList) return;
-    if (!state.queue.length) {
-      ui.queueList.classList.remove('show');
-      ui.queueList.innerHTML = '';
-      return;
+  function setBusy(value) {
+    state.busy = !!value;
+    syncBusyUi();
+  }
+
+  function syncBusyUi() {
+    const hasChannels = state.channels.length > 0;
+    if (ui.sendBtn) ui.sendBtn.disabled = !hasChannels || state.busy;
+    if (ui.fileInput) ui.fileInput.disabled = !hasChannels || state.busy;
+    if (ui.messageInput) ui.messageInput.disabled = !hasChannels || state.busy;
+    if (ui.clearInputBtn) ui.clearInputBtn.disabled = !hasChannels || state.busy;
+    if (ui.channelSelect) ui.channelSelect.disabled = !hasChannels || state.busy;
+    if (ui.clearBtn) ui.clearBtn.disabled = state.busy;
+  }
+
+  function createPendingTextItem(text) {
+    return {
+      localId: createLocalId('text'),
+      isPending: true,
+      type: 'text',
+      text,
+      channel: state.selectedChannel || 'default',
+      timestamp: Date.now(),
+      status: 'sending',
+      errorMessage: ''
+    };
+  }
+
+  function createPendingFileItem(file) {
+    return {
+      localId: createLocalId('file'),
+      isPending: true,
+      type: 'file',
+      fileName: file?.name || '未命名文件',
+      fileType: file?.type || 'application/octet-stream',
+      fileSize: Math.max(0.0001, Number(file?.size || 0) / 1024 / 1024),
+      channel: state.selectedChannel || 'default',
+      timestamp: Date.now(),
+      status: 'uploading',
+      errorMessage: ''
+    };
+  }
+
+  function addPendingItems(items, scrollAfterRender) {
+    if (!Array.isArray(items) || !items.length) return;
+    state.pendingItems = state.pendingItems.concat(items);
+    renderMessages(scrollAfterRender !== false);
+  }
+
+  function updatePendingItem(localId, patch, scrollAfterRender) {
+    let changed = false;
+    state.pendingItems = state.pendingItems.map(function(item) {
+      if (item.localId !== localId) return item;
+      changed = true;
+      return { ...item, ...(patch || {}) };
+    });
+    if (changed) renderMessages(!!scrollAfterRender);
+  }
+
+  function resolvePendingMatch(pendingItem, serverItem) {
+    if (!pendingItem || !serverItem || pendingItem.type !== serverItem.type) return false;
+    if (pendingItem.serverId) {
+      return String(serverItem.id || '') === String(pendingItem.serverId);
     }
-    ui.queueList.classList.add('show');
-    ui.queueList.innerHTML = state.queue.map(item =>
-      '<div class="queue-item"><strong>' + escHtml(item.name) + '</strong><span>' + escHtml(item.status) + '</span></div>'
-    ).join('');
+    if (pendingItem.status !== 'syncing') return false;
+    const serverTime = Number(serverItem.timestamp || 0);
+    const pendingTime = Number(pendingItem.timestamp || 0);
+    if (pendingItem.type === 'text') {
+      return serverItem.text === pendingItem.text
+        && serverItem.channel === pendingItem.channel
+        && Math.abs(serverTime - pendingTime) < 60000;
+    }
+    return serverItem.fileName === pendingItem.fileName
+      && serverItem.channel === pendingItem.channel
+      && Math.abs(serverTime - pendingTime) < 10 * 60 * 1000;
+  }
+
+  function reconcilePendingItems() {
+    if (!state.pendingItems.length || !state.items.length) return;
+    state.pendingItems = state.pendingItems.filter(function(pendingItem) {
+      return !state.items.some(function(serverItem) {
+        return resolvePendingMatch(pendingItem, serverItem);
+      });
+    });
+  }
+
+  function extractFileIdFromUploadPayload(payload) {
+    const first = Array.isArray(payload)
+      ? payload[0]
+      : (Array.isArray(payload?.result) ? payload.result[0] : payload);
+    const src = first && first.src ? String(first.src) : '';
+    const match = src.match(/\/file\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
   }
 
   function showAuthPrompt() {
@@ -546,7 +609,6 @@ button:disabled{opacity:.55;cursor:not-allowed}
       <div class="chat-layout">
         <header class="page-header">
           <h1>Chat Transfer</h1>
-          <p>使用上传密码访问。支持发送文本、文件、复制文本和下载文件。</p>
         </header>
 
         <section class="control-bar">
@@ -561,15 +623,8 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
         <section class="message-scroll" id="messageScroll"></section>
 
-        <section class="status-strip">
-          <div class="status-head">
-            <div class="status-chip ${state.statusTone}">${state.busy ? '处理中' : '在线'}</div>
-          </div>
-          <div class="status-text" id="statusText">${escHtml(state.statusText)}</div>
-          <div class="progress-wrap ${state.progress > 0 && state.progress < 100 ? 'show' : ''}" id="progressWrap">
-            <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:${Math.max(0, Math.min(100, state.progress))}%"></div></div>
-            <div class="progress-caption" id="progressCaption">${state.progress > 0 && state.progress < 100 ? ('进度 ' + Math.round(state.progress) + '%') : ''}</div>
-          </div>
+        <section class="status-strip${state.statusText ? ' show' : ''}" id="statusStrip">
+          <div class="status-text${state.statusTone ? ' ' + state.statusTone : ''}" id="statusText">${escHtml(state.statusText)}</div>
         </section>
 
         <section class="composer-wrap">
@@ -582,13 +637,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
                   <input type="file" id="fileInput" multiple ${hasChannels ? '' : 'disabled'}>
                 </label>
                 <button class="icon-btn" id="clearInputBtn" ${hasChannels ? '' : 'disabled'}>清空输入</button>
-                <div class="composer-hint">${hasChannels ? '文件会复用现有 /upload 流程，并在需要时自动分片上传。' : '未检测到 Telegram 渠道，请先在上传设置中配置。'}</div>
+                <div class="composer-hint">${hasChannels ? '回车发送，Shift + Enter 换行' : '请先配置 Telegram 渠道'}</div>
               </div>
               <div class="toolbar-right">
                 <button class="send-btn" id="sendBtn" ${hasChannels ? '' : 'disabled'}>发送</button>
               </div>
             </div>
-            <div class="queue-list" id="queueList"></div>
           </div>
         </section>
       </div>`;
@@ -597,22 +651,18 @@ button:disabled{opacity:.55;cursor:not-allowed}
     ui.refreshBtn = document.getElementById('refreshBtn');
     ui.jumpBottomBtn = document.getElementById('jumpBottomBtn');
     ui.clearBtn = document.getElementById('clearBtn');
-    ui.statusChip = ui.app.querySelector('.status-chip');
+    ui.statusStrip = document.getElementById('statusStrip');
     ui.statusText = document.getElementById('statusText');
-    ui.progressWrap = document.getElementById('progressWrap');
-    ui.progressFill = document.getElementById('progressFill');
-    ui.progressCaption = document.getElementById('progressCaption');
     ui.messageScroll = document.getElementById('messageScroll');
     ui.messageInput = document.getElementById('messageInput');
     ui.fileInput = document.getElementById('fileInput');
     ui.sendBtn = document.getElementById('sendBtn');
     ui.clearInputBtn = document.getElementById('clearInputBtn');
-    ui.queueList = document.getElementById('queueList');
     ui.topbarChannel = document.getElementById('topbarChannel');
 
     bindUiEvents();
     syncStatusUi();
-    renderQueue();
+    syncBusyUi();
     renderMessages(true);
   }
 
@@ -621,7 +671,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
       state.selectedChannel = this.value;
       saveSettings();
       if (ui.topbarChannel) ui.topbarChannel.textContent = '当前渠道：' + (state.selectedChannel || '未选择');
-      setStatus('已切换到渠道：' + (state.selectedChannel || 'default'), 'idle', 0);
+      clearStatus();
     });
 
     ui.refreshBtn && ui.refreshBtn.addEventListener('click', function() {
@@ -668,41 +718,78 @@ button:disabled{opacity:.55;cursor:not-allowed}
       }
       if (action === 'download-file') {
         triggerDownload(actionButton.getAttribute('data-url') || '', actionButton.getAttribute('data-filename') || 'download');
+        return;
+      }
+      if (action === 'retry-text') {
+        retryPendingText(actionButton.getAttribute('data-local-id') || '');
       }
     });
   }
 
   function renderMessages(scrollAfterRender) {
     if (!ui.messageScroll) return;
-    const sortedItems = [...state.items].sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
-    if (!sortedItems.length) {
+    const mergedItems = state.items.concat(state.pendingItems).sort(function(a, b) {
+      return Number(a.timestamp || 0) - Number(b.timestamp || 0);
+    });
+    if (!mergedItems.length) {
       ui.messageScroll.innerHTML =
-        '<div class="timeline-tip">当前仅展示 Chat 传输记录</div>' +
         '<div class="empty-chat">' +
           '<span class="icon">📭</span>' +
-          '<p>还没有发送记录</p>' +
-          '<div class="hint">发送一条文本或选择文件后，这里会以聊天气泡的形式展示历史记录。</div>' +
+          '<p>还没有消息</p>' +
+          '<div class="hint">发一条试试</div>' +
         '</div>';
     } else {
-      const firstTime = sortedItems[0] ? formatDateTime(sortedItems[0].timestamp) : '--';
-      ui.messageScroll.innerHTML =
-        '<div class="timeline-tip">开始记录 · ' + escHtml(firstTime) + '</div>' +
-        sortedItems.map(renderMessageItem).join('');
+      ui.messageScroll.innerHTML = mergedItems.map(renderMessageItem).join('');
     }
     if (scrollAfterRender) scrollToBottom();
+  }
+
+  function getPendingStatusLabel(item) {
+    const statusMap = {
+      sending: '发送中',
+      uploading: '上传中',
+      merging: '合并中',
+      syncing: '同步中',
+      error: '失败'
+    };
+    return statusMap[item.status] || '处理中';
+  }
+
+  function renderPendingBadge(item) {
+    if (!item.isPending) return '';
+    const label = getPendingStatusLabel(item);
+    const cls = item.status === 'error' ? 'pending-state error' : 'pending-state';
+    return '<span class="' + cls + '">' + escHtml(label) + '</span>';
+  }
+
+  function renderTextActions(item) {
+    const actions = [];
+    actions.push('<button class="message-action-btn" type="button" data-action="copy-text" data-text="' + escAttr(item.text || '') + '">复制</button>');
+    if (item.isPending && item.status === 'error') {
+      actions.push('<button class="message-action-btn" type="button" data-action="retry-text" data-local-id="' + escAttr(item.localId || '') + '">重试</button>');
+    }
+    return actions.join('');
+  }
+
+  function renderMessageMeta(item, channel, timeText) {
+    return '<div class="message-meta">' +
+      '<span class="message-meta-main"><span class="message-channel">' + escHtml(channel) + '</span>' + renderPendingBadge(item) + '</span>' +
+      '<span class="message-time">' + escHtml(timeText) + '</span>' +
+    '</div>';
   }
 
   function renderMessageItem(item) {
     const channel = item.channel || state.selectedChannel || 'default';
     const timeText = formatDateTime(item.timestamp);
+    const pendingClass = item.isPending ? ' pending' : '';
     if (item.type === 'text') {
       return '<div class="message-row">' +
-        '<div class="message-card text">' +
-          '<div class="message-meta"><span class="message-channel">' + escHtml(channel) + '</span><span class="message-time">' + escHtml(timeText) + '</span></div>' +
+        '<div class="message-card text' + pendingClass + '">' +
+          renderMessageMeta(item, channel, timeText) +
           '<div class="message-body">' +
             '<div class="message-text">' + escHtml(item.text || '') + '</div>' +
-            '<div class="message-actions">' +
-              '<button class="message-action-btn" type="button" data-action="copy-text" data-text="' + escAttr(item.text || '') + '">复制</button>' +
+            '<div class="message-actions' + (item.isPending ? ' compact' : '') + '">' +
+              renderTextActions(item) +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -712,20 +799,23 @@ button:disabled{opacity:.55;cursor:not-allowed}
     const fileType = item.fileType || 'unknown';
     const fileSize = formatSize(item.fileSize);
     const fileName = item.fileName || '未命名文件';
+    const linkStart = item.isPending
+      ? '<div class="file-card-link">'
+      : '<a class="file-card-link" href="' + escHtml(fileUrl) + '" target="_blank" rel="noopener noreferrer">';
+    const linkEnd = item.isPending ? '</div>' : '</a>';
+    const actions = item.isPending ? '' : '<button class="message-action-btn" type="button" data-action="download-file" data-url="' + escAttr(fileUrl) + '" data-filename="' + escAttr(fileName) + '">下载</button>';
     return '<div class="message-row">' +
-      '<div class="message-card file">' +
-        '<div class="message-meta"><span class="message-channel">' + escHtml(channel) + '</span><span class="message-time">' + escHtml(timeText) + '</span></div>' +
+      '<div class="message-card file' + pendingClass + '">' +
+        renderMessageMeta(item, channel, timeText) +
         '<div class="message-body">' +
-          '<a class="file-card-link" href="' + escHtml(fileUrl) + '" target="_blank" rel="noopener noreferrer">' +
+          linkStart +
             '<span class="file-icon">📎</span>' +
             '<span class="file-copy">' +
               '<span class="file-name">' + escHtml(fileName) + '</span>' +
               '<span class="file-desc">' + escHtml(fileType) + ' · ' + escHtml(fileSize) + '</span>' +
             '</span>' +
-          '</a>' +
-          '<div class="message-actions">' +
-            '<button class="message-action-btn" type="button" data-action="download-file" data-url="' + escAttr(fileUrl) + '" data-filename="' + escAttr(fileName) + '">下载</button>' +
-          '</div>' +
+          linkEnd +
+          (actions ? '<div class="message-actions">' + actions + '</div>' : '') +
         '</div>' +
       '</div>' +
     '</div>';
@@ -753,44 +843,41 @@ button:disabled{opacity:.55;cursor:not-allowed}
       saveSettings();
       renderApp();
       await refreshHistory(false);
-      setStatus(state.channels.length ? '已连接，可开始发送。' : '未配置 Telegram 渠道。', state.channels.length ? 'idle' : 'warning', 0);
+      if (!state.channels.length) {
+        setStatus('未配置 Telegram 渠道。', 'warning');
+      } else {
+        clearStatus();
+      }
     } catch (error) {
       if (error.message === 'Unauthorized') return;
       if (error.message && error.message.indexOf('未启用') !== -1) return;
       if (ui.app === ui.loadingState?.parentNode || !document.getElementById('channelSelect')) {
         showErrorState(error.message || '加载失败');
       } else {
-        setStatus(error.message || '加载配置失败', 'error', 0);
+        setStatus(error.message || '加载配置失败', 'error');
       }
     }
   }
 
   async function refreshHistory(showStatus) {
     try {
-      if (showStatus) setStatus('正在刷新传输记录…', 'loading', 0);
+      if (showStatus) clearStatus();
       const response = await authedFetch('/api/chat/history', { method: 'GET' });
       if (!response.ok) throw new Error(await parseErrorResponse(response));
       const data = await response.json();
       state.items = Array.isArray(data.items) ? data.items : [];
+      reconcilePendingItems();
       renderMessages(true);
-      if (showStatus) setStatus('记录已刷新。', 'idle', 0);
+      if (showStatus) clearStatus();
     } catch (error) {
       if (error.message === 'Unauthorized') return;
-      setStatus(error.message || '刷新记录失败', 'error', 0);
+      setStatus(error.message || '刷新记录失败', 'error');
     }
   }
 
-  async function sendText() {
-    if (state.busy) return;
-    const text = ui.messageInput.value.trim();
-    if (!text) {
-      setStatus('请输入要发送的文本。', 'warning', 0);
-      ui.messageInput.focus();
-      return;
-    }
-    state.busy = true;
-    ui.sendBtn.disabled = true;
-    setStatus('正在发送文本…', 'loading', 0);
+  async function submitPendingText(localId, text) {
+    updatePendingItem(localId, { status: 'sending', errorMessage: '', timestamp: Date.now() }, true);
+    setBusy(true);
     try {
       const response = await authedFetch('/api/chat/sendText', {
         method: 'POST',
@@ -798,25 +885,52 @@ button:disabled{opacity:.55;cursor:not-allowed}
         body: JSON.stringify({ text, channelName: state.selectedChannel })
       });
       if (!response.ok) throw new Error(await parseErrorResponse(response));
-      ui.messageInput.value = '';
+      const data = await response.json();
+      updatePendingItem(localId, {
+        status: 'syncing',
+        serverId: data.id || '',
+        channel: data.channel || state.selectedChannel || 'default',
+        timestamp: Number(data.timestamp || Date.now())
+      }, true);
+      clearStatus();
       await refreshHistory(false);
-      setStatus('文本已发送到 Telegram。', 'idle', 0);
     } catch (error) {
       if (error.message !== 'Unauthorized') {
-        setStatus(error.message || '文本发送失败', 'error', 0);
+        updatePendingItem(localId, { status: 'error', errorMessage: error.message || '发送失败' }, true);
       }
     } finally {
-      state.busy = false;
-      ui.sendBtn.disabled = false;
+      setBusy(false);
     }
+  }
+
+  async function sendText() {
+    if (state.busy) return;
+    const text = ui.messageInput.value.trim();
+    if (!text) {
+      setStatus('请输入内容', 'warning');
+      ui.messageInput.focus();
+      return;
+    }
+    const pendingItem = createPendingTextItem(text);
+    ui.messageInput.value = '';
+    clearStatus();
+    addPendingItems([pendingItem], true);
+    await submitPendingText(pendingItem.localId, text);
+  }
+
+  function retryPendingText(localId) {
+    if (!localId || state.busy) return;
+    const item = state.pendingItems.find(function(entry) { return entry.localId === localId; });
+    if (!item || item.type !== 'text') return;
+    clearStatus();
+    submitPendingText(localId, item.text || '');
   }
 
   async function clearHistory() {
     if (state.busy) return;
     if (!window.confirm('确认清空当前 Chat 传输记录吗？这不会影响主页上传文件。')) return;
-    state.busy = true;
-    ui.clearBtn.disabled = true;
-    setStatus('正在清空传输记录…', 'loading', 0);
+    setBusy(true);
+    clearStatus();
     try {
       const response = await authedFetch('/api/chat/clear', {
         method: 'POST',
@@ -825,62 +939,56 @@ button:disabled{opacity:.55;cursor:not-allowed}
       if (!response.ok) throw new Error(await parseErrorResponse(response));
       const data = await response.json();
       state.items = [];
+      state.pendingItems = [];
       renderMessages(true);
-      setStatus('已清空 ' + String(data.deletedCount || 0) + ' 条记录。', 'idle', 0);
+      setStatus('已清空 ' + String(data.deletedCount || 0) + ' 条记录。', 'warning');
     } catch (error) {
       if (error.message !== 'Unauthorized') {
-        setStatus(error.message || '清空失败', 'error', 0);
+        setStatus(error.message || '清空失败', 'error');
       }
     } finally {
-      state.busy = false;
-      ui.clearBtn.disabled = false;
+      setBusy(false);
     }
   }
 
   async function uploadFiles(files) {
     if (!files || !files.length) return;
     if (state.busy) {
-      setStatus('当前仍有任务处理中，请稍后再试。', 'warning', 0);
+      setStatus('请稍后再试', 'warning');
       return;
     }
-    state.busy = true;
-    ui.sendBtn.disabled = true;
-    setQueue(files.map(file => ({ name: file.name, status: '等待上传' })));
+    const pendingFiles = files.map(createPendingFileItem);
+    clearStatus();
+    addPendingItems(pendingFiles, true);
+    setBusy(true);
     try {
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        updateQueueItem(i, '上传中');
-        await uploadSingleFile(file, i, files.length);
-        updateQueueItem(i, '已完成');
+        try {
+          await uploadSingleFile(files[i], pendingFiles[i].localId);
+        } catch (error) {
+          if (error.message === 'Unauthorized') throw error;
+          updatePendingItem(pendingFiles[i].localId, { status: 'error', errorMessage: error.message || '上传失败' }, true);
+        }
       }
       await refreshHistory(false);
-      setStatus('文件发送完成。', 'idle', 0);
     } catch (error) {
       if (error.message !== 'Unauthorized') {
-        setStatus(error.message || '文件发送失败', 'error', 0);
+        setStatus(error.message || '文件发送失败', 'error');
       }
     } finally {
-      state.busy = false;
-      ui.sendBtn.disabled = false;
-      setTimeout(function(){ setQueue([]); }, 1200);
+      setBusy(false);
     }
   }
 
-  function updateQueueItem(index, status) {
-    if (!state.queue[index]) return;
-    state.queue[index].status = status;
-    renderQueue();
-  }
-
-  async function uploadSingleFile(file, index, total) {
+  async function uploadSingleFile(file, localId) {
     if (file.size <= 0) {
-      return uploadDirectFile(file, index, total);
+      return uploadDirectFile(file, localId);
     }
-    return uploadChunkedFile(file, index, total);
+    return uploadChunkedFile(file, localId);
   }
 
-  async function uploadDirectFile(file, index, total) {
-    setStatus('正在上传文件（' + (index + 1) + '/' + total + '）：' + file.name, 'loading', ((index) / total) * 100);
+  async function uploadDirectFile(file, localId) {
+    updatePendingItem(localId, { status: 'uploading', errorMessage: '', timestamp: Date.now() }, true);
     const formData = new FormData();
     formData.append('file', file, file.name);
     const response = await authedFetch(buildUploadUrl(), {
@@ -889,13 +997,17 @@ button:disabled{opacity:.55;cursor:not-allowed}
       body: formData
     });
     if (!response.ok) throw new Error(await parseErrorResponse(response));
-    await response.json().catch(() => []);
-    setStatus('文件已发送：' + file.name, 'idle', ((index + 1) / total) * 100);
+    const result = await response.json().catch(() => []);
+    updatePendingItem(localId, {
+      status: 'syncing',
+      serverId: extractFileIdFromUploadPayload(result),
+      timestamp: Date.now()
+    }, true);
   }
 
-  async function uploadChunkedFile(file, index, total) {
+  async function uploadChunkedFile(file, localId) {
+    updatePendingItem(localId, { status: 'uploading', errorMessage: '' }, true);
     const totalChunks = Math.ceil(file.size / state.chunkSizeBytes);
-    setStatus('正在初始化大文件上传：' + file.name, 'loading', ((index) / total) * 100);
 
     const initForm = new FormData();
     initForm.append('originalFileName', file.name);
@@ -924,8 +1036,6 @@ button:disabled{opacity:.55;cursor:not-allowed}
       chunkForm.append('originalFileName', file.name);
       chunkForm.append('originalFileType', file.type || 'application/octet-stream');
 
-      const overallProgress = ((index + (chunkIndex + 1) / totalChunks) / total) * 100;
-      setStatus('正在上传分片 ' + (chunkIndex + 1) + '/' + totalChunks + '：' + file.name, 'loading', overallProgress);
       const chunkResponse = await authedFetch(buildUploadUrl({ chunked: 'true' }), {
         method: 'POST',
         headers: getAuthHeaders(),
@@ -935,11 +1045,11 @@ button:disabled{opacity:.55;cursor:not-allowed}
       await chunkResponse.json().catch(() => ({}));
     }
 
-    await mergeChunkedFile(file, uploadId, totalChunks, index, total);
-    setStatus('大文件已发送：' + file.name, 'idle', ((index + 1) / total) * 100);
+    await mergeChunkedFile(file, uploadId, totalChunks, localId);
   }
 
-  async function mergeChunkedFile(file, uploadId, totalChunks, index, total) {
+  async function mergeChunkedFile(file, uploadId, totalChunks, localId) {
+    updatePendingItem(localId, { status: 'merging' }, true);
     const mergeForm = new FormData();
     mergeForm.append('uploadId', uploadId);
     mergeForm.append('totalChunks', String(totalChunks));
@@ -956,7 +1066,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
       });
 
       if (response.ok) {
-        await response.json().catch(() => []);
+        const result = await response.json().catch(() => []);
+        updatePendingItem(localId, {
+          status: 'syncing',
+          serverId: extractFileIdFromUploadPayload(result),
+          timestamp: Date.now()
+        }, true);
         return;
       }
 
@@ -966,8 +1081,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
       const pending = await response.json().catch(() => ({}));
       const retryAfterMs = Number(pending.retryAfterMs || 1000);
-      const overallProgress = ((index + 0.98) / total) * 100;
-      setStatus('正在合并分片：' + file.name + '（第 ' + attempt + ' 次检查）', 'loading', overallProgress);
+      updatePendingItem(localId, { status: 'merging' }, true);
       await new Promise(resolve => setTimeout(resolve, retryAfterMs));
     }
 
