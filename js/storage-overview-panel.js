@@ -29,7 +29,7 @@
             position: absolute;
             inset: 0;
             pointer-events: none;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.3), transparent 40%, rgba(55, 198, 182, 0.06));
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 60%);
             border-radius: var(--theme-radius-lg, 24px);
         }
 
@@ -63,7 +63,7 @@
         .file-stats-item {
             position: relative;
             overflow: hidden;
-            background: linear-gradient(135deg, #348fff 0%, #2468ea 55%, #37c6b6 100%);
+            background: var(--md-primary, #3b66d6);
             padding: 14px 10px;
             border-radius: var(--theme-radius-md, 18px);
             text-align: center;
@@ -81,7 +81,7 @@
         }
 
         .file-stats-item.alt {
-            background: linear-gradient(135deg, #1d6ce0 0%, #3194ff 52%, #7ecbff 100%);
+            background: var(--md-secondary, #3a8a82);
         }
 
         .file-stats-value {
@@ -215,7 +215,7 @@
         }
 
         .file-stats-bar-list::-webkit-scrollbar-thumb {
-            background: linear-gradient(180deg, rgba(52, 143, 255, 0.4), rgba(55, 198, 182, 0.4));
+            background: var(--md-outline-variant, rgba(0,0,0,.18));
             border-radius: 999px;
         }
 
@@ -280,7 +280,7 @@
         }
 
         .file-stats-refresh-btn {
-            background: linear-gradient(135deg, var(--theme-primary, #348fff) 0%, var(--theme-primary-strong, #2468ea) 55%, #3fbfe8 100%);
+            background: var(--md-primary, #3b66d6);
             color: white;
             border: none;
             padding: 8px 16px;

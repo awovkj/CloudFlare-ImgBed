@@ -1,0 +1,221 @@
+/*
+ * theme-m3-overrides.css
+ *
+ * Main-site overlay: re-tones the compiled Vue + Element Plus bundle
+ * (css/app.*.css, css/chunk-vendors.*.css) to the shared Material 3 light
+ * palette defined in theme-m3.css. Loaded AFTER both compiled stylesheets.
+ *
+ * Strategy:
+ *   1. Override Element Plus CSS variables (the supported extension point).
+ *   2. Touch a small set of well-known class names for shape/elevation where
+ *      EP variables don't reach.
+ * Avoids !important unless strictly needed to beat inline styles.
+ */
+
+:root {
+  /* Element Plus — primary tonal ramp derived from --md-primary (#3b66d6) */
+  --el-color-primary: var(--md-primary);
+  --el-color-primary-light-3: #6f8ee3;
+  --el-color-primary-light-5: #9db2ea;
+  --el-color-primary-light-7: #c5d1f2;
+  --el-color-primary-light-8: #d5defa;
+  --el-color-primary-light-9: #e6ecfd;
+  --el-color-primary-dark-2: #2f52ae;
+
+  --el-color-success: var(--md-success);
+  --el-color-warning: var(--md-warning);
+  --el-color-danger: var(--md-error);
+  --el-color-error: var(--md-error);
+
+  --el-bg-color: var(--md-surface);
+  --el-bg-color-page: var(--md-background);
+  --el-bg-color-overlay: var(--md-surface-container-lowest);
+  --el-fill-color: var(--md-surface-container);
+  --el-fill-color-light: var(--md-surface-container-low);
+  --el-fill-color-lighter: var(--md-surface-container-low);
+  --el-fill-color-blank: var(--md-surface-container-lowest);
+  --el-fill-color-dark: var(--md-surface-container-high);
+
+  --el-text-color-primary: var(--md-on-surface);
+  --el-text-color-regular: var(--md-on-surface);
+  --el-text-color-secondary: var(--md-on-surface-variant);
+  --el-text-color-placeholder: var(--md-on-surface-muted);
+  --el-text-color-disabled: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+
+  --el-border-color: var(--md-outline-variant);
+  --el-border-color-light: var(--md-outline-variant);
+  --el-border-color-lighter: var(--md-outline-variant);
+  --el-border-color-extra-light: var(--md-outline-variant);
+  --el-border-color-hover: var(--md-outline);
+  --el-border-color-darker: var(--md-outline);
+
+  --el-border-radius-small: var(--md-shape-sm);
+  --el-border-radius-base: var(--md-shape-md);
+  --el-border-radius-round: var(--md-shape-full);
+  --el-border-radius-circle: 50%;
+
+  --el-box-shadow-light: var(--md-elev-1);
+  --el-box-shadow: var(--md-elev-2);
+  --el-box-shadow-lighter: var(--md-elev-1);
+  --el-box-shadow-dark: var(--md-elev-3);
+}
+
+/* ── Buttons: softer M3 shape + subdued shadow ── */
+.el-button {
+  border-radius: var(--md-shape-full);
+  transition: background-color 0.15s var(--md-ease-standard),
+              box-shadow 0.15s var(--md-ease-standard),
+              color 0.15s var(--md-ease-standard);
+}
+
+.el-button--primary {
+  box-shadow: var(--md-elev-1);
+}
+.el-button--primary:hover,
+.el-button--primary:focus {
+  box-shadow: var(--md-elev-2);
+}
+
+.el-button.is-plain,
+.el-button.is-text {
+  box-shadow: none;
+}
+
+/* ── Inputs / form fields ── */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: var(--md-shape-sm);
+  box-shadow: 0 0 0 1px var(--md-outline-variant) inset;
+  transition: box-shadow 0.15s var(--md-ease-standard);
+}
+.el-input__wrapper:hover,
+.el-textarea__inner:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--md-outline) inset;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 2px var(--md-primary) inset;
+}
+
+/* ── Cards / surfaces ── */
+.el-card,
+.el-dialog,
+.el-drawer,
+.el-message-box,
+.el-popover,
+.el-popper.is-light {
+  border-radius: var(--md-shape-lg);
+  border: 1px solid var(--md-outline-variant);
+  box-shadow: var(--md-elev-2);
+  background: var(--md-surface-container-low);
+}
+
+.el-dialog {
+  border-radius: var(--md-shape-xl);
+  box-shadow: var(--md-elev-3);
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--md-outline-variant);
+  background: transparent;
+}
+
+/* ── Tables ── */
+.el-table {
+  background: transparent;
+  color: var(--md-on-surface);
+}
+.el-table th.el-table__cell {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.el-table tr:hover > td.el-table__cell {
+  background: color-mix(in srgb, var(--md-primary) 6%, transparent) !important;
+}
+
+/* ── Tags & badges ── */
+.el-tag {
+  border-radius: var(--md-shape-full);
+  border: none;
+  font-weight: 600;
+}
+.el-tag--primary {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+.el-tag--success {
+  background: var(--md-success-container);
+  color: var(--md-on-surface);
+}
+.el-tag--warning {
+  background: var(--md-warning-container);
+  color: var(--md-on-surface);
+}
+.el-tag--danger {
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+}
+
+/* ── Switch / checkbox / radio accent ── */
+.el-switch.is-checked .el-switch__core {
+  background-color: var(--md-primary) !important;
+  border-color: var(--md-primary) !important;
+}
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-radio__input.is-checked .el-radio__inner {
+  background-color: var(--md-primary);
+  border-color: var(--md-primary);
+}
+
+/* ── Pagination ── */
+.el-pagination .el-pager li {
+  border-radius: var(--md-shape-sm);
+}
+.el-pagination .el-pager li.is-active {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+/* ── Menu / tabs active underline ── */
+.el-tabs__active-bar {
+  background-color: var(--md-primary);
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+}
+.el-menu-item.is-active,
+.el-sub-menu.is-active > .el-sub-menu__title {
+  color: var(--md-primary);
+}
+
+/* ── Message / notifications ── */
+.el-message,
+.el-notification {
+  border-radius: var(--md-shape-lg);
+  box-shadow: var(--md-elev-2);
+  border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-lowest);
+}
+
+/* ── Loading / progress ── */
+.el-progress-bar__outer {
+  background-color: var(--md-surface-container-high);
+  border-radius: var(--md-shape-full);
+}
+.el-progress-bar__inner {
+  background-color: var(--md-primary);
+  border-radius: var(--md-shape-full);
+}
+
+/* ── App-wide body tone ── */
+html, body {
+  background: var(--md-background);
+}
