@@ -97,6 +97,14 @@ export async function handleChunkMerge(context) {
 
         const sessionInfo = JSON.parse(sessionData);
 
+        // 如果后台合并已经成功，直接返回保存的结果（供前端轮询拿到结果）
+        if (sessionInfo.status === 'merge_success' && sessionInfo.mergeResult) {
+            return createResponse(JSON.stringify(sessionInfo.mergeResult), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
         const mergeIsOngoing = sessionInfo.status === 'merging'
             && sessionInfo.mergeProtectedUntil
             && Date.now() < sessionInfo.mergeProtectedUntil;
@@ -281,8 +289,12 @@ async function finalizeMergeInBackground(context, params) {
             );
 
             if (result.success) {
+                await updateUploadSessionStatus(env, uploadId, {
+                    status: 'merge_success',
+                    mergeCompletedAt: Date.now(),
+                    mergeResult: result.result
+                });
                 await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
-                await cleanupUploadSession(env, uploadId);
                 return;
             }
 
