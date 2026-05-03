@@ -1,3 +1,5 @@
+import { destroySession } from '../../utils/auth/sessionManager.js';
+
 export async function onRequest(context) {
     // Contents of context object
     const {
@@ -8,6 +10,12 @@ export async function onRequest(context) {
       next, // used for middleware or to fetch assets
       data, // arbitrary space for passing data between middlewares
     } = context;
-    return new Response('Logged out.', { status: 401 });
+    const cookie = await destroySession(env, request, 'admin');
+    return new Response('Logged out.', {
+      status: 401,
+      headers: {
+        'Set-Cookie': cookie,
+      },
+    });
 
   }

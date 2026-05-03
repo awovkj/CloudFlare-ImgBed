@@ -1,3 +1,5 @@
+import { createSession } from '../../utils/auth/sessionManager.js';
+
 export async function onRequest(context) {
     // Contents of context object
     const {
@@ -10,7 +12,13 @@ export async function onRequest(context) {
     } = context;
     //get the request url
     const url = new URL(request.url);
-    //redirect to dashboard page
-    return Response.redirect(url.origin+"/dashboard", 302)
+    const response = Response.redirect(url.origin+"/dashboard", 302)
+
+    if (data?.auth?.method === 'basic' || data?.auth?.method === 'none') {
+      const { cookie } = await createSession(env, 'admin');
+      response.headers.set('Set-Cookie', cookie);
+    }
+
+    return response
 
   }

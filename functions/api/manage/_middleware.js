@@ -2,6 +2,8 @@ import { fetchSecurityConfig } from "../../utils/sysConfig";
 import { checkDatabaseConfig } from "../../utils/middleware";
 import { validateApiToken } from "../../utils/tokenValidator";
 import { getDatabase } from "../../utils/databaseAdapter.js";
+import { validateSession } from '../../utils/auth/sessionManager.js';
+import { verifyPassword } from '../../utils/auth/passwordHash.js';
 import { createJsonResponse, createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
 
 let securityConfig = {}
@@ -135,10 +137,20 @@ async function authentication(context) {
 
   await refreshSecurityConfigIfNeeded(context.env);
 
-  if (typeof basicUser == "undefined" || basicUser == null || basicUser == "") {
+  const usernameConfigured = typeof basicUser !== 'undefined' && basicUser !== null && basicUser !== "";
+  const passwordConfigured = typeof basicPass !== 'undefined' && basicPass !== null && basicPass !== "";
+  const adminConfigured = usernameConfigured || passwordConfigured;
+
+  if (!adminConfigured) {
     // 无需身份验证
+    context.data.auth = { authType: 'admin', method: 'none' };
     return context.next();
   } else {
+    const adminSession = await validateSession(context.env, context.request, 'admin');
+    if (adminSession.valid) {
+      context.data.auth = { authType: 'admin', method: 'session' };
+      return context.next();
+    }
 
     if (context.request.headers.has('Authorization')) {
       // 首先尝试使用API Token验证
@@ -150,14 +162,23 @@ async function authentication(context) {
       const tokenValidation = await validateApiToken(context.request, db, requiredPermission);
       if (tokenValidation.valid) {
         // Token验证通过，继续处理请求
+        context.data.auth = { authType: 'admin', method: 'api-token' };
         return context.next();
       }
 
       // 回退到使用传统身份认证方式
-      const { user, pass } = basicAuthentication(context.request);
-      if (basicUser !== user || basicPass !== pass) {
+      const basicAuthResult = basicAuthentication(context.request);
+      if (basicAuthResult instanceof Response) {
+        return basicAuthResult;
+      }
+
+      const { user, pass } = basicAuthResult;
+      const usernameValid = usernameConfigured ? basicUser === user : true;
+      const passwordValid = passwordConfigured ? await verifyPassword(pass, basicPass) : true;
+      if (!usernameValid || !passwordValid) {
         return UnauthorizedException('Invalid credentials.');
       } else {
+        context.data.auth = { authType: 'admin', method: 'basic' };
         return context.next();
       }
 

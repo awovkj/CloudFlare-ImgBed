@@ -16,6 +16,7 @@ import { onRequest as onFileRequest }           from '../functions/file/[[path]]
 // api 顶层
 // login.js / huggingface/*.js 只导出 onRequestPost（Pages Functions HTTP 方法约定）
 import { onRequestPost as onLoginPost }         from '../functions/api/login.js';
+import { matchGeneratedAuthRoute }              from './generatedAuthRoutes.js';
 import { onRequest as onUserConfigRequest }     from '../functions/api/userConfig.js';
 import { onRequest as onChannelsRequest }       from '../functions/api/channels.js';
 import { onRequest as onFetchResRequest }       from '../functions/api/fetchRes.js';
@@ -153,6 +154,99 @@ function getOnly(handler) {
         }
         return handler(context);
     };
+}
+
+function collectModuleMiddlewares(middlewareModules) {
+    const handlers = [];
+
+    for (const mod of middlewareModules ?? []) {
+        if (!mod?.onRequest) {
+            continue;
+        }
+
+        if (Array.isArray(mod.onRequest)) {
+            handlers.push(...mod.onRequest);
+        } else {
+            handlers.push(mod.onRequest);
+        }
+    }
+
+    return handlers;
+}
+
+function resolveModuleHandler(mod, method) {
+    const normalizedMethod = method.toUpperCase();
+    const methodHandlerName = `onRequest${normalizedMethod.charAt(0)}${normalizedMethod.slice(1).toLowerCase()}`;
+
+    if (typeof mod[methodHandlerName] === 'function') {
+        return mod[methodHandlerName];
+    }
+
+    if (typeof mod.onRequest === 'function') {
+        return mod.onRequest;
+    }
+
+    if (Array.isArray(mod.onRequest) && mod.onRequest.length > 0) {
+        return mod.onRequest[mod.onRequest.length - 1];
+    }
+
+    return null;
+}
+
+function collectAllowedMethods(mod) {
+    const allowedMethods = [];
+    const methodMap = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+
+    for (const method of methodMap) {
+        const handlerName = `onRequest${method.charAt(0)}${method.slice(1).toLowerCase()}`;
+        if (typeof mod[handlerName] === 'function') {
+            allowedMethods.push(method);
+        }
+    }
+
+    if (allowedMethods.length === 0 && typeof mod.onRequest === 'function') {
+        allowedMethods.push('GET', 'POST', 'PUT', 'PATCH', 'DELETE');
+    }
+
+    return allowedMethods;
+}
+
+function buildGeneratedOptionsResponse(mod) {
+    const allowedMethods = collectAllowedMethods(mod);
+    const allowHeaders = new Set(['Content-Type', 'Authorization']);
+
+    if (allowedMethods.includes('GET')) {
+        allowHeaders.add('authCode');
+    }
+
+    return new Response(null, {
+        status: 204,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': [...allowedMethods, 'OPTIONS'].join(', '),
+            'Access-Control-Allow-Headers': [...allowHeaders].join(', '),
+            'Access-Control-Max-Age': '86400',
+        },
+    });
+}
+
+async function runGeneratedRoute(request, env, ctx, route) {
+    if (request.method === 'OPTIONS') {
+        return buildGeneratedOptionsResponse(route.module);
+    }
+
+    const handler = resolveModuleHandler(route.module, request.method);
+    if (!handler) {
+        return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    const middlewares = collectModuleMiddlewares(route.middlewares);
+
+    if (Array.isArray(route.module.onRequest) && route.module.onRequest.length > 1 && handler === route.module.onRequest[route.module.onRequest.length - 1]) {
+        middlewares.push(...route.module.onRequest.slice(0, -1));
+    }
+
+    return runMiddlewareChain(request, env, ctx, {}, [...middlewares, handler]);
 }
 
 function matchDynamicRoute(pathname) {
@@ -306,6 +400,11 @@ export default {
             const dynamicRoute = matchDynamicRoute(pathname);
             if (dynamicRoute) {
                 return await runMiddlewareChain(request, env, ctx, dynamicRoute.params, dynamicRoute.middlewares);
+            }
+
+            const generatedAuthRoute = matchGeneratedAuthRoute(pathname);
+            if (generatedAuthRoute) {
+                return await runGeneratedRoute(request, env, ctx, generatedAuthRoute);
             }
         } catch (err) {
             console.error(`[worker] Error handling ${pathname}:`, err);

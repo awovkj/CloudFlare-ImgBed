@@ -32,9 +32,38 @@ export async function onRequest(context) {
         const newSettings = body
 
         // 覆盖设置，apiTokens不在这里修改
-        settings.auth = newSettings.auth || settings.auth
-        settings.upload = newSettings.upload || settings.upload
-        settings.access = newSettings.access || settings.access
+        if (newSettings.auth) {
+            settings.auth = {
+                ...settings.auth,
+                ...newSettings.auth,
+                user: newSettings.auth.user ? {
+                    ...settings.auth.user,
+                    ...newSettings.auth.user,
+                } : settings.auth.user,
+                admin: newSettings.auth.admin ? {
+                    ...settings.auth.admin,
+                    ...newSettings.auth.admin,
+                } : settings.auth.admin,
+            }
+        }
+
+        if (newSettings.upload) {
+            settings.upload = {
+                ...settings.upload,
+                ...newSettings.upload,
+                moderate: newSettings.upload.moderate ? {
+                    ...settings.upload.moderate,
+                    ...newSettings.upload.moderate,
+                } : settings.upload.moderate,
+            }
+        }
+
+        if (newSettings.access) {
+            settings.access = {
+                ...settings.access,
+                ...newSettings.access,
+            }
+        }
 
         // 写入数据库
         await db.put('manage@sysConfig@security', JSON.stringify(settings))
@@ -49,18 +78,21 @@ export async function onRequest(context) {
 }
 
 export async function getSecurityConfig(db, env) {
-    const settings = {}
     // 读取数据库中的设置
     const settingsStr = await db.get('manage@sysConfig@security')
     const settingsKV = settingsStr ? JSON.parse(settingsStr) : {}
+    const settings = { ...settingsKV }
 
     // 认证管理
     const kvAuth = settingsKV.auth || {}
     const auth = {
+        ...kvAuth,
         user: {
+            ...(kvAuth.user || {}),
             authCode: kvAuth.user?.authCode || env.AUTH_CODE || '',
         },
         admin: {
+            ...(kvAuth.admin || {}),
             adminUsername: kvAuth.admin?.adminUsername || env.BASIC_USER || '',
             adminPassword: kvAuth.admin?.adminPassword || env.BASIC_PASS || '',
         }
@@ -70,7 +102,9 @@ export async function getSecurityConfig(db, env) {
     // 上传管理
     const kvUpload = settingsKV.upload || {}
     const upload = {
+        ...kvUpload,
         moderate: {
+            ...(kvUpload.moderate || {}),
             enabled: kvUpload.moderate?.enabled ?? false,
             channel: kvUpload.moderate?.channel || 'moderatecontent.com', // [moderatecontent.com, nsfwjs]
             moderateContentApiKey: kvUpload.moderate?.moderateContentApiKey || kvUpload.moderate?.apiKey || env.ModerateContentApiKey || '',
@@ -82,14 +116,19 @@ export async function getSecurityConfig(db, env) {
     // 访问管理
     const kvAccess = settingsKV.access || {}
     const access = {
+        ...kvAccess,
         allowedDomains: kvAccess.allowedDomains || env.ALLOWED_DOMAINS || '',
         whiteListMode: kvAccess.whiteListMode ?? env.WhiteList_Mode === 'true',
+        sessionSecure: kvAccess.sessionSecure ?? false,
+        userSessionMaxAge: kvAccess.userSessionMaxAge ?? 14,
+        adminSessionMaxAge: kvAccess.adminSessionMaxAge ?? 14,
     }
     settings.access = access
 
     // API Token 管理
     const kvApiTokens = settingsKV.apiTokens || {}
     const apiTokens = {
+        ...kvApiTokens,
         tokens: kvApiTokens.tokens || {}
     }
     settings.apiTokens = apiTokens

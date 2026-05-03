@@ -1,6 +1,4 @@
-import { fetchSecurityConfig } from './sysConfig';
-import { validateApiToken } from './tokenValidator';
-import { getDatabase } from './databaseAdapter.js';
+import { authenticate, AUTH_SCOPE } from './auth/authCore.js';
 
 /** 
  * 客户端用户认证
@@ -11,61 +9,15 @@ import { getDatabase } from './databaseAdapter.js';
  * @return {Promise<boolean>} 返回是否认证通过
  */
 export async function userAuthCheck(env, url, request, requiredPermission = null) {
-    // 并行发起 Token 验证和传统认证配置读取，单次 I/O 往返
-    let tokenValidation;
-    let securityConfig;
+    const result = await authenticate({
+        env,
+        request,
+        url,
+        requiredPermission,
+        authScope: AUTH_SCOPE.USER,
+    });
 
-    try {
-        [tokenValidation, securityConfig] = await Promise.all([
-            validateApiToken(request, getDatabase(env), requiredPermission).catch(() => ({ valid: false })),
-            fetchSecurityConfig(env)
-        ]);
-    } catch (error) {
-        console.error('Failed to load security config for user auth:', error);
-        return false;
-    }
-
-    if (tokenValidation.valid) {
-        return true;
-    }
-
-    // Token 验证失败，继续尝试传统认证方式
-    const rightAuthCode = securityConfig.auth.user.authCode;
-
-    // 优先从请求 URL 参数获取 authCode
-    let authCode = url.searchParams.get('authCode');
-
-    // 如果 URL 参数中没有 authCode，从 Referer 中获取
-    if (!authCode) {
-        const referer = request.headers.get('Referer');
-        if (referer) {
-            try {
-                const refererUrl = new URL(referer);
-                authCode = new URLSearchParams(refererUrl.search).get('authCode');
-            } catch (e) {
-                console.error('Invalid referer URL:', e);
-            }
-        }
-    }
-
-    // 如果 Referer 中没有 authCode，从请求头中获取
-    if (!authCode) {
-        authCode = request.headers.get('authCode');
-    }
-
-    // 如果请求头中没有 authCode，从 Cookie 中获取
-    if (!authCode) {
-        const cookies = request.headers.get('Cookie');
-        if (cookies) {
-            authCode = getCookieValue(cookies, 'authCode');
-        }
-    }
-
-    if (isAuthCodeDefined(rightAuthCode) && !isValidAuthCode(rightAuthCode, authCode)) {
-        return false;
-    }
-
-    return true;
+    return result.authorized;
 }
 
 export function UnauthorizedResponse(reason) {
@@ -81,18 +33,4 @@ export function UnauthorizedResponse(reason) {
             "Content-Length": reason.length,
         },
     });
-}
-
-function isValidAuthCode(rightAuthCode, authCode) {
-    return authCode === rightAuthCode;
-}
-
-function isAuthCodeDefined(authCode) {
-    return authCode !== undefined && authCode !== null && authCode.trim() !== '';
-}
-
-
-function getCookieValue(cookies, name) {
-    const match = cookies.match(new RegExp('(^| )' + name + '=([^;]+)'));
-    return match ? decodeURIComponent(match[2]) : null;
 }

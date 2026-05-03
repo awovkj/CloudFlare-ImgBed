@@ -1,28 +1,32 @@
 #!/usr/bin/env node
 /**
- * scripts/copy-assets.mjs
- * 将项目根目录的静态资源复制到 .wrangler-assets/
- * 由 wrangler.toml [build] command 或 npm run build:assets 调用
+ * Generate a frontend-dist directory from the current customized root assets.
+ *
+ * Phase-1 goal:
+ * - keep root files as the editable source of truth
+ * - produce an upstream-compatible frontend-dist output directory
+ * - let Pages / Worker asset pipelines consume frontend-dist consistently
  */
-import fs   from 'fs';
+
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root      = path.resolve(__dirname, '..');
-const dest      = path.resolve(root, '.wrangler-assets');
-const frontendDist = path.resolve(root, 'frontend-dist');
-const sourceRoot = fs.existsSync(frontendDist) ? frontendDist : root;
+const root = path.resolve(__dirname, '..');
+const dest = path.resolve(root, 'frontend-dist');
 
-// 读取 .assetsignore 排除规则
 function loadIgnore() {
     const ignoreFile = path.join(root, '.assetsignore');
-    if (!fs.existsSync(ignoreFile)) return new Set();
+    if (!fs.existsSync(ignoreFile)) {
+        return new Set();
+    }
+
     return new Set(
         fs.readFileSync(ignoreFile, 'utf8')
             .split('\n')
-            .map(l => l.trim())
-            .filter(l => l && !l.startsWith('#'))
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#'))
     );
 }
 
@@ -50,12 +54,11 @@ function shouldIgnore(entry, ignored) {
     return false;
 }
 
-const ignored = sourceRoot === root ? loadIgnore() : new Set();
-// 目标目录本身也排除
-ignored.add('.wrangler-assets');
-ignored.add('.wrangler-assets/');
+const ignored = loadIgnore();
 ignored.add('frontend-dist');
 ignored.add('frontend-dist/');
+ignored.add('.wrangler-assets');
+ignored.add('.wrangler-assets/');
 ignored.add('.wrangler-pages-dev.log');
 ignored.add('.wrangler-pages-func-build');
 ignored.add('.wrangler-pages-func-build/');
@@ -70,7 +73,7 @@ ignored.add('wrangler.log');
 fs.mkdirSync(dest, { recursive: true });
 
 const sourceEntries = new Set(
-    fs.readdirSync(sourceRoot).filter((entry) => !shouldIgnore(entry, ignored))
+    fs.readdirSync(root).filter((entry) => !shouldIgnore(entry, ignored))
 );
 
 for (const existingEntry of fs.readdirSync(dest)) {
@@ -88,14 +91,15 @@ for (const existingEntry of fs.readdirSync(dest)) {
 
 let copied = 0;
 for (const entry of sourceEntries) {
-    const src = path.join(sourceRoot, entry);
+    const src = path.join(root, entry);
     const dst = path.join(dest, entry);
+
     try {
         fs.cpSync(src, dst, { recursive: true });
         copied++;
-    } catch (e) {
-        console.warn(`  skip ${entry}: ${e.message}`);
+    } catch (error) {
+        console.warn(`  skip ${entry}: ${error.message}`);
     }
 }
 
-console.log(`✓ Copied ${copied} entries from ${path.basename(sourceRoot)} to .wrangler-assets/`);
+console.log(`✓ Built frontend-dist with ${copied} entries`);

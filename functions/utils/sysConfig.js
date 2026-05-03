@@ -60,7 +60,7 @@ const DEFAULT_SECURITY_CONFIG = {
     upload: {
         moderate: { enabled: false, channel: "default", moderateContentApiKey: "", nsfwApiPath: "" }
     },
-    access: { allowedDomains: "", whiteListMode: false }
+    access: { allowedDomains: "", whiteListMode: false, sessionSecure: false, userSessionMaxAge: 14, adminSessionMaxAge: 14 }
 };
 
 const DEFAULT_PAGE_CONFIG = { config: [] };
