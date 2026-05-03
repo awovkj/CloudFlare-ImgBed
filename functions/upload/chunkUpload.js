@@ -31,7 +31,7 @@ export async function initializeChunkedUpload(context) {
         const originalFileType = formdata.get('originalFileType');
         const totalChunks = parseInt(formdata.get('totalChunks'));
 
-        if (!originalFileName || !originalFileType || !totalChunks) {
+        if (!originalFileName || (originalFileType === null || originalFileType === undefined) || !totalChunks) {
             return createResponse('Error: Missing initialization parameters', { status: 400 });
         }
 
@@ -113,7 +113,7 @@ export async function handleChunkUpload(context) {
         const originalFileName = formdata.get('originalFileName');
         const originalFileType = formdata.get('originalFileType');
 
-        if (!chunk || chunkIndex === null || !totalChunks || !uploadId || !originalFileName || !originalFileType) {
+        if (!chunk || Number.isNaN(chunkIndex) || !totalChunks || !uploadId || !originalFileName || (originalFileType === null || originalFileType === undefined)) {
             return createResponse('Error: Missing chunk upload parameters', { status: 400 });
         }
 
