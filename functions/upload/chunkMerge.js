@@ -96,6 +96,7 @@ export async function handleChunkMerge(context) {
         }
 
         const sessionInfo = JSON.parse(sessionData);
+        const now = Date.now();
 
         // 如果后台合并已经成功，直接返回保存的结果（供前端轮询拿到结果）
         if (sessionInfo.status === 'merge_success' && sessionInfo.mergeResult) {
@@ -105,9 +106,53 @@ export async function handleChunkMerge(context) {
             });
         }
 
+        if (sessionInfo.status === 'merge_failed') {
+            return createResponse(JSON.stringify({
+                success: false,
+                code: 'MERGE_FAILED',
+                message: sessionInfo.mergeError || sessionInfo.mergeBackgroundError || 'Merge failed in background',
+                uploadId,
+                statusSummary: sessionInfo.mergeLastStatusSummary || {},
+                mergeBackgroundAttempt: sessionInfo.mergeBackgroundAttempt || 0
+            }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        const mergeProtectedUntil = Number(sessionInfo.mergeProtectedUntil || 0);
+        const mergeExpired = sessionInfo.status === 'merging'
+            && mergeProtectedUntil
+            && now >= mergeProtectedUntil;
+
+        if (mergeExpired) {
+            const mergeError = sessionInfo.mergeBackgroundError
+                || sessionInfo.mergeError
+                || `Merge did not finish within ${MERGE_CLEANUP_PROTECTION_MS}ms`;
+
+            await updateUploadSessionStatus(env, uploadId, {
+                status: 'merge_failed',
+                mergeFailedAt: now,
+                mergeError,
+                mergeProtectedUntil: 0
+            });
+
+            return createResponse(JSON.stringify({
+                success: false,
+                code: 'MERGE_TIMEOUT',
+                message: mergeError,
+                uploadId,
+                statusSummary: sessionInfo.mergeLastStatusSummary || {},
+                mergeBackgroundAttempt: sessionInfo.mergeBackgroundAttempt || 0
+            }), {
+                status: 504,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
         const mergeIsOngoing = sessionInfo.status === 'merging'
-            && sessionInfo.mergeProtectedUntil
-            && Date.now() < sessionInfo.mergeProtectedUntil;
+            && mergeProtectedUntil
+            && now < mergeProtectedUntil;
         if (mergeIsOngoing) {
             return createResponse(JSON.stringify({
                 success: false,
@@ -288,6 +333,11 @@ async function finalizeMergeInBackground(context, params) {
                 uploadChannel
             );
 
+            const latestSession = await getUploadSessionInfo(env, uploadId);
+            if (!latestSession || latestSession.status !== 'merging') {
+                return;
+            }
+
             if (result.success) {
                 await updateUploadSessionStatus(env, uploadId, {
                     status: 'merge_success',
@@ -314,14 +364,22 @@ async function finalizeMergeInBackground(context, params) {
 
             throw new Error(result.error || 'Background merge failed');
         } catch (error) {
+            const latestSession = await getUploadSessionInfo(env, uploadId);
+            if (!latestSession || latestSession.status !== 'merging') {
+                return;
+            }
+
+            const finalAttempt = attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS;
             await updateUploadSessionStatus(env, uploadId, {
-                status: 'merging',
+                status: finalAttempt ? 'merge_failed' : 'merging',
                 mergeBackgroundError: error.message,
                 mergeBackgroundErrorAt: Date.now(),
                 mergeBackgroundAttempt: attempt,
-                mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS
+                mergeFailedAt: finalAttempt ? Date.now() : undefined,
+                mergeError: finalAttempt ? error.message : undefined,
+                mergeProtectedUntil: finalAttempt ? 0 : Date.now() + MERGE_CLEANUP_PROTECTION_MS
             });
-            if (attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS) {
+            if (finalAttempt) {
                 return;
             }
             retryAfterMs = MERGE_PENDING_RETRY_AFTER_MS;
@@ -330,11 +388,13 @@ async function finalizeMergeInBackground(context, params) {
     }
 
     await updateUploadSessionStatus(env, uploadId, {
-        status: 'merging',
+        status: 'merge_failed',
         mergeBackgroundError: `Background merge exceeded max attempts (${MERGE_BACKGROUND_MAX_ATTEMPTS})`,
         mergeBackgroundErrorAt: Date.now(),
+        mergeFailedAt: Date.now(),
+        mergeError: `Background merge exceeded max attempts (${MERGE_BACKGROUND_MAX_ATTEMPTS})`,
         mergeBackgroundAttempt: MERGE_BACKGROUND_MAX_ATTEMPTS,
-        mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS
+        mergeProtectedUntil: 0
     });
 }
 
