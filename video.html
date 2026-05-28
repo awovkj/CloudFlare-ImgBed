@@ -80,7 +80,7 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
       const saved = localStorage.getItem('videoPlayerSettings');
       if(saved){
         const s = JSON.parse(saved);
-        volume = s.volume ?? 0.8;
+        volume = clampNumber(s.volume, 0.8, 0, 1);
         sidebarOpen = s.sidebarOpen !== false;
       }
     }catch(e){}
@@ -92,10 +92,23 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     }catch(e){}
   }
 
-  function getAuthParam() {
-    const params = new URLSearchParams(window.location.search);
-    const authCode = params.get('authCode');
-    return authCode ? 'authCode=' + encodeURIComponent(authCode) : '';
+  function getStoredAuthCode() {
+    try {
+      return sessionStorage.getItem('videoAuthCode') || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function setStoredAuthCode(value) {
+    try {
+      sessionStorage.setItem('videoAuthCode', value);
+    } catch (e) {}
+  }
+
+  function createAuthHeaders() {
+    const authCode = getStoredAuthCode();
+    return authCode ? { authCode } : {};
   }
 
   function showAuthPrompt() {
@@ -105,19 +118,84 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
       '<p>需要认证</p>' +
       '<div class="hint">请输入访问密码以继续浏览当前视频列表</div>' +
       '<div class="auth-card">' +
-      '<input type="password" id="authInput" placeholder="密码">' +
-      '<button onclick="var c=document.getElementById(\'authInput\').value;if(c){var u=new URL(location.href);u.searchParams.set(\'authCode\',c);location.href=u.toString()}">确定</button>' +
+      '<input type="password" id="authInput" placeholder="密码" autocomplete="current-password">' +
+      '<button type="button" id="authSubmitBtn">确定</button>' +
       '</div></div>';
-    var inp = document.getElementById('authInput');
+    const inp = document.getElementById('authInput');
+    const submitBtn = document.getElementById('authSubmitBtn');
+    const submitAuth = function() {
+      const c = inp && inp.value;
+      if (!c) return;
+      setStoredAuthCode(c);
+      loadVideoList();
+    };
     if (inp) {
       inp.focus();
       inp.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-          var c = this.value;
-          if (c) { var u = new URL(location.href); u.searchParams.set('authCode', c); location.href = u.toString(); }
-        }
+        if (e.key === 'Enter') submitAuth();
       });
     }
+    if (submitBtn) submitBtn.addEventListener('click', submitAuth);
+  }
+
+  function clampNumber(value, fallback, min, max) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function safeText(value, fallback) {
+    const text = typeof value === 'string' ? value : '';
+    return text || fallback || '';
+  }
+
+  function safeSameOriginUrl(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    try {
+      const url = new URL(raw, window.location.origin);
+      if (url.origin !== window.location.origin) return '';
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+      return url.href;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function normalizeTrack(file, index) {
+    const source = file && typeof file === 'object' ? file : {};
+    const url = safeSameOriginUrl(source.url);
+    if (!url) return null;
+    return {
+      ...source,
+      _id: index,
+      name: safeText(source.name, source.fileName || 'Video'),
+      fileName: safeText(source.fileName, ''),
+      url,
+      posterUrl: safeSameOriginUrl(source.posterUrl),
+      subtitleUrl: safeSameOriginUrl(source.subtitleUrl),
+      fileSize: clampNumber(source.fileSize, 0, 0, Number.MAX_SAFE_INTEGER),
+      timestamp: clampNumber(source.timestamp, 0, 0, Number.MAX_SAFE_INTEGER)
+    };
+  }
+
+  function showEmptyState(container, icon, title, hint) {
+    if (!container) return;
+    container.textContent = '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'empty-state';
+    wrapper.style.minHeight = 'auto';
+    wrapper.style.padding = '0';
+    const iconEl = document.createElement('div');
+    iconEl.className = 'icon';
+    iconEl.textContent = icon;
+    const titleEl = document.createElement('p');
+    titleEl.textContent = title;
+    const hintEl = document.createElement('div');
+    hintEl.className = 'hint';
+    hintEl.textContent = hint;
+    wrapper.append(iconEl, titleEl, hintEl);
+    container.appendChild(wrapper);
   }
 
   function escHtml(str) {
@@ -301,6 +379,7 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
 
   function syncStaticUi() {
     if (ui.sidebar) ui.sidebar.classList.toggle('collapsed', !sidebarOpen);
+    volume = clampNumber(volume, 0.8, 0, 1);
     if (ui.volFill) ui.volFill.style.width = (volume * 100) + '%';
     if (ui.volBtn) ui.volBtn.innerHTML = volume === 0 ? '\u{1F508}' : '\u{1F50A}';
     updatePlayBtn();
@@ -568,48 +647,43 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     attachVideoEvents();
   }
 
-  loadSettings();
-
-  const authParam = getAuthParam();
-  fetch('/api/video/list' + (authParam ? '?' + authParam : ''))
-    .then(r => {
-      if (r.status === 401) {
-        showAuthPrompt();
-        return null;
-      }
-      if (r.status === 403) {
-        return r.json().then(() => {
-          ui.loadingState.innerHTML =
-            '<div class="empty-state" style="min-height:auto;padding:0"><div class="icon">\u{1F6AB}</div>' +
-            '<p>视频播放器未启用</p>' +
-            '<div class="hint">请在后台管理 - 其他设置中启用视频播放器</div></div>';
+  function loadVideoList() {
+    fetch('/api/video/list', { headers: createAuthHeaders() })
+      .then(r => {
+        if (r.status === 401) {
+          showAuthPrompt();
           return null;
-        });
-      }
-      if (!r.ok) throw new Error('服务不可用');
-      return r.json();
-    })
-    .then(data => {
-      if (!data) return;
-      playlist = (data.files || []).map((f, i) => ({ ...f, _id: i }));
-      filteredPlaylist = [...playlist];
-      if (playlist.length === 0) {
-        ui.loadingState.innerHTML =
-          '<div class="empty-state" style="min-height:auto;padding:0"><div class="icon">\u{1F3AC}</div>' +
-          '<p>暂无视频文件</p>' +
-          '<div class="hint">请上传视频文件到配置的目录中</div></div>';
-        return;
-      }
-      renderPlayer();
-      currentIndex = 0;
-      loadTrack(0, false);
-    })
-    .catch(err => {
-      ui.loadingState.innerHTML =
-        '<div class="empty-state" style="min-height:auto;padding:0"><div class="icon">\u26A0\uFE0F</div>' +
-        '<p>' + (err.message || '加载失败') + '</p>' +
-        '<div class="hint">请检查网络连接</div></div>';
-    });
+        }
+        if (r.status === 403) {
+          return r.json().then(() => {
+            showEmptyState(ui.loadingState, '\u{1F6AB}', '视频播放器未启用', '请在后台管理 - 其他设置中启用视频播放器');
+            return null;
+          });
+        }
+        if (!r.ok) throw new Error('服务不可用');
+        return r.json();
+      })
+      .then(data => {
+        if (!data) return;
+        playlist = (Array.isArray(data.files) ? data.files : [])
+          .map(normalizeTrack)
+          .filter(Boolean);
+        filteredPlaylist = [...playlist];
+        if (playlist.length === 0) {
+          showEmptyState(ui.loadingState, '\u{1F3AC}', '暂无视频文件', '请上传视频文件到配置的目录中');
+          return;
+        }
+        renderPlayer();
+        currentIndex = 0;
+        loadTrack(0, false);
+      })
+      .catch(err => {
+        showEmptyState(ui.loadingState, '⚠️', safeText(err && err.message, '加载失败'), '请检查网络连接');
+      });
+  }
+
+  loadSettings();
+  loadVideoList();
 })();
 </script>
 </body>
