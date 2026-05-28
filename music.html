@@ -584,7 +584,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
         const idx = parseInt(playlistItem.dataset.index, 10);
         if (!isNaN(idx)) {
           if (idx !== currentIndex) loadTrack(idx, true);
-          else togglePlay();
+          else playAudio();
         }
         return;
       }
