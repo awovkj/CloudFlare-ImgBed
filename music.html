@@ -17,6 +17,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 .lyrics-card{grid-column:2;grid-row:2;align-self:start;position:relative;max-width:620px;min-height:220px;max-height:34vh;margin-top:2px;padding-left:18px;border:none;border-radius:0;background:transparent;box-shadow:none;overflow:hidden}.lyrics-card::before{content:"";position:absolute;left:0;top:18px;bottom:42px;width:2px;border-radius:99px;background:linear-gradient(to bottom,transparent,rgba(201,238,233,.66) 18%,rgba(255,255,255,.2) 82%,transparent)}.lyrics-head{position:absolute;right:8px;top:0;z-index:2;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:0;border-bottom:none}.lyrics-head h3{font-size:18px;color:rgba(255,255,255,.78)}.lyrics-head p{margin-top:4px;font-size:12px;color:var(--faint)}.lyrics-status{flex:0 0 auto;padding:6px 10px;border:1px solid var(--line-soft);border-radius:999px;background:rgba(13,49,59,.38);font-size:11px;font-weight:700;color:rgba(255,255,255,.74);backdrop-filter:blur(10px)}.lyrics-section{max-height:34vh;overflow:auto;padding:22px 16px 80px 0;scroll-behavior:smooth;mask-image:linear-gradient(to bottom,transparent,#000 15%,#000 72%,transparent);-webkit-mask-image:linear-gradient(to bottom,transparent,#000 15%,#000 72%,transparent)}.lyrics-section::-webkit-scrollbar{width:0}.lyrics-content{display:grid;gap:6px;text-align:left}.lyrics-line{padding:2px 0;border-radius:0;font-size:18px;line-height:1.72;color:rgba(255,255,255,.3);cursor:pointer;text-shadow:0 10px 28px rgba(5,20,25,.16);transition:color .24s var(--ease),transform .24s var(--ease),opacity .24s var(--ease)}.lyrics-line:hover{color:rgba(255,255,255,.64);background:transparent}.lyrics-line.active{background:transparent;color:rgba(255,255,255,.92);font-weight:800;transform:translateX(12px) scale(1.02);box-shadow:none}.lyrics-empty{padding:44px 0 24px;text-align:left;color:var(--faint);font-size:15px;border:none;border-radius:0;background:transparent}
 .playlist-panel{position:fixed;right:26px;top:76px;z-index:9;width:330px;min-width:0;max-width:330px;height:calc(100vh - 220px);min-height:280px;border-left:1px solid var(--line-soft);background:rgba(15,45,54,.16);display:flex;flex-direction:column;border-radius:22px;backdrop-filter:blur(14px);overflow:hidden}.playlist-top{padding:18px 16px 12px;display:grid;gap:14px}.playlist-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.playlist-heading h2{font-size:24px;letter-spacing:-.04em;color:var(--ink-strong)}.playlist-heading p{margin-top:6px;font-size:12px;line-height:1.5;color:var(--muted)}.playlist-toggle{width:34px;height:34px;flex:0 0 auto}.playlist-toggle .arrow{display:inline-block;transition:transform .2s var(--ease)}.playlist-toggle .arrow.open{transform:rotate(180deg)}.playlist-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px}.search-box{position:relative;min-width:0}.search-box::before{content:"⌕";position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;color:var(--faint)}.search-box input{width:100%;height:36px;padding:0 10px 0 34px;border:1px solid var(--line-soft);border-radius:12px;background:rgba(255,255,255,.07);font:inherit;font-size:12px;color:var(--ink);outline:none}.search-box input:focus{border-color:var(--line);background:rgba(255,255,255,.1)}.search-box input::placeholder{color:var(--faint)}.toolbar-btn{min-width:36px;height:36px;padding:0 10px;border:1px solid var(--line-soft);border-radius:12px;background:rgba(255,255,255,.07);color:var(--muted);font:800 11px var(--body);cursor:pointer}.toolbar-btn:hover,.toolbar-btn.active{background:rgba(255,255,255,.16);border-color:var(--line);color:var(--ink)}.playlist-summary{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--faint)}.playlist-summary strong{color:var(--ink)}.playlist-scroll-wrap{flex:1;min-height:0;padding:0 10px 12px;overflow:hidden}.playlist{height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;flex-direction:column;gap:6px;padding-right:3px;transition:max-height .2s var(--ease),opacity .2s var(--ease),transform .2s var(--ease)}.playlist.closed{max-height:0;overflow:hidden;opacity:0;transform:translateY(-6px);pointer-events:none}.playlist::-webkit-scrollbar{width:5px}.playlist::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:999px}.playlist-item{width:100%;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px;border:1px solid transparent;border-radius:14px;background:transparent;color:inherit;text-align:left;cursor:pointer}.playlist-item:hover{background:rgba(255,255,255,.08);border-color:var(--line-soft)}.playlist-item.active{background:rgba(255,255,255,.16);border-color:var(--line);box-shadow:none}.pl-cover{position:relative;width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.12);overflow:visible}.pl-cover img,.pl-cover-fallback{width:100%;height:100%;border-radius:8px;object-fit:cover;display:flex;align-items:center;justify-content:center}.pl-cover-fallback{font-size:15px;color:var(--ink);background:rgba(255,255,255,.1)}.pl-index{position:absolute;right:-6px;bottom:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line-soft);background:#244f5a;font-size:9px;font-weight:900;color:var(--ink)}.playlist-item.active .pl-index{background:var(--ink);color:#2f5b63;border-color:transparent}.pl-info{min-width:0;display:flex;flex-direction:column;gap:3px}.pl-name{font-size:13px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pl-artist{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pl-duration{font-size:11px;color:var(--faint);white-space:nowrap}.pl-playing-icon{width:14px;height:12px;display:flex;align-items:flex-end;gap:2px}.pl-playing-icon span{width:3px;background:currentColor;border-radius:2px;animation:eq .65s ease infinite alternate}.pl-playing-icon span:nth-child(2){animation-delay:.15s}.pl-playing-icon span:nth-child(3){animation-delay:.3s}.auth-card{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:18px}.auth-card input{width:min(220px,100%);padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.1);color:var(--ink);font:inherit;outline:none}.auth-card button{padding:12px 20px;border:none;border-radius:14px;background:var(--ink);color:#2f5b63;font:800 14px var(--body);cursor:pointer}
 @media(max-width:1180px){body{overflow:auto}.player-layout{min-height:100vh;grid-template-columns:1fr;grid-template-rows:auto;align-items:start;align-content:start;padding:86px 18px 150px}.cover-card{grid-row:auto;width:min(420px,82vw);min-width:260px}.now-playing,.lyrics-card{grid-column:1;grid-row:auto;max-width:none}.lyrics-card{min-height:220px;max-height:36vh;margin-top:0;padding-left:16px}.playlist-panel{position:relative;right:auto;top:auto;z-index:auto;grid-column:1;justify-self:stretch;margin-top:0;width:auto;max-width:none;height:auto;max-height:420px;border-left:none}.control-panel{grid-template-columns:220px 1fr 220px;height:118px}.header-stats{display:none}}@media(max-width:720px){.player-header{left:14px;right:14px}.player-layout{padding:72px 14px 154px;gap:18px}.cover-card{width:min(330px,86vw)}.track-name{font-size:40px}.track-meta{font-size:16px}.lyrics-card{min-height:190px;max-height:32vh;padding-left:14px}.lyrics-card::before{top:14px;bottom:34px}.lyrics-section{max-height:32vh;padding:18px 6px 62px 0}.playlist-panel{border-radius:18px;width:auto;min-width:0}.control-panel{height:124px;grid-template-columns:1fr;grid-template-rows:auto auto;gap:6px;padding:14px 12px 22px}.volume-card{display:none}.transport-actions{grid-column:1;grid-row:1;justify-self:start}.utility-actions{grid-column:1;grid-row:1;justify-self:end}.primary-controls{grid-column:auto;grid-row:auto;top:42px}.progress-meta{bottom:8px}.bottom-pulse{top:12px}.lyrics-line{font-size:16px;line-height:1.68}.playlist-toolbar{grid-template-columns:1fr 1fr}.search-box{grid-column:1/-1}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.playlist-item{contain:layout paint;content-visibility:auto;contain-intrinsic-size:56px}
 </style>
 </head>
 <body>
@@ -54,6 +55,12 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   let isSeekingProgress = false;
   let isAdjustingVolume = false;
   let metadataLoadSeq = 0;
+  let metadataAbortController = null;
+  let metadataTimer = 0;
+  let playbackUiRaf = 0;
+  let pendingPlaybackTime = 0;
+  let lastDisplayedSecond = -1;
+  let activeLyricsIndex = -1;
   const METADATA_HEAD_BYTES = 64 * 1024;
   const MAX_EMBEDDED_METADATA_BYTES = 8 * 1024 * 1024;
 
@@ -600,56 +607,57 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     return base;
   }
 
-  async function fetchTrackRange(track, start, length) {
+  async function fetchTrackRange(track, start, length, signal) {
     const size = getTrackSizeBytes(track);
     if (length <= 0 || (size && start >= size)) return new Uint8Array();
     let end = start + length - 1;
     if (size) end = Math.min(end, size - 1);
     const headers = new Headers({ Range: 'bytes=' + start + '-' + end });
-    let res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin' });
+    let res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin', signal });
     if (res.status === 416 && !size) {
       headers.set('Range', 'bytes=' + start + '-');
-      res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin' });
+      res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin', signal });
     }
     if (!(res.ok || res.status === 206)) throw new Error('metadata range failed');
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  async function readEmbeddedMetadata(track) {
+  async function readEmbeddedMetadata(track, signal) {
     if (track.embeddedLoaded) return track.embeddedMeta || {};
     if (track.embeddedLoading) return track.embeddedLoading;
     track.embeddedLoading = (async function() {
       let meta = {};
       try {
-        const head = await fetchTrackRange(track, 0, METADATA_HEAD_BYTES);
+        const head = await fetchTrackRange(track, 0, METADATA_HEAD_BYTES, signal);
         if (head.length < 4) {
           meta = {};
         } else if (readAscii(head, 0, 3) === 'ID3' && head.length >= 10) {
           const tagSize = Math.min(MAX_EMBEDDED_METADATA_BYTES, 10 + readSyncSafe32(head, 6));
-          const bytes = tagSize > head.length ? await fetchTrackRange(track, 0, tagSize) : head;
+          const bytes = tagSize > head.length ? await fetchTrackRange(track, 0, tagSize, signal) : head;
           meta = parseId3Metadata(bytes);
         } else if (readAscii(head, 0, 4) === 'fLaC') {
           const metadataEnd = getFlacMetadataEnd(head) || MAX_EMBEDDED_METADATA_BYTES;
-          const bytes = metadataEnd > head.length ? await fetchTrackRange(track, 0, Math.min(metadataEnd, MAX_EMBEDDED_METADATA_BYTES)) : head;
+          const bytes = metadataEnd > head.length ? await fetchTrackRange(track, 0, Math.min(metadataEnd, MAX_EMBEDDED_METADATA_BYTES), signal) : head;
           meta = parseFlacMetadata(bytes);
         } else if (readAscii(head, 0, 4) === 'OggS') {
-          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES);
+          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES, signal);
           meta = parseOggMetadata(bytes);
         } else if (isMp4Like(head)) {
-          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES);
+          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES, signal);
           meta = parseMp4Metadata(bytes);
           const size = getTrackSizeBytes(track);
           if (!meta.cover && !meta.lyrics && size > bytes.length) {
             const tailStart = Math.max(0, size - MAX_EMBEDDED_METADATA_BYTES);
-            mergeMetadata(meta, parseMp4Metadata(await fetchTrackRange(track, tailStart, size - tailStart)));
+            mergeMetadata(meta, parseMp4Metadata(await fetchTrackRange(track, tailStart, size - tailStart, signal)));
           }
         }
       } catch (e) {
-        console.warn('Failed to parse embedded music metadata:', e.message);
-      } finally {
-        track.embeddedLoaded = true;
         track.embeddedLoading = null;
+        if (e && e.name === 'AbortError') return {};
+        console.warn('Failed to parse embedded music metadata:', e.message);
       }
+      track.embeddedLoaded = true;
+      track.embeddedLoading = null;
       track.embeddedMeta = meta;
       return meta;
     })();
@@ -715,17 +723,45 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     updateLyrics(audio.currentTime || 0);
   }
 
-  async function resolveTrackMetadata(track, loadSeq) {
+  function cancelMetadataWork() {
+    if (metadataTimer) {
+      clearTimeout(metadataTimer);
+      metadataTimer = 0;
+    }
+    if (metadataAbortController) {
+      metadataAbortController.abort();
+      metadataAbortController = null;
+    }
+  }
+
+  function scheduleTrackMetadata(track, loadSeq, autoPlay) {
+    const delay = autoPlay ? 1200 : 300;
+    metadataTimer = setTimeout(function() {
+      metadataTimer = 0;
+      if (loadSeq !== metadataLoadSeq || playlist[currentIndex] !== track) return;
+      metadataAbortController = new AbortController();
+      resolveTrackMetadata(track, loadSeq, metadataAbortController.signal)
+        .catch(function(e) {
+          if (!e || e.name !== 'AbortError') console.warn('Failed to resolve track metadata:', e && e.message);
+        })
+        .finally(function() {
+          if (loadSeq === metadataLoadSeq) metadataAbortController = null;
+        });
+    }, delay);
+  }
+
+  async function resolveTrackMetadata(track, loadSeq, signal) {
     if (track.lrcUrl && !track.lyrics) {
       try {
-        const res = await fetch(track.lrcUrl);
+        const res = await fetch(track.lrcUrl, { cache: 'force-cache', credentials: 'same-origin', signal });
         if (res.ok) {
           track.lyrics = await res.text();
           refreshCurrentTrackView(track, loadSeq);
         }
       } catch(e) {}
     }
-    const meta = await readEmbeddedMetadata(track);
+    if (getTrackCover(track) && (track.lyrics || track.embeddedLyrics)) return;
+    const meta = await readEmbeddedMetadata(track, signal);
     if (applyEmbeddedMetadata(track, meta)) refreshCurrentTrackView(track, loadSeq);
   }
 
@@ -888,7 +924,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
   function renderPlaylistItems() {
     const items = filteredPlaylist.map((track, i) => {
-      const originalIndex = playlist.findIndex(item => item._id === track._id);
+      const originalIndex = Number.isInteger(track._id) ? track._id : playlist.findIndex(item => item._id === track._id);
       const isActive = originalIndex === currentIndex;
       const subtitle = track.fileName || track.name || '';
       const coverUrl = getTrackCover(track);
@@ -994,14 +1030,17 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
   function renderLyrics() {
     if (!ui.lyricsContent) return;
+    activeLyricsIndex = -1;
     if (!currentLyrics.length) {
       ui.lyricsContent.innerHTML = '<div class="lyrics-empty">\u{1F3B6} 暂无歌词</div>';
+      ui.lyricLines = [];
       if (ui.lyricsStatus) ui.lyricsStatus.textContent = lyricsEnabled ? '暂无歌词' : '已隐藏';
       return;
     }
     ui.lyricsContent.innerHTML = currentLyrics.map(line =>
       `<div class="lyrics-line" data-time="${line.time}">${escHtml(line.text)}</div>`
     ).join('');
+    ui.lyricLines = Array.from(ui.lyricsContent.querySelectorAll('.lyrics-line'));
     if (ui.lyricsStatus) ui.lyricsStatus.textContent = lyricsEnabled ? '同步中' : '已隐藏';
   }
 
@@ -1011,8 +1050,11 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     for (let i = currentLyrics.length - 1; i >= 0; i--) {
       if (currentTime >= currentLyrics[i].time) { activeIndex = i; break; }
     }
-    const lines = ui.lyricsContent.querySelectorAll('.lyrics-line');
-    lines.forEach((line, i) => line.classList.toggle('active', i === activeIndex));
+    if (activeIndex === activeLyricsIndex) return;
+    const lines = ui.lyricLines || [];
+    if (activeLyricsIndex >= 0 && lines[activeLyricsIndex]) lines[activeLyricsIndex].classList.remove('active');
+    if (activeIndex >= 0 && lines[activeIndex]) lines[activeIndex].classList.add('active');
+    activeLyricsIndex = activeIndex;
     if (activeIndex >= 0 && lines[activeIndex] && ui.lyricsSection && !prefersReducedMotion) {
       const lineEl = lines[activeIndex];
       const sRect = ui.lyricsSection.getBoundingClientRect();
@@ -1022,10 +1064,28 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     }
   }
 
+  function schedulePlaybackUiUpdate() {
+    pendingPlaybackTime = audio.currentTime || 0;
+    if (playbackUiRaf) return;
+    playbackUiRaf = requestAnimationFrame(function() {
+      playbackUiRaf = 0;
+      if (!audio.duration) return;
+      if (ui.progressFill) ui.progressFill.style.width = (pendingPlaybackTime / audio.duration * 100) + '%';
+      const wholeSecond = Math.floor(pendingPlaybackTime);
+      if (wholeSecond !== lastDisplayedSecond) {
+        lastDisplayedSecond = wholeSecond;
+        if (ui.timeCurrent) ui.timeCurrent.textContent = formatTime(pendingPlaybackTime);
+      }
+      updateLyrics(pendingPlaybackTime);
+    });
+  }
+
   async function loadTrack(idx, autoPlay) {
     if (idx < 0 || idx >= playlist.length) return;
+    cancelMetadataWork();
     currentIndex = idx;
     const loadSeq = ++metadataLoadSeq;
+    lastDisplayedSecond = -1;
     const track = playlist[idx];
     audio.src = track.url;
 
@@ -1042,7 +1102,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     renderLyrics();
     updatePlaylistUI();
     syncStaticUi();
-    resolveTrackMetadata(track, loadSeq);
+    scheduleTrackMetadata(track, loadSeq, autoPlay);
 
   }
 
@@ -1256,16 +1316,14 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
     audio.addEventListener('timeupdate', function(){
       if (!audio.duration) return;
-      if (ui.progressFill) ui.progressFill.style.width = (audio.currentTime / audio.duration * 100) + '%';
-      if (ui.timeCurrent) ui.timeCurrent.textContent = formatTime(audio.currentTime);
-      updateLyrics(audio.currentTime);
+      schedulePlaybackUiUpdate();
     });
     audio.addEventListener('loadedmetadata', function(){
       if (ui.timeTotal) ui.timeTotal.textContent = formatTime(audio.duration);
     });
     audio.addEventListener('ended', playNext);
-    audio.addEventListener('play', function(){ isPlaying = true; updatePlayBtn(); updateDisc(); updatePlaylistUI(); });
-    audio.addEventListener('pause', function(){ isPlaying = false; updatePlayBtn(); updateDisc(); updatePlaylistUI(); });
+    audio.addEventListener('play', function(){ isPlaying = true; updatePlayBtn(); updateDisc(); });
+    audio.addEventListener('pause', function(){ isPlaying = false; updatePlayBtn(); updateDisc(); });
 
     document.addEventListener('keydown', function(e){
       if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
