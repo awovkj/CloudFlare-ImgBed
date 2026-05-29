@@ -387,9 +387,10 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
   function parseLyrics(lrcText) {
     if (!lrcText) return [];
-    const lines = lrcText.split('\n');
+    const lines = lrcText.replace(/^﻿/, '').split(/\r?\n/);
     const lyrics = [];
-    const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/g;
+    const plainLines = [];
+    const timeRegex = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
     lines.forEach(line => {
       const matches = [...line.matchAll(timeRegex)];
       if (matches.length > 0) {
@@ -398,13 +399,19 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
           matches.forEach(match => {
             const m = parseInt(match[1], 10);
             const s = parseInt(match[2], 10);
-            const ms = parseInt(match[3].padEnd(3, '0'), 10);
+            const ms = parseInt((match[3] || '0').padEnd(3, '0'), 10);
             lyrics.push({ time: m * 60 + s + ms / 1000, text });
           });
         }
+        return;
       }
+      const plain = line
+        .replace(/^\[(ti|ar|al|by|offset):.*\]$/i, '')
+        .trim();
+      if (plain) plainLines.push(plain);
     });
-    return lyrics.sort((a, b) => a.time - b.time);
+    if (lyrics.length) return lyrics.sort((a, b) => a.time - b.time);
+    return plainLines.map((text, i) => ({ time: i, text }));
   }
 
   function renderLyrics() {

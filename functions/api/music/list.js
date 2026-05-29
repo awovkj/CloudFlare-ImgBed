@@ -102,8 +102,12 @@ export async function onRequest(context) {
             const fileName = parts.pop();
             const dir = parts.join('/');
             const baseName = fileName.replace(/\.[^/.]+$/, '');
-            // 歌词
-            neededLookups.add(`${dir}/${baseName}.lrc`.toLowerCase());
+            const displayBaseName = cleanDisplayName(baseName);
+            for (const name of new Set([baseName, displayBaseName])) {
+                for (const ext of ['.lrc', '.txt']) {
+                    neededLookups.add(`${dir}/${name}${ext}`.toLowerCase());
+                }
+            }
             // 同名封面
             for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
                 neededLookups.add(`${dir}/${baseName}${ext}`.toLowerCase());
@@ -148,11 +152,16 @@ export async function onRequest(context) {
             const baseName = fileName.replace(/\.[^/.]+$/, '');
             const displayName = cleanDisplayName(baseName);
 
-            // 查找同名 .lrc 歌词文件
             let lrcUrl = null;
-            const lrcKey = `${dir}/${baseName}.lrc`.toLowerCase();
-            if (fileMap.has(lrcKey)) {
-                lrcUrl = `/file/${fileMap.get(lrcKey).id}`;
+            for (const name of new Set([baseName, displayName])) {
+                for (const ext of ['.lrc', '.txt']) {
+                    const lrcKey = `${dir}/${name}${ext}`.toLowerCase();
+                    if (fileMap.has(lrcKey)) {
+                        lrcUrl = `/file/${fileMap.get(lrcKey).id}`;
+                        break;
+                    }
+                }
+                if (lrcUrl) break;
             }
 
             // 查找封面图片：优先同名图片，其次目录下的 cover/folder 图片
