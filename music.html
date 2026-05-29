@@ -61,8 +61,14 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   let pendingPlaybackTime = 0;
   let lastDisplayedSecond = -1;
   let activeLyricsIndex = -1;
+  let coverPreloadTimer = 0;
+  let coverPreloadRunning = 0;
+  let coverRefreshTimer = 0;
+  const coverPreloadQueue = [];
+  const coverPreloadQueued = new Set();
   const METADATA_HEAD_BYTES = 64 * 1024;
   const MAX_EMBEDDED_METADATA_BYTES = 8 * 1024 * 1024;
+  const COVER_PRELOAD_CONCURRENCY = 1;
 
   const ui = {
     mounted: false,
@@ -669,7 +675,8 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     return URL.createObjectURL(new Blob([cover.data], { type: cover.mime || 'image/jpeg' }));
   }
 
-  function applyEmbeddedMetadata(track, meta) {
+  function applyEmbeddedMetadata(track, meta, options) {
+    const includeLyrics = !options || options.lyrics !== false;
     let changed = false;
     if (meta.cover && !track.embeddedCoverUrl) {
       track.embeddedCoverUrl = createEmbeddedCoverUrl(meta.cover);
@@ -678,7 +685,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
         changed = true;
       }
     }
-    if (meta.lyrics) {
+    if (includeLyrics && meta.lyrics) {
       track.embeddedLyrics = meta.lyrics;
       if (!track.lyrics) {
         track.lyrics = meta.lyrics;
@@ -690,6 +697,57 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
   function getTrackCover(track) {
     return track && (track.embeddedCoverUrl || track.cover) || '';
+  }
+
+  function trackNeedsCoverPreload(track) {
+    return !!(track && !getTrackCover(track) && !track.embeddedLoaded && !track.coverPreloadFailed);
+  }
+
+  function schedulePlaylistCoverRefresh() {
+    if (coverRefreshTimer) return;
+    coverRefreshTimer = setTimeout(function() {
+      coverRefreshTimer = 0;
+      updatePlaylistUI();
+    }, 260);
+  }
+
+  function scheduleCoverPreload() {
+    if (coverPreloadTimer || coverPreloadRunning >= COVER_PRELOAD_CONCURRENCY) return;
+    coverPreloadTimer = setTimeout(processCoverPreloadQueue, isPlaying ? 1800 : 700);
+  }
+
+  function enqueueCoverPreload(tracks) {
+    tracks.forEach(function(track) {
+      if (!trackNeedsCoverPreload(track) || coverPreloadQueued.has(track._id)) return;
+      coverPreloadQueued.add(track._id);
+      coverPreloadQueue.push(track);
+    });
+    scheduleCoverPreload();
+  }
+
+  function processCoverPreloadQueue() {
+    coverPreloadTimer = 0;
+    while (coverPreloadRunning < COVER_PRELOAD_CONCURRENCY && coverPreloadQueue.length) {
+      const track = coverPreloadQueue.shift();
+      coverPreloadQueued.delete(track._id);
+      if (!trackNeedsCoverPreload(track)) continue;
+      coverPreloadRunning++;
+      preloadTrackCover(track).finally(function() {
+        coverPreloadRunning--;
+        if (coverPreloadQueue.length) scheduleCoverPreload();
+      });
+    }
+  }
+
+  async function preloadTrackCover(track) {
+    try {
+      const meta = await readEmbeddedMetadata(track);
+      const hadCover = !!getTrackCover(track);
+      applyEmbeddedMetadata(track, meta, { lyrics: false });
+      if (!hadCover && getTrackCover(track)) schedulePlaylistCoverRefresh();
+    } catch (e) {
+      track.coverPreloadFailed = true;
+    }
   }
 
   function applyTrackCover(track) {
@@ -1178,6 +1236,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
       updatePlaylistUI();
       syncStaticUi();
     }
+    enqueueCoverPreload(newItems);
   }
 
   async function loadRemainingPages(totalPages, pageSize) {
@@ -1375,6 +1434,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
         currentIndex = 0;
         loadTrack(0, false);
       }
+      enqueueCoverPreload(playlist);
       if (data.hasMore) loadRemainingPages(data.totalPages, PAGE_SIZE);
     })
     .catch(err => {
