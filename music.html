@@ -53,6 +53,9 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   let totalMusicCount = 0;
   let isSeekingProgress = false;
   let isAdjustingVolume = false;
+  let metadataLoadSeq = 0;
+  const METADATA_HEAD_BYTES = 64 * 1024;
+  const MAX_EMBEDDED_METADATA_BYTES = 8 * 1024 * 1024;
 
   const ui = {
     mounted: false,
@@ -150,6 +153,580 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 
   function formatTrackMeta(track) {
     return track && (track.fileName || track.name || '') || '';
+  }
+
+  function getTrackSizeBytes(track) {
+    const bytes = Number(track && track.fileSizeBytes);
+    if (Number.isFinite(bytes) && bytes > 0) return Math.floor(bytes);
+    const mb = Number(track && track.fileSize);
+    if (Number.isFinite(mb) && mb > 0) return Math.floor(mb * 1024 * 1024);
+    return 0;
+  }
+
+  function readAscii(bytes, offset, length) {
+    let out = '';
+    const end = Math.min(bytes.length, offset + length);
+    for (let i = offset; i < end; i++) out += String.fromCharCode(bytes[i]);
+    return out;
+  }
+
+  function readUint24BE(bytes, offset) {
+    return (bytes[offset] << 16) | (bytes[offset + 1] << 8) | bytes[offset + 2];
+  }
+
+  function readUint32BE(bytes, offset) {
+    return ((bytes[offset] * 0x1000000) + ((bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3])) >>> 0;
+  }
+
+  function readUint32LE(bytes, offset) {
+    return ((bytes[offset + 3] * 0x1000000) + ((bytes[offset + 2] << 16) | (bytes[offset + 1] << 8) | bytes[offset])) >>> 0;
+  }
+
+  function readSyncSafe32(bytes, offset) {
+    return ((bytes[offset] & 0x7f) << 21) | ((bytes[offset + 1] & 0x7f) << 14) | ((bytes[offset + 2] & 0x7f) << 7) | (bytes[offset + 3] & 0x7f);
+  }
+
+  function decodeBytes(bytes, label) {
+    try {
+      return new TextDecoder(label).decode(bytes);
+    } catch (e) {
+      return Array.from(bytes, b => String.fromCharCode(b)).join('');
+    }
+  }
+
+  function decodeUtf16BE(bytes) {
+    let out = '';
+    for (let i = 0; i + 1 < bytes.length; i += 2) {
+      out += String.fromCharCode((bytes[i] << 8) | bytes[i + 1]);
+    }
+    return out;
+  }
+
+  function cleanDecodedText(text) {
+    return String(text || '').replace(/\u0000+$/g, '').replace(/\u0000/g, '').trim();
+  }
+
+  function decodeId3Text(bytes, encoding) {
+    if (!bytes || !bytes.length) return '';
+    let text;
+    if (encoding === 1) {
+      if (bytes[0] === 0xfe && bytes[1] === 0xff) text = decodeUtf16BE(bytes.subarray(2));
+      else if (bytes[0] === 0xff && bytes[1] === 0xfe) text = decodeBytes(bytes.subarray(2), 'utf-16le');
+      else text = decodeBytes(bytes, 'utf-16le');
+    } else if (encoding === 2) {
+      text = decodeUtf16BE(bytes);
+    } else if (encoding === 3) {
+      text = decodeBytes(bytes, 'utf-8');
+    } else {
+      text = decodeBytes(bytes, 'iso-8859-1');
+    }
+    return cleanDecodedText(text);
+  }
+
+  function terminatorLength(encoding) {
+    return encoding === 1 || encoding === 2 ? 2 : 1;
+  }
+
+  function findTextTerminator(bytes, start, encoding) {
+    if (terminatorLength(encoding) === 2) {
+      for (let i = start; i + 1 < bytes.length; i += 2) {
+        if (bytes[i] === 0 && bytes[i + 1] === 0) return i;
+      }
+      return bytes.length;
+    }
+    const idx = bytes.indexOf(0, start);
+    return idx === -1 ? bytes.length : idx;
+  }
+
+  function readTerminatedText(bytes, start, encoding) {
+    const end = findTextTerminator(bytes, start, encoding);
+    return {
+      text: decodeId3Text(bytes.subarray(start, end), encoding),
+      next: Math.min(bytes.length, end + terminatorLength(encoding))
+    };
+  }
+
+  function removeUnsync(bytes) {
+    const out = [];
+    for (let i = 0; i < bytes.length; i++) {
+      out.push(bytes[i]);
+      if (bytes[i] === 0xff && bytes[i + 1] === 0x00) i++;
+    }
+    return new Uint8Array(out);
+  }
+
+  function setCover(meta, mime, data) {
+    if (!data || data.length < 16 || meta.cover) return;
+    let type = (mime || '').toLowerCase();
+    if (type === 'jpg' || type === 'jpeg' || type === 'image/jpg') type = 'image/jpeg';
+    else if (type === 'png') type = 'image/png';
+    else if (type === 'webp') type = 'image/webp';
+    else if (!type || !type.includes('/')) type = 'image/jpeg';
+    meta.cover = { mime: type, data };
+  }
+
+  function setLyrics(meta, lyrics) {
+    const text = cleanDecodedText(lyrics);
+    if (text && !meta.lyrics) meta.lyrics = text;
+  }
+
+  function formatLrcTime(seconds) {
+    const safe = Math.max(0, seconds || 0);
+    const m = Math.floor(safe / 60);
+    const s = Math.floor(safe % 60);
+    const cs = Math.floor((safe - Math.floor(safe)) * 100);
+    return '[' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + '.' + String(cs).padStart(2, '0') + ']';
+  }
+
+  function parseId3TextFrame(data) {
+    return data.length > 1 ? decodeId3Text(data.subarray(1), data[0]) : '';
+  }
+
+  function parseId3Uslt(data, meta) {
+    if (data.length < 5) return;
+    const encoding = data[0];
+    const desc = readTerminatedText(data, 4, encoding);
+    setLyrics(meta, decodeId3Text(data.subarray(desc.next), encoding));
+  }
+
+  function parseId3Sylt(data, meta) {
+    if (data.length < 7) return;
+    const encoding = data[0];
+    const timestampFormat = data[4];
+    let pos = readTerminatedText(data, 6, encoding).next;
+    const lines = [];
+    while (pos < data.length) {
+      const textPart = readTerminatedText(data, pos, encoding);
+      pos = textPart.next;
+      if (pos + 4 > data.length) break;
+      const timestamp = readUint32BE(data, pos);
+      pos += 4;
+      const seconds = timestampFormat === 2 ? timestamp / 1000 : timestamp / 1000;
+      if (textPart.text) lines.push(formatLrcTime(seconds) + textPart.text);
+    }
+    setLyrics(meta, lines.join('\n'));
+  }
+
+  function parseId3Apic(data, frameId, meta) {
+    if (data.length < 8) return;
+    const encoding = data[0];
+    let pos = 1;
+    let mime = '';
+    if (frameId === 'PIC') {
+      mime = readAscii(data, pos, 3).toLowerCase();
+      pos += 3;
+    } else {
+      const mimeEnd = data.indexOf(0, pos);
+      if (mimeEnd === -1) return;
+      mime = decodeBytes(data.subarray(pos, mimeEnd), 'iso-8859-1');
+      pos = mimeEnd + 1;
+    }
+    pos += 1;
+    pos = readTerminatedText(data, pos, encoding).next;
+    setCover(meta, mime, data.subarray(pos));
+  }
+
+  function parseId3Txxx(data, meta) {
+    if (data.length < 2) return;
+    const encoding = data[0];
+    const desc = readTerminatedText(data, 1, encoding);
+    const value = decodeId3Text(data.subarray(desc.next), encoding);
+    if (/lyric|lrc|歌词/i.test(desc.text) || /\[\d{1,2}:\d{2}/.test(value)) setLyrics(meta, value);
+  }
+
+  function parseId3Metadata(bytes) {
+    const meta = {};
+    if (readAscii(bytes, 0, 3) !== 'ID3' || bytes.length < 10) return meta;
+    const version = bytes[3];
+    const tagFlags = bytes[5];
+    const tagEnd = Math.min(bytes.length, 10 + readSyncSafe32(bytes, 6));
+    let offset = 10;
+    if (tagFlags & 0x40) {
+      if (version === 4 && offset + 4 <= tagEnd) offset += Math.max(4, readSyncSafe32(bytes, offset));
+      else if (version === 3 && offset + 4 <= tagEnd) offset += 4 + readUint32BE(bytes, offset);
+    }
+    while (offset + (version === 2 ? 6 : 10) <= tagEnd) {
+      const frameId = readAscii(bytes, offset, version === 2 ? 3 : 4);
+      if (!frameId.trim() || bytes[offset] === 0) break;
+      let frameSize;
+      let dataOffset;
+      if (version === 2) {
+        frameSize = readUint24BE(bytes, offset + 3);
+        dataOffset = offset + 6;
+      } else {
+        frameSize = version === 4 ? readSyncSafe32(bytes, offset + 4) : readUint32BE(bytes, offset + 4);
+        dataOffset = offset + 10;
+      }
+      if (!frameSize || dataOffset + frameSize > tagEnd) break;
+      let data = bytes.subarray(dataOffset, dataOffset + frameSize);
+      if (tagFlags & 0x80) data = removeUnsync(data);
+      if (frameId === 'APIC' || frameId === 'PIC') parseId3Apic(data, frameId, meta);
+      else if (frameId === 'USLT') parseId3Uslt(data, meta);
+      else if (frameId === 'SYLT') parseId3Sylt(data, meta);
+      else if (frameId === 'TXXX') parseId3Txxx(data, meta);
+      else if (frameId === 'TIT2' || frameId === 'TT2') meta.title = meta.title || parseId3TextFrame(data);
+      else if (frameId === 'TPE1' || frameId === 'TP1') meta.artist = meta.artist || parseId3TextFrame(data);
+      offset = dataOffset + frameSize;
+    }
+    return meta;
+  }
+
+  function getFlacMetadataEnd(bytes) {
+    if (readAscii(bytes, 0, 4) !== 'fLaC') return 0;
+    let offset = 4;
+    while (offset + 4 <= bytes.length) {
+      const isLast = !!(bytes[offset] & 0x80);
+      const len = readUint24BE(bytes, offset + 1);
+      offset += 4 + len;
+      if (isLast) return offset;
+      if (offset > MAX_EMBEDDED_METADATA_BYTES) return MAX_EMBEDDED_METADATA_BYTES;
+    }
+    return 0;
+  }
+
+  function base64ToBytes(value) {
+    try {
+      const bin = atob(String(value || '').replace(/\s+/g, ''));
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function parseFlacPictureBlock(block, meta) {
+    let pos = 0;
+    if (pos + 8 > block.length) return;
+    pos += 4;
+    const mimeLen = readUint32BE(block, pos);
+    pos += 4;
+    if (pos + mimeLen + 4 > block.length) return;
+    const mime = decodeBytes(block.subarray(pos, pos + mimeLen), 'utf-8');
+    pos += mimeLen;
+    const descLen = readUint32BE(block, pos);
+    pos += 4 + descLen;
+    if (pos + 20 > block.length) return;
+    pos += 16;
+    const dataLen = readUint32BE(block, pos);
+    pos += 4;
+    if (pos + dataLen <= block.length) setCover(meta, mime, block.subarray(pos, pos + dataLen));
+  }
+
+  function parseVorbisComments(block, meta) {
+    let pos = 0;
+    if (pos + 8 > block.length) return;
+    const vendorLen = readUint32LE(block, pos);
+    pos += 4 + vendorLen;
+    if (pos + 4 > block.length) return;
+    const count = readUint32LE(block, pos);
+    pos += 4;
+    let coverMime = '';
+    let coverData = '';
+    for (let i = 0; i < count && pos + 4 <= block.length; i++) {
+      const len = readUint32LE(block, pos);
+      pos += 4;
+      if (pos + len > block.length) break;
+      const raw = decodeBytes(block.subarray(pos, pos + len), 'utf-8');
+      pos += len;
+      const eq = raw.indexOf('=');
+      if (eq === -1) continue;
+      const key = raw.slice(0, eq).toUpperCase();
+      const value = raw.slice(eq + 1);
+      if (key === 'LYRICS' || key === 'UNSYNCEDLYRICS' || key === 'SYNCEDLYRICS') setLyrics(meta, value);
+      else if (key === 'METADATA_BLOCK_PICTURE') {
+        const picture = base64ToBytes(value);
+        if (picture) parseFlacPictureBlock(picture, meta);
+      } else if (key === 'COVERARTMIME') {
+        coverMime = value;
+      } else if (key === 'COVERART') {
+        coverData = value;
+      } else if (key === 'TITLE') {
+        meta.title = meta.title || value;
+      } else if (key === 'ARTIST') {
+        meta.artist = meta.artist || value;
+      }
+    }
+    if (!meta.cover && coverData) {
+      const img = base64ToBytes(coverData);
+      if (img) setCover(meta, coverMime, img);
+    }
+  }
+
+  function parseFlacMetadata(bytes) {
+    const meta = {};
+    if (readAscii(bytes, 0, 4) !== 'fLaC') return meta;
+    let offset = 4;
+    while (offset + 4 <= bytes.length) {
+      const type = bytes[offset] & 0x7f;
+      const isLast = !!(bytes[offset] & 0x80);
+      const len = readUint24BE(bytes, offset + 1);
+      offset += 4;
+      if (offset + len > bytes.length) break;
+      const block = bytes.subarray(offset, offset + len);
+      if (type === 4) parseVorbisComments(block, meta);
+      else if (type === 6) parseFlacPictureBlock(block, meta);
+      offset += len;
+      if (isLast) break;
+    }
+    return meta;
+  }
+
+  function concatBytes(chunks) {
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    chunks.forEach(chunk => {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    });
+    return out;
+  }
+
+  function parseOggMetadata(bytes) {
+    const meta = {};
+    const packets = [];
+    let offset = 0;
+    let current = [];
+    while (offset + 27 <= bytes.length && packets.length < 8) {
+      if (readAscii(bytes, offset, 4) !== 'OggS') break;
+      const segCount = bytes[offset + 26];
+      const tableStart = offset + 27;
+      const bodyStart = tableStart + segCount;
+      if (bodyStart > bytes.length) break;
+      let bodyLen = 0;
+      for (let i = 0; i < segCount; i++) bodyLen += bytes[tableStart + i];
+      if (bodyStart + bodyLen > bytes.length) break;
+      let bodyOffset = bodyStart;
+      for (let i = 0; i < segCount; i++) {
+        const segLen = bytes[tableStart + i];
+        current.push(bytes.subarray(bodyOffset, bodyOffset + segLen));
+        bodyOffset += segLen;
+        if (segLen < 255) {
+          packets.push(concatBytes(current));
+          current = [];
+        }
+      }
+      offset = bodyStart + bodyLen;
+    }
+    for (const packet of packets) {
+      if (readAscii(packet, 0, 8) === 'OpusTags') parseVorbisComments(packet.subarray(8), meta);
+      else if (packet[0] === 3 && readAscii(packet, 1, 6) === 'vorbis') parseVorbisComments(packet.subarray(7), meta);
+    }
+    return meta;
+  }
+
+  function mp4Type(bytes, offset) {
+    return readAscii(bytes, offset, 4);
+  }
+
+  function isMp4Container(type) {
+    return ['moov', 'udta', 'ilst', 'trak', 'mdia', 'minf', 'stbl'].includes(type);
+  }
+
+  function parseMp4IlstItem(bytes, itemType, start, end, meta) {
+    let pos = start;
+    while (pos + 16 <= end) {
+      const size = readUint32BE(bytes, pos);
+      const type = mp4Type(bytes, pos + 4);
+      if (size < 16 || pos + size > end) break;
+      if (type === 'data') {
+        const dataType = readUint32BE(bytes, pos + 8);
+        const payload = bytes.subarray(pos + 16, pos + size);
+        if (itemType === 'covr') {
+          setCover(meta, dataType === 14 ? 'image/png' : 'image/jpeg', payload);
+        } else if (itemType.charCodeAt(0) === 0xa9 && itemType.slice(1) === 'lyr') {
+          setLyrics(meta, decodeBytes(payload, 'utf-8'));
+        }
+      }
+      pos += size;
+    }
+  }
+
+  function walkMp4Boxes(bytes, start, end, meta, depth) {
+    let pos = start;
+    while (pos + 8 <= end && depth < 8) {
+      let size = readUint32BE(bytes, pos);
+      const type = mp4Type(bytes, pos + 4);
+      let header = 8;
+      if (size === 1 && pos + 16 <= end) {
+        const high = readUint32BE(bytes, pos + 8);
+        const low = readUint32BE(bytes, pos + 12);
+        if (high !== 0) break;
+        size = low;
+        header = 16;
+      } else if (size === 0) {
+        size = end - pos;
+      }
+      if (size < header || pos + size > end) break;
+      let childStart = pos + header;
+      const childEnd = pos + size;
+      if (type === 'meta' && childStart + 4 <= childEnd) childStart += 4;
+      if (type === 'covr' || (type.charCodeAt(0) === 0xa9 && type.slice(1) === 'lyr')) {
+        parseMp4IlstItem(bytes, type, childStart, childEnd, meta);
+      } else if (type === 'meta' || isMp4Container(type)) {
+        walkMp4Boxes(bytes, childStart, childEnd, meta, depth + 1);
+      }
+      pos += size;
+    }
+  }
+
+  function parseMp4Metadata(bytes) {
+    const meta = {};
+    walkMp4Boxes(bytes, 0, bytes.length, meta, 0);
+    if (!meta.cover && !meta.lyrics) {
+      for (let i = 4; i + 8 < bytes.length; i++) {
+        const type = mp4Type(bytes, i);
+        if (type !== 'ilst') continue;
+        const size = readUint32BE(bytes, i - 4);
+        if (size > 8 && i - 4 + size <= bytes.length) {
+          walkMp4Boxes(bytes, i + 4, i - 4 + size, meta, 1);
+          if (meta.cover || meta.lyrics) break;
+        }
+      }
+    }
+    return meta;
+  }
+
+  function isMp4Like(bytes) {
+    return bytes.length >= 12 && mp4Type(bytes, 4) === 'ftyp';
+  }
+
+  function mergeMetadata(base, extra) {
+    if (!base.lyrics && extra.lyrics) base.lyrics = extra.lyrics;
+    if (!base.cover && extra.cover) base.cover = extra.cover;
+    if (!base.title && extra.title) base.title = extra.title;
+    if (!base.artist && extra.artist) base.artist = extra.artist;
+    return base;
+  }
+
+  async function fetchTrackRange(track, start, length) {
+    const size = getTrackSizeBytes(track);
+    if (length <= 0 || (size && start >= size)) return new Uint8Array();
+    let end = start + length - 1;
+    if (size) end = Math.min(end, size - 1);
+    const headers = new Headers({ Range: 'bytes=' + start + '-' + end });
+    let res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin' });
+    if (res.status === 416 && !size) {
+      headers.set('Range', 'bytes=' + start + '-');
+      res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin' });
+    }
+    if (!(res.ok || res.status === 206)) throw new Error('metadata range failed');
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async function readEmbeddedMetadata(track) {
+    if (track.embeddedLoaded) return track.embeddedMeta || {};
+    if (track.embeddedLoading) return track.embeddedLoading;
+    track.embeddedLoading = (async function() {
+      let meta = {};
+      try {
+        const head = await fetchTrackRange(track, 0, METADATA_HEAD_BYTES);
+        if (head.length < 4) {
+          meta = {};
+        } else if (readAscii(head, 0, 3) === 'ID3' && head.length >= 10) {
+          const tagSize = Math.min(MAX_EMBEDDED_METADATA_BYTES, 10 + readSyncSafe32(head, 6));
+          const bytes = tagSize > head.length ? await fetchTrackRange(track, 0, tagSize) : head;
+          meta = parseId3Metadata(bytes);
+        } else if (readAscii(head, 0, 4) === 'fLaC') {
+          const metadataEnd = getFlacMetadataEnd(head) || MAX_EMBEDDED_METADATA_BYTES;
+          const bytes = metadataEnd > head.length ? await fetchTrackRange(track, 0, Math.min(metadataEnd, MAX_EMBEDDED_METADATA_BYTES)) : head;
+          meta = parseFlacMetadata(bytes);
+        } else if (readAscii(head, 0, 4) === 'OggS') {
+          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES);
+          meta = parseOggMetadata(bytes);
+        } else if (isMp4Like(head)) {
+          const bytes = head.length >= MAX_EMBEDDED_METADATA_BYTES ? head : await fetchTrackRange(track, 0, MAX_EMBEDDED_METADATA_BYTES);
+          meta = parseMp4Metadata(bytes);
+          const size = getTrackSizeBytes(track);
+          if (!meta.cover && !meta.lyrics && size > bytes.length) {
+            const tailStart = Math.max(0, size - MAX_EMBEDDED_METADATA_BYTES);
+            mergeMetadata(meta, parseMp4Metadata(await fetchTrackRange(track, tailStart, size - tailStart)));
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse embedded music metadata:', e.message);
+      } finally {
+        track.embeddedLoaded = true;
+        track.embeddedLoading = null;
+      }
+      track.embeddedMeta = meta;
+      return meta;
+    })();
+    return track.embeddedLoading;
+  }
+
+  function createEmbeddedCoverUrl(cover) {
+    if (!cover || !cover.data) return '';
+    return URL.createObjectURL(new Blob([cover.data], { type: cover.mime || 'image/jpeg' }));
+  }
+
+  function applyEmbeddedMetadata(track, meta) {
+    let changed = false;
+    if (meta.cover && !track.embeddedCoverUrl) {
+      track.embeddedCoverUrl = createEmbeddedCoverUrl(meta.cover);
+      if (track.embeddedCoverUrl) {
+        track.cover = track.embeddedCoverUrl;
+        changed = true;
+      }
+    }
+    if (meta.lyrics) {
+      track.embeddedLyrics = meta.lyrics;
+      if (!track.lyrics) {
+        track.lyrics = meta.lyrics;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function getTrackCover(track) {
+    return track && (track.embeddedCoverUrl || track.cover) || '';
+  }
+
+  function applyTrackCover(track) {
+    if (!ui.albumCover || !ui.coverBg || !ui.defaultCoverIcon) return;
+    const cover = getTrackCover(track);
+    if (cover) {
+      ui.albumCover.src = cover;
+      ui.albumCover.style.display = 'block';
+      ui.coverBg.style.backgroundImage = 'url("' + cover.replace(/"/g, '\\"') + '")';
+      ui.defaultCoverIcon.style.display = 'none';
+      ui.albumCover.onerror = function() {
+        ui.albumCover.style.display = 'none';
+        ui.coverBg.style.backgroundImage = '';
+        ui.defaultCoverIcon.style.display = 'block';
+      };
+    } else {
+      ui.albumCover.removeAttribute('src');
+      ui.albumCover.style.display = 'none';
+      ui.coverBg.style.backgroundImage = '';
+      ui.defaultCoverIcon.style.display = 'block';
+    }
+  }
+
+  function refreshCurrentTrackView(track, loadSeq) {
+    if (loadSeq !== metadataLoadSeq || playlist[currentIndex] !== track) return;
+    currentLyrics = parseLyrics(track.lyrics || track.embeddedLyrics);
+    renderLyrics();
+    applyTrackCover(track);
+    updatePlaylistUI();
+    syncStaticUi();
+    updateLyrics(audio.currentTime || 0);
+  }
+
+  async function resolveTrackMetadata(track, loadSeq) {
+    if (track.lrcUrl && !track.lyrics) {
+      try {
+        const res = await fetch(track.lrcUrl);
+        if (res.ok) {
+          track.lyrics = await res.text();
+          refreshCurrentTrackView(track, loadSeq);
+        }
+      } catch(e) {}
+    }
+    const meta = await readEmbeddedMetadata(track);
+    if (applyEmbeddedMetadata(track, meta)) refreshCurrentTrackView(track, loadSeq);
   }
 
   function getVisibleCountText() {
@@ -314,8 +891,9 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
       const originalIndex = playlist.findIndex(item => item._id === track._id);
       const isActive = originalIndex === currentIndex;
       const subtitle = track.fileName || track.name || '';
-      const cover = track.cover
-        ? `<img src="${escAttr(track.cover)}" alt="" loading="lazy" decoding="async">`
+      const coverUrl = getTrackCover(track);
+      const cover = coverUrl
+        ? `<img src="${escAttr(coverUrl)}" alt="" loading="lazy" decoding="async">`
         : '<span class="pl-cover-fallback">♪</span>';
       return `<button class="playlist-item${isActive ? ' active' : ''}" data-index="${originalIndex}" type="button">
         <span class="pl-cover">${cover}<span class="pl-index">${isActive
@@ -447,6 +1025,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   async function loadTrack(idx, autoPlay) {
     if (idx < 0 || idx >= playlist.length) return;
     currentIndex = idx;
+    const loadSeq = ++metadataLoadSeq;
     const track = playlist[idx];
     audio.src = track.url;
 
@@ -458,35 +1037,12 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     if (ui.timeCurrent) ui.timeCurrent.textContent = '0:00';
     if (ui.timeTotal) ui.timeTotal.textContent = '0:00';
 
-    if (ui.albumCover && ui.coverBg && ui.defaultCoverIcon) {
-      if (track.cover) {
-        ui.albumCover.src = track.cover;
-        ui.albumCover.style.display = 'block';
-        ui.coverBg.style.backgroundImage = `url(${track.cover})`;
-        ui.defaultCoverIcon.style.display = 'none';
-        ui.albumCover.onerror = function() {
-          ui.albumCover.style.display = 'none';
-          ui.coverBg.style.backgroundImage = '';
-          ui.defaultCoverIcon.style.display = 'block';
-        };
-      } else {
-        ui.albumCover.style.display = 'none';
-        ui.coverBg.style.backgroundImage = '';
-        ui.defaultCoverIcon.style.display = 'block';
-      }
-    }
-
-    currentLyrics = [];
-    if (track.lrcUrl && !track.lyrics) {
-      try {
-        const res = await fetch(track.lrcUrl);
-        if (res.ok) track.lyrics = await res.text();
-      } catch(e) {}
-    }
-    currentLyrics = parseLyrics(track.lyrics);
+    applyTrackCover(track);
+    currentLyrics = parseLyrics(track.lyrics || track.embeddedLyrics);
     renderLyrics();
     updatePlaylistUI();
     syncStaticUi();
+    resolveTrackMetadata(track, loadSeq);
 
   }
 

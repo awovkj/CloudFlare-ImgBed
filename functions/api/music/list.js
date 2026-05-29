@@ -197,6 +197,7 @@ export async function onRequest(context) {
                 url: `/file/${file.id}`,
                 fileType: file.metadata?.FileType || '',
                 fileSize: file.metadata?.FileSize || 0,
+                fileSizeBytes: file.metadata?.FileSizeBytes || 0,
                 timestamp: file.metadata?.TimeStamp || 0,
                 lrcUrl,
                 coverUrl,
