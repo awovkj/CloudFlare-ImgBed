@@ -64,11 +64,18 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   let coverPreloadTimer = 0;
   let coverPreloadRunning = 0;
   let coverRefreshTimer = 0;
+  let audioPreloadTimer = 0;
+  let audioPreloadRunning = false;
+  let audioPreloadAbortController = null;
+  let audioPreloadSeq = 0;
   const coverPreloadQueue = [];
   const coverPreloadQueued = new Set();
   const METADATA_HEAD_BYTES = 64 * 1024;
   const MAX_EMBEDDED_METADATA_BYTES = 8 * 1024 * 1024;
   const COVER_PRELOAD_CONCURRENCY = 1;
+  const AUDIO_PRELOAD_CHUNK_BYTES = 768 * 1024;
+  const AUDIO_PRELOAD_TARGET_SEC = 45;
+  const AUDIO_PRELOAD_LOW_WATER_SEC = 12;
 
   const ui = {
     mounted: false,
@@ -628,6 +635,158 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  function cancelAudioPreloadWork() {
+    audioPreloadSeq++;
+    if (audioPreloadTimer) {
+      clearTimeout(audioPreloadTimer);
+      audioPreloadTimer = 0;
+    }
+    if (audioPreloadAbortController) {
+      audioPreloadAbortController.abort();
+      audioPreloadAbortController = null;
+    }
+    audioPreloadRunning = false;
+  }
+
+  function getBufferedEndForTime(time) {
+    const ranges = audio.buffered;
+    for (let i = 0; i < ranges.length; i++) {
+      const start = ranges.start(i);
+      const end = ranges.end(i);
+      if (time >= start - 0.2 && time <= end + 0.2) return end;
+      if (start > time) break;
+    }
+    return time;
+  }
+
+  function getTrackByteAtTime(track, time) {
+    const size = getTrackSizeBytes(track);
+    const duration = Number(audio.duration);
+    if (!size || !Number.isFinite(duration) || duration <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, time / duration));
+    return Math.min(size - 1, Math.max(0, Math.floor(size * ratio)));
+  }
+
+  function getAudioPreloadRanges(track) {
+    if (!track._audioPreloadRanges) track._audioPreloadRanges = [];
+    return track._audioPreloadRanges;
+  }
+
+  function getFirstMissingAudioByte(track, start, end) {
+    if (start > end) return -1;
+    let cursor = start;
+    const ranges = getAudioPreloadRanges(track).sort((a, b) => a.start - b.start);
+    for (const range of ranges) {
+      if (range.end < cursor) continue;
+      if (range.start > cursor) break;
+      cursor = Math.max(cursor, range.end + 1);
+      if (cursor > end) return -1;
+    }
+    return cursor <= end ? cursor : -1;
+  }
+
+  function markAudioRangePreloaded(track, start, end) {
+    const ranges = getAudioPreloadRanges(track);
+    ranges.push({ start, end });
+    ranges.sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const range of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && range.start <= last.end + 1) {
+        last.end = Math.max(last.end, range.end);
+      } else {
+        merged.push({ start: range.start, end: range.end });
+      }
+    }
+    track._audioPreloadRanges = merged.slice(-12);
+  }
+
+  function getAudioPreloadPlan(track) {
+    const size = getTrackSizeBytes(track);
+    if (!track || !size || track._audioPreloadDisabled) return null;
+
+    const duration = Number(audio.duration);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      const bootstrapEnd = Math.min(size - 1, AUDIO_PRELOAD_CHUNK_BYTES - 1);
+      const bootstrapStart = getFirstMissingAudioByte(track, 0, bootstrapEnd);
+      return bootstrapStart >= 0 ? { start: bootstrapStart, end: bootstrapEnd } : null;
+    }
+
+    const currentTime = Math.max(0, Math.min(audio.currentTime || 0, duration));
+    if (duration - currentTime <= 4) return null;
+
+    const bufferedEnd = getBufferedEndForTime(currentTime);
+    const bufferAhead = Math.max(0, bufferedEnd - currentTime);
+    if (bufferAhead >= AUDIO_PRELOAD_TARGET_SEC) return null;
+
+    const targetEndTime = Math.min(duration, currentTime + AUDIO_PRELOAD_TARGET_SEC);
+    const startTime = Math.min(targetEndTime, Math.max(bufferedEnd, currentTime + AUDIO_PRELOAD_LOW_WATER_SEC));
+    let startByte = getTrackByteAtTime(track, startTime);
+    let targetEndByte = getTrackByteAtTime(track, targetEndTime);
+    if (targetEndTime >= duration - 0.2) targetEndByte = size - 1;
+    if (targetEndByte < startByte) targetEndByte = startByte;
+
+    const missingStart = getFirstMissingAudioByte(track, startByte, targetEndByte);
+    if (missingStart < 0) return null;
+    return {
+      start: missingStart,
+      end: Math.min(targetEndByte, missingStart + AUDIO_PRELOAD_CHUNK_BYTES - 1)
+    };
+  }
+
+  async function fetchAudioPreloadRange(track, start, end, signal) {
+    const headers = new Headers({ Range: 'bytes=' + start + '-' + end });
+    const res = await fetch(track.url, { headers, cache: 'force-cache', credentials: 'same-origin', signal });
+    if (res.status !== 206) {
+      if (res.body) {
+        try { await res.body.cancel(); } catch (e) {}
+      }
+      throw new Error('audio range preload unsupported');
+    }
+    await res.arrayBuffer();
+  }
+
+  function scheduleCurrentAudioPreload(delay) {
+    if (currentIndex < 0 || !playlist[currentIndex]) return;
+    if (audioPreloadTimer || audioPreloadRunning) return;
+    const track = playlist[currentIndex];
+    if (track._audioPreloadDisabled) return;
+    audioPreloadTimer = setTimeout(processCurrentAudioPreload, typeof delay === 'number' ? delay : (isPlaying ? 700 : 1200));
+  }
+
+  function processCurrentAudioPreload() {
+    audioPreloadTimer = 0;
+    if (currentIndex < 0 || !playlist[currentIndex] || audioPreloadRunning) return;
+    const track = playlist[currentIndex];
+    const plan = getAudioPreloadPlan(track);
+    if (!plan) return;
+
+    const seq = audioPreloadSeq;
+    const controller = new AbortController();
+    audioPreloadRunning = true;
+    audioPreloadAbortController = controller;
+
+    fetchAudioPreloadRange(track, plan.start, plan.end, controller.signal)
+      .then(function() {
+        if (seq !== audioPreloadSeq || playlist[currentIndex] !== track) return;
+        markAudioRangePreloaded(track, plan.start, plan.end);
+        track._audioPreloadFailures = 0;
+      })
+      .catch(function(e) {
+        if (e && e.name === 'AbortError') return;
+        track._audioPreloadFailures = (track._audioPreloadFailures || 0) + 1;
+        if (track._audioPreloadFailures >= 2) track._audioPreloadDisabled = true;
+      })
+      .finally(function() {
+        if (seq !== audioPreloadSeq) return;
+        audioPreloadRunning = false;
+        audioPreloadAbortController = null;
+        if (playlist[currentIndex] === track && !track._audioPreloadDisabled) {
+          scheduleCurrentAudioPreload(isPlaying ? 700 : 1800);
+        }
+      });
+  }
+
   async function readEmbeddedMetadata(track, signal) {
     if (track.embeddedLoaded) return track.embeddedMeta || {};
     if (track.embeddedLoading) return track.embeddedLoading;
@@ -1141,11 +1300,14 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   async function loadTrack(idx, autoPlay) {
     if (idx < 0 || idx >= playlist.length) return;
     cancelMetadataWork();
+    cancelAudioPreloadWork();
     currentIndex = idx;
     const loadSeq = ++metadataLoadSeq;
     lastDisplayedSecond = -1;
     const track = playlist[idx];
+    audio.preload = 'auto';
     audio.src = track.url;
+    audio.load();
 
     if (autoPlay) playAudio();
 
@@ -1161,11 +1323,17 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     updatePlaylistUI();
     syncStaticUi();
     scheduleTrackMetadata(track, loadSeq, autoPlay);
+    scheduleCurrentAudioPreload(autoPlay ? 350 : 120);
 
   }
 
   function playAudio() {
-    audio.play().then(() => { isPlaying = true; updatePlayBtn(); updateDisc(); }).catch(() => {});
+    audio.play().then(() => {
+      isPlaying = true;
+      updatePlayBtn();
+      updateDisc();
+      scheduleCurrentAudioPreload(120);
+    }).catch(() => {});
   }
 
   function updatePlayBtn() {
@@ -1376,10 +1544,18 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     audio.addEventListener('timeupdate', function(){
       if (!audio.duration) return;
       schedulePlaybackUiUpdate();
+      scheduleCurrentAudioPreload(600);
     });
     audio.addEventListener('loadedmetadata', function(){
       if (ui.timeTotal) ui.timeTotal.textContent = formatTime(audio.duration);
+      scheduleCurrentAudioPreload(80);
     });
+    audio.addEventListener('progress', function(){ scheduleCurrentAudioPreload(900); });
+    audio.addEventListener('canplay', function(){ scheduleCurrentAudioPreload(400); });
+    audio.addEventListener('playing', function(){ scheduleCurrentAudioPreload(120); });
+    audio.addEventListener('waiting', function(){ scheduleCurrentAudioPreload(0); });
+    audio.addEventListener('stalled', function(){ scheduleCurrentAudioPreload(0); });
+    audio.addEventListener('seeked', function(){ scheduleCurrentAudioPreload(80); });
     audio.addEventListener('ended', playNext);
     audio.addEventListener('play', function(){ isPlaying = true; updatePlayBtn(); updateDisc(); });
     audio.addEventListener('pause', function(){ isPlaying = false; updatePlayBtn(); updateDisc(); });
