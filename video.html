@@ -32,8 +32,7 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
       <div class="sidebar-inner">
         <div class="sidebar-header">
           <div class="sidebar-heading">
-            <h2>放映清单<span class="count" id="playlistCount"></span></h2>
-            <p id="playlistHint">搜索、排序并快速切换当前视频。</p>
+            <h2>清单<span class="count" id="playlistCount"></span></h2>
           </div>
           <button class="ctrl-btn" id="toggleSidebarBtn" title="Toggle playlist" style="font-size:14px">&times;</button>
         </div>
@@ -43,10 +42,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
           </div>
           <button class="toolbar-btn" id="sortNameBtn" title="Sort by name">A-Z</button>
           <button class="toolbar-btn" id="sortDateBtn" title="Sort by date">&#x1F4C5;</button>
-        </div>
-        <div class="playlist-summary">
-          <strong id="playlistSummaryCount">0</strong>
-          <span>单击切换，再次单击暂停</span>
         </div>
         <div class="playlist-items" id="playlistItems"></div>
       </div>
@@ -228,13 +223,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   }
 
-  function getPlaylistSummaryText() {
-    if (searchQuery) return '已过滤推荐列表';
-    if (sortBy === 'name') return '按名称排序';
-    if (sortBy === 'date') return '按时间排序';
-    return '自动保留字幕、全屏与播放快捷键';
-  }
-
   function renderPlayer() {
     const mainEl = document.getElementById('videoMain');
     mainEl.innerHTML = `
@@ -273,20 +261,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
             </div>
           </div>
         </div>
-
-        <div class="video-info-grid">
-          <section class="video-copy-card">
-            <div class="stage-label"><span class="pulse"></span><span>Now showing</span></div>
-            <div class="video-title" id="videoTitle">-</div>
-            <div class="video-meta" id="videoMeta">准备开始播放</div>
-            <div class="video-file" id="videoFile">-</div>
-          </section>
-          <aside class="watch-meta-card">
-            <div class="meta-pill"><span>列表</span><strong id="metaCount">0</strong></div>
-            <div class="meta-pill"><span>字幕</span><strong id="metaSubtitle">不可用</strong></div>
-            <div class="meta-pill"><span>侧栏</span><strong id="metaSidebar">已展开</strong></div>
-          </aside>
-        </div>
       </section>`;
 
     video = document.getElementById('video');
@@ -307,19 +281,11 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     ui.playBtn = document.getElementById('playBtn');
     ui.playOverlay = document.getElementById('playOverlay');
     ui.videoTitleBar = document.getElementById('videoTitleBar');
-    ui.videoTitle = document.getElementById('videoTitle');
-    ui.videoMeta = document.getElementById('videoMeta');
-    ui.videoFile = document.getElementById('videoFile');
     ui.timeCurrent = document.getElementById('timeCurrent');
     ui.timeTotal = document.getElementById('timeTotal');
     ui.volBtn = document.getElementById('volBtn');
     ui.volFill = document.getElementById('volFill');
     ui.playlistCount = document.getElementById('playlistCount');
-    ui.playlistSummaryCount = document.getElementById('playlistSummaryCount');
-    ui.playlistHint = document.getElementById('playlistHint');
-    ui.metaCount = document.getElementById('metaCount');
-    ui.metaSubtitle = document.getElementById('metaSubtitle');
-    ui.metaSidebar = document.getElementById('metaSidebar');
     ui.playlistItems = document.getElementById('playlistItems');
     ui.searchInput = document.getElementById('searchInput');
     ui.sortNameBtn = document.getElementById('sortNameBtn');
@@ -370,10 +336,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
   function updatePlaylistMeta() {
     const countText = `(${filteredPlaylist.length})`;
     if (ui.playlistCount) ui.playlistCount.textContent = countText;
-    if (ui.playlistSummaryCount) ui.playlistSummaryCount.textContent = filteredPlaylist.length + ' 项';
-    if (ui.playlistHint) ui.playlistHint.textContent = getPlaylistSummaryText();
-    if (ui.metaCount) ui.metaCount.textContent = filteredPlaylist.length + ' 项';
-    if (ui.metaSidebar) ui.metaSidebar.textContent = sidebarOpen ? '已展开' : '已收起';
     if (ui.sortNameBtn) ui.sortNameBtn.classList.toggle('active', sortBy === 'name');
     if (ui.sortDateBtn) ui.sortDateBtn.classList.toggle('active', sortBy === 'date');
   }
@@ -444,8 +406,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     if (ui.volBtn) ui.volBtn.textContent = volume === 0 ? '\u{1F508}' : '\u{1F50A}';
     updatePlayBtn();
     updatePlaylistMeta();
-    const current = playlist[currentIndex];
-    if (ui.metaSubtitle) ui.metaSubtitle.textContent = current && current.subtitleUrl ? '可用' : '不可用';
   }
 
   function loadTrack(idx, autoPlay) {
@@ -475,9 +435,6 @@ html{background:var(--paper);color-scheme:light}body{min-height:100vh;padding:24
     }
 
     if (ui.videoTitleBar) ui.videoTitleBar.textContent = track.name;
-    if (ui.videoTitle) ui.videoTitle.textContent = track.name;
-    if (ui.videoMeta) ui.videoMeta.textContent = track.subtitleUrl ? '支持字幕切换与双击全屏。' : '可直接播放，支持快捷键与侧栏切换。';
-    if (ui.videoFile) ui.videoFile.textContent = track.fileName || track.url || '';
     lastDisplayedSecond = -1;
     if (ui.progressFill) ui.progressFill.style.transform = 'scaleX(0)';
     if (ui.progressBuffer) ui.progressBuffer.style.width = '0%';
