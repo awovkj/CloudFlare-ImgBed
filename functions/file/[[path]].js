@@ -2,7 +2,6 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { fetchSecurityConfig } from "../utils/sysConfig";
 import { TelegramAPI } from "../utils/telegramAPI";
 import { DiscordAPI } from "../utils/discordAPI";
-import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import { resolveHfChannelConfig } from "../utils/sysConfig";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,

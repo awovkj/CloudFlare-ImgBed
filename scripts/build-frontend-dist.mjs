@@ -11,69 +11,18 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset } from './asset-ignore.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const dest = path.resolve(root, 'frontend-dist');
 
-function loadIgnore() {
-    const ignoreFile = path.join(root, '.assetsignore');
-    if (!fs.existsSync(ignoreFile)) {
-        return new Set();
-    }
-
-    return new Set(
-        fs.readFileSync(ignoreFile, 'utf8')
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line && !line.startsWith('#'))
-    );
-}
-
-function matchesIgnore(entry, pattern) {
-    if (pattern === entry || pattern === `${entry}/`) {
-        return true;
-    }
-
-    if (!pattern.includes('*')) {
-        return false;
-    }
-
-    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-    const regex = new RegExp(`^${escaped}$`);
-    return regex.test(entry) || regex.test(`${entry}/`);
-}
-
-function shouldIgnore(entry, ignored) {
-    for (const pattern of ignored) {
-        if (matchesIgnore(entry, pattern)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-const ignored = loadIgnore();
-ignored.add('frontend-dist');
-ignored.add('frontend-dist/');
-ignored.add('.wrangler-assets');
-ignored.add('.wrangler-assets/');
-ignored.add('.wrangler-pages-dev.log');
-ignored.add('.wrangler-pages-func-build');
-ignored.add('.wrangler-pages-func-build/');
-ignored.add('database');
-ignored.add('database/');
-ignored.add('deploy');
-ignored.add('deploy/');
-ignored.add('scripts');
-ignored.add('scripts/');
-ignored.add('wrangler.log');
+const ignored = addCommonAssetIgnores(loadAssetIgnore(root));
 
 fs.mkdirSync(dest, { recursive: true });
 
 const sourceEntries = new Set(
-    fs.readdirSync(root).filter((entry) => !shouldIgnore(entry, ignored))
+    fs.readdirSync(root).filter((entry) => !shouldIgnoreAsset(entry, ignored))
 );
 
 for (const existingEntry of fs.readdirSync(dest)) {

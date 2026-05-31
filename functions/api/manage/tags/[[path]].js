@@ -1,7 +1,7 @@
 import { purgeCFCache } from "../../../utils/purgeCache.js";
 import { addFileToIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from "../../../utils/databaseAdapter.js";
-import { mergeTags, normalizeTags, validateTag } from "../../../utils/tagHelpers.js";
+import { mergeTags, validateTag } from "../../../utils/tagHelpers.js";
 
 /**
  * Tag Management API for Single Files

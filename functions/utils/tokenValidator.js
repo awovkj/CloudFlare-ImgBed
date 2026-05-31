@@ -36,32 +36,3 @@ export async function validateApiToken(request, db, requiredPermission) {
 
     return { valid: true };
 }
-
-export async function getTokenInfo(request, kv) {
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader) {
-        return null;
-    }
-
-    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
-    if (!token) {
-        return null;
-    }
-
-    const settingsStr = await kv.get('manage@sysConfig@security');
-    const settings = settingsStr ? JSON.parse(settingsStr) : {};
-    const tokens = settings.apiTokens?.tokens || {};
-
-    for (const tokenId in tokens) {
-        if (tokens[tokenId].token === token) {
-            const item = tokens[tokenId];
-            return {
-                ...item,
-                expiresAt: item.expiresAt ?? null,
-                autoDelete: item.autoDelete ?? false
-            };
-        }
-    }
-
-    return null;
-}

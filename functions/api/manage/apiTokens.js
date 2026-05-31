@@ -232,22 +232,6 @@ function generateTokenId() {
     return Date.now().toString(36) + Math.random().toString(36).substring(2)
 }
 
-// 根据Token获取权限（供其他API使用）
-export async function getTokenPermissions(db, token) {
-    const settingsStr = await db.get('manage@sysConfig@security')
-    const settings = settingsStr ? JSON.parse(settingsStr) : {}
-    const tokens = settings.apiTokens?.tokens || {}
-    
-    // 查找匹配的token
-    for (const tokenId in tokens) {
-        if (tokens[tokenId].token === token) {
-            return tokens[tokenId].permissions
-        }
-    }
-    
-    return null
-}
-
 export async function getTokenData(db, token) {
     const settingsStr = await db.get('manage@sysConfig@security')
     const settings = settingsStr ? JSON.parse(settingsStr) : {}

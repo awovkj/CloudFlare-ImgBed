@@ -7,6 +7,7 @@
 import fs   from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset } from './asset-ignore.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root      = path.resolve(__dirname, '..');
@@ -14,63 +15,12 @@ const dest      = path.resolve(root, '.wrangler-assets');
 const frontendDist = path.resolve(root, 'frontend-dist');
 const sourceRoot = fs.existsSync(frontendDist) ? frontendDist : root;
 
-// 读取 .assetsignore 排除规则
-function loadIgnore() {
-    const ignoreFile = path.join(root, '.assetsignore');
-    if (!fs.existsSync(ignoreFile)) return new Set();
-    return new Set(
-        fs.readFileSync(ignoreFile, 'utf8')
-            .split('\n')
-            .map(l => l.trim())
-            .filter(l => l && !l.startsWith('#'))
-    );
-}
-
-function matchesIgnore(entry, pattern) {
-    if (pattern === entry || pattern === `${entry}/`) {
-        return true;
-    }
-
-    if (!pattern.includes('*')) {
-        return false;
-    }
-
-    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-    const regex = new RegExp(`^${escaped}$`);
-    return regex.test(entry) || regex.test(`${entry}/`);
-}
-
-function shouldIgnore(entry, ignored) {
-    for (const pattern of ignored) {
-        if (matchesIgnore(entry, pattern)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-const ignored = sourceRoot === root ? loadIgnore() : new Set();
-// 目标目录本身也排除
-ignored.add('.wrangler-assets');
-ignored.add('.wrangler-assets/');
-ignored.add('frontend-dist');
-ignored.add('frontend-dist/');
-ignored.add('.wrangler-pages-dev.log');
-ignored.add('.wrangler-pages-func-build');
-ignored.add('.wrangler-pages-func-build/');
-ignored.add('database');
-ignored.add('database/');
-ignored.add('deploy');
-ignored.add('deploy/');
-ignored.add('scripts');
-ignored.add('scripts/');
-ignored.add('wrangler.log');
+const ignored = addCommonAssetIgnores(sourceRoot === root ? loadAssetIgnore(root) : new Set());
 
 fs.mkdirSync(dest, { recursive: true });
 
 const sourceEntries = new Set(
-    fs.readdirSync(sourceRoot).filter((entry) => !shouldIgnore(entry, ignored))
+    fs.readdirSync(sourceRoot).filter((entry) => !shouldIgnoreAsset(entry, ignored))
 );
 
 for (const existingEntry of fs.readdirSync(dest)) {
@@ -93,8 +43,8 @@ for (const entry of sourceEntries) {
     try {
         fs.cpSync(src, dst, { recursive: true });
         copied++;
-    } catch (e) {
-        console.warn(`  skip ${entry}: ${e.message}`);
+    } catch (error) {
+        console.warn(`  skip ${entry}: ${error.message}`);
     }
 }
 

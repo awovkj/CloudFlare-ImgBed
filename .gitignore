@@ -1,6 +1,10 @@
 .wrangler/*
 .wrangler-worker-build/
 .wrangler-assets/
+.wrangler-pages-func-build/
+.wrangler-pages-dev.log
+wrangler.log
+frontend-dist/
 data/*
 node_modules
 .DS_Store

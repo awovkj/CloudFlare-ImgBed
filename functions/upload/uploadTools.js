@@ -2,7 +2,6 @@ import { fetchSecurityConfig } from "../utils/sysConfig";
 import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../utils/purgeCache";
 import { addFileToIndex } from "../utils/indexManager.js";
 import { getDatabase } from '../utils/databaseAdapter.js';
-import { resolveHfChannelConfig } from '../utils/sysConfig.js';
 import { CHAT_DIRECTORY, isChatRequestFromUrl } from '../utils/chat.js';
 
 const CORS_HEADERS = {

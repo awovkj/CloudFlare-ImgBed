@@ -61,17 +61,6 @@ async function hashPasswordSHA256(password, salt) {
     return `${HASH_PREFIX_SHA256}${salt}$${bufferToHex(hashBuffer)}`;
 }
 
-export function isHashed(password) {
-    return typeof password === 'string' && (
-        password.startsWith(HASH_PREFIX_PBKDF2) ||
-        password.startsWith(HASH_PREFIX_SHA256)
-    );
-}
-
-export function needsRehash(password) {
-    return typeof password === 'string' && password.startsWith(HASH_PREFIX_SHA256);
-}
-
 export async function verifyPassword(inputPassword, storedPassword) {
     if (!storedPassword || !inputPassword) {
         return false;
@@ -121,34 +110,4 @@ export function generateSessionToken() {
     const array = new Uint8Array(32);
     crypto.getRandomValues(array);
     return Array.from(array).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-export async function rehashIfNeeded(db, plainPassword, storedPassword, configPath) {
-    if (!storedPassword || (storedPassword.startsWith(HASH_PREFIX_PBKDF2) && !needsRehash(storedPassword))) {
-        return;
-    }
-
-    try {
-        const settingsStr = await db.get('manage@sysConfig@security');
-        if (!settingsStr) {
-            return;
-        }
-
-        const settings = JSON.parse(settingsStr);
-        const keys = configPath.split('.');
-        let target = settings;
-
-        for (let i = 0; i < keys.length - 1; i++) {
-            target = target?.[keys[i]];
-        }
-
-        if (!target) {
-            return;
-        }
-
-        target[keys[keys.length - 1]] = await hashPassword(plainPassword);
-        await db.put('manage@sysConfig@security', JSON.stringify(settings));
-    } catch (error) {
-        console.error(`Failed to rehash password at ${configPath}:`, error);
-    }
 }
