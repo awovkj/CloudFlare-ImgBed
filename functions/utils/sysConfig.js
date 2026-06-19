@@ -1,7 +1,7 @@
-import { getUploadConfig } from '../api/manage/sysConfig/upload';
-import { getSecurityConfig } from '../api/manage/sysConfig/security';
-import { getPageConfig } from '../api/manage/sysConfig/page';
-import { getOthersConfig } from '../api/manage/sysConfig/others';
+import { getUploadConfig } from '../api/manage/sysConfig/upload.js';
+import { getSecurityConfig } from '../api/manage/sysConfig/security.js';
+import { getPageConfig } from '../api/manage/sysConfig/page.js';
+import { getOthersConfig } from '../api/manage/sysConfig/others.js';
 import { getDatabase } from './databaseAdapter.js';
 import { getIndexMeta } from './indexManager.js';
 

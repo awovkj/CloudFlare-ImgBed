@@ -1,4 +1,4 @@
-import { fetchOthersConfig } from "./sysConfig";
+import { fetchOthersConfig } from "./sysConfig.js";
 
 // 优化：
 // 1. 移除模块级 let 变量，避免同一 isolate 处理多个请求时数据泄漏
