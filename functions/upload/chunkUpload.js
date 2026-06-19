@@ -1,6 +1,6 @@
 /* ======= 客户端分块上传处理 ======= */
 import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
-import { createUploadJsonResponse } from './uploadShared.js';
+import { buildUploadResults, createUploadJsonResponse } from './uploadShared.js';
 import { TelegramAPI } from '../utils/telegramAPI';
 import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
@@ -28,7 +28,7 @@ export async function initializeChunkedUpload(context) {
         const formdata = await request.formData();
 
         const originalFileName = formdata.get('originalFileName');
-        const originalFileType = formdata.get('originalFileType');
+        const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
         const totalChunks = parseInt(formdata.get('totalChunks'));
 
         if (!originalFileName || (originalFileType === null || originalFileType === undefined) || !totalChunks) {
@@ -111,7 +111,7 @@ export async function handleChunkUpload(context) {
         const totalChunks = parseInt(formdata.get('totalChunks'));
         const uploadId = formdata.get('uploadId');
         const originalFileName = formdata.get('originalFileName');
-        const originalFileType = formdata.get('originalFileType');
+        const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
 
         if (!chunk || Number.isNaN(chunkIndex) || !totalChunks || !uploadId || !originalFileName || (originalFileType === null || originalFileType === undefined)) {
             return createResponse('Error: Missing chunk upload parameters', { status: 400 });
@@ -1521,15 +1521,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
         // 异步结束上传
         waitUntil(endUpload(context, fullId, metadata));
 
-        return createResponse(
-            JSON.stringify([{ 'src': returnLink }]),
-            {
-                status: 200,
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            }
-        );
+        return createUploadJsonResponse(buildUploadResults(context, returnLink));
 
     } catch (error) {
         return createResponse(`Telegram Channel Error: Large file upload failed - ${error.message}`, { status: 500 });

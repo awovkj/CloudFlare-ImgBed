@@ -35,3 +35,16 @@ export function createUploadJsonResponse(payload, status = 200, headers = {}) {
         headers,
     });
 }
+
+
+export function buildUploadResult(context, returnLink) {
+    const result = { src: returnLink };
+    if (context?.publicUrl) {
+        result.publicUrl = context.publicUrl;
+    }
+    return result;
+}
+
+export function buildUploadResults(context, returnLink) {
+    return [buildUploadResult(context, returnLink)];
+}

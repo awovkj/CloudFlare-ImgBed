@@ -3,6 +3,8 @@ import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFi
 import { retryFailedChunks, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { fetchPageConfig } from '../utils/sysConfig.js';
+import { buildUploadResult } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
@@ -68,6 +70,21 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+
+async function enrichMergeResultWithPublicUrl(context, mergeResult) {
+    if (!Array.isArray(mergeResult) || mergeResult.length === 0 || !mergeResult[0]?.src) {
+        return mergeResult;
+    }
+
+    const src = mergeResult[0].src;
+    const fileName = src.startsWith('/file/') ? src.slice(6) : src.split('/file/').pop();
+    const pageConfig = await fetchPageConfig(context.env);
+    const urlPrefixConfig = pageConfig.config?.find((configItem) => configItem.id === 'urlPrefix');
+    const urlPrefix = urlPrefixConfig?.value || '';
+    context.publicUrl = urlPrefix ? `${urlPrefix.replace(/\/+$/, '')}/${fileName}` : '';
+    return [buildUploadResult(context, src)];
+}
+
 // 处理分块合并
 export async function handleChunkMerge(context) {
     const { request, env, url, waitUntil } = context;
@@ -82,7 +99,7 @@ export async function handleChunkMerge(context) {
         uploadId = formdata.get('uploadId');
         totalChunks = parseInt(formdata.get('totalChunks'));
         originalFileName = formdata.get('originalFileName');
-        originalFileType = formdata.get('originalFileType');
+        originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
 
         if (!uploadId || !totalChunks || !originalFileName) {
             return createResponse('Error: Missing merge parameters', { status: 400 });
@@ -100,7 +117,8 @@ export async function handleChunkMerge(context) {
 
         // 如果后台合并已经成功，直接返回保存的结果（供前端轮询拿到结果）
         if (sessionInfo.status === 'merge_success' && sessionInfo.mergeResult) {
-            return createResponse(JSON.stringify(sessionInfo.mergeResult), {
+            const mergeResult = await enrichMergeResultWithPublicUrl(context, sessionInfo.mergeResult);
+            return createResponse(JSON.stringify(mergeResult), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -244,7 +262,8 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             // 清理上传会话
             await cleanupUploadSession(env, uploadId);
 
-            return createResponse(JSON.stringify(result.result), {
+            const mergeResult = await enrichMergeResultWithPublicUrl(context, result.result);
+            return createResponse(JSON.stringify(mergeResult), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -339,10 +358,11 @@ async function finalizeMergeInBackground(context, params) {
             }
 
             if (result.success) {
+                const mergeResult = await enrichMergeResultWithPublicUrl(context, result.result);
                 await updateUploadSessionStatus(env, uploadId, {
                     status: 'merge_success',
                     mergeCompletedAt: Date.now(),
-                    mergeResult: result.result
+                    mergeResult
                 });
                 await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
                 return;
@@ -597,7 +617,7 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
 
         return {
             success: true,
-            result: [{ 'src': updatedReturnLink }]
+            result: [buildUploadResult(context, updatedReturnLink)]
         };
 
     } catch (error) {
@@ -699,7 +719,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
 
         return {
             success: true,
-            result: [{ src: updatedReturnLink }]
+            result: [buildUploadResult(context, updatedReturnLink)]
         };
 
     } catch (error) {
@@ -789,7 +809,7 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
 
         return {
             success: true,
-            result: [{ 'src': updatedReturnLink }]
+            result: [buildUploadResult(context, updatedReturnLink)]
         };
 
     } catch (error) {
@@ -859,7 +879,7 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
 
         return {
             success: true,
-            result: [{ 'src': updatedReturnLink }]
+            result: [buildUploadResult(context, updatedReturnLink)]
         };
 
     } catch (error) {

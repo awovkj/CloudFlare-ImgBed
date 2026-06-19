@@ -1,5 +1,5 @@
 import { userAuthCheck, UnauthorizedResponse } from "../utils/userAuth";
-import { fetchUploadConfig, fetchSecurityConfig, fetchOthersConfig } from "../utils/sysConfig";
+import { fetchUploadConfig, fetchSecurityConfig, fetchOthersConfig, fetchPageConfig } from "../utils/sysConfig";
 import {
     createResponse, getUploadIp, getIPAddress, resolveFileExt,
     moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
@@ -12,7 +12,7 @@ import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
-import { createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
+import { buildUploadResults, createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 
 
@@ -186,6 +186,11 @@ async function processFileUpload(context, formdata = null) {
     // 获得返回链接
     const returnLink = buildReturnLink(url, fullId);
 
+    const pageConfig = await fetchPageConfig(env);
+    const urlPrefixConfig = pageConfig.config?.find((configItem) => configItem.id === 'urlPrefix');
+    const urlPrefix = urlPrefixConfig?.value || '';
+    context.publicUrl = urlPrefix ? `${urlPrefix.replace(/\/+$/, '')}/${fullId}` : '';
+
     /* ====================================不同渠道上传======================================= */
     // 出错是否切换渠道自动重试，默认开启
     const autoRetry = url.searchParams.get('autoRetry') !== 'false';
@@ -265,7 +270,7 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
     waitUntil(endUpload(context, fullId, metadata));
 
     // 成功上传，将文件ID返回给客户端
-    return createUploadJsonResponse([{ src: `${returnLink}` }]);
+    return createUploadJsonResponse(buildUploadResults(context, returnLink));
 }
 
 
@@ -366,7 +371,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
         // 结束上传
         waitUntil(endUpload(context, fullId, metadata));
 
-        return createUploadJsonResponse([{ src: returnLink }]);
+        return createUploadJsonResponse(buildUploadResults(context, returnLink));
     } catch (error) {
         return createResponse(`Error: Failed to upload to S3 - ${error.message}`, { status: 500 });
     }
@@ -449,7 +454,7 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
         metadata.FileSize = (fileInfo.file_size / 1024 / 1024).toFixed(2);
 
         // 将响应返回给客户端
-        res = createUploadJsonResponse([{ src: `${returnLink}` }]);
+        res = createUploadJsonResponse(buildUploadResults(context, returnLink));
 
 
         // 图像审查（使用代理域名或官方域名）
@@ -515,7 +520,7 @@ async function uploadFileToExternal(context, fullId, metadata, returnLink) {
     waitUntil(endUpload(context, fullId, metadata));
 
     // 返回结果
-    return createUploadJsonResponse([{ src: `${returnLink}` }]);
+    return createUploadJsonResponse(buildUploadResults(context, returnLink));
 }
 
 
@@ -593,7 +598,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
         waitUntil(endUpload(context, fullId, metadata));
 
         // 返回成功响应
-        return createUploadJsonResponse([{ src: returnLink }]);
+        return createUploadJsonResponse(buildUploadResults(context, returnLink));
 
     } catch (error) {
         console.error('Discord upload error:', error.message);
@@ -691,7 +696,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         waitUntil(endUpload(context, fullId, metadata));
 
         // 返回成功响应
-        return createUploadJsonResponse([{ src: returnLink }]);
+        return createUploadJsonResponse(buildUploadResults(context, returnLink));
 
     } catch (error) {
         console.error('HuggingFace upload error:', error.message);
