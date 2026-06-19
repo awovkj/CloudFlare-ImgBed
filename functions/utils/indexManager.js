@@ -38,6 +38,7 @@
  */
 
 import { getDatabase, checkDatabaseConfig } from './databaseAdapter.js';
+import { cleanPersistedMetadata } from './metadata/metadataSecurity.js';
 
 const INDEX_KEY = 'manage@index';
 const INDEX_META_KEY = 'manage@index@meta'; // 索引元数据键
@@ -84,7 +85,7 @@ export async function addFileToIndex(context, fileId, metadata = null) {
         // 记录原子操作
         const operationId = await recordOperation(context, 'add', {
             fileId,
-            metadata
+            metadata: cleanPersistedMetadata(metadata)
         });
 
         console.log(`File ${fileId} add operation recorded with ID: ${operationId}`);
@@ -128,7 +129,7 @@ export async function batchAddFilesToIndex(context, files, options = {}) {
 
             processedFiles.push({
                 fileId,
-                metadata: finalMetadata
+                metadata: cleanPersistedMetadata(finalMetadata)
             });
         }
 
@@ -232,7 +233,7 @@ export async function moveFileInIndex(context, originalFileId, newFileId, newMet
         const operationId = await recordOperation(context, 'move', {
             originalFileId,
             newFileId,
-            metadata: finalMetadata
+            metadata: cleanPersistedMetadata(finalMetadata)
         });
 
         console.log(`File move operation from ${originalFileId} to ${newFileId} recorded with ID: ${operationId}`);
@@ -275,7 +276,7 @@ export async function batchMoveFilesInIndex(context, moveOperations) {
             processedOperations.push({
                 originalFileId,
                 newFileId,
-                metadata: finalMetadata
+                metadata: cleanPersistedMetadata(finalMetadata)
             });
         }
 
@@ -1157,7 +1158,7 @@ function applyAddOperation(index, data) {
     
     const fileItem = {
         id: fileId,
-        metadata: metadata || {}
+        metadata: cleanPersistedMetadata(metadata) || {}
     };
     
     if (existingIndex !== -1) {
@@ -1199,7 +1200,7 @@ function applyMoveOperation(index, data) {
     // 更新文件ID和元数据
     index.files[originalIndex] = {
         id: newFileId,
-        metadata: metadata || index.files[originalIndex].metadata
+        metadata: cleanPersistedMetadata(metadata) || index.files[originalIndex].metadata
     };
     
     return true;
@@ -1230,7 +1231,7 @@ function applyBatchAddOperation(index, data) {
         const { fileId, metadata } = fileData;
         const fileItem = {
             id: fileId,
-            metadata: metadata || {}
+            metadata: cleanPersistedMetadata(metadata) || {}
         };
 
         const existingIndex = existingFilesMap.get(fileId);
@@ -1298,7 +1299,7 @@ function applyBatchMoveOperation(index, data) {
             // 更新文件信息
             index.files[originalIndex] = {
                 id: newFileId,
-                metadata: metadata || index.files[originalIndex].metadata
+                metadata: cleanPersistedMetadata(metadata) || index.files[originalIndex].metadata
             };
             
             movedCount++;
