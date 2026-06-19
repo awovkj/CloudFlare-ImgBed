@@ -24,6 +24,9 @@ import { onRequest as onPublicListRequest }     from '../functions/api/public/li
 import { onRequest as onBingWallpaperRequest }  from '../functions/api/bing/wallpaper/index.js';
 import { onRequestPost as onHfGetUploadUrlPost }from '../functions/api/huggingface/getUploadUrl.js';
 import { onRequestPost as onHfCommitPost }      from '../functions/api/huggingface/commitUpload.js';
+import { onRequestPost as onUploadHfGetUploadUrlPost } from '../functions/upload/huggingface/getUploadUrl.js';
+import { onRequestPost as onUploadHfCommitPost } from '../functions/upload/huggingface/commitUpload.js';
+import { onRequestPost as onUploadHfCompleteMultipartPost } from '../functions/upload/huggingface/completeMultipart.js';
 import { onRequestGet as onDirectoryTreeGet }    from '../functions/api/directoryTree.js';
 
 // api/manage — 子路由
@@ -53,6 +56,7 @@ import { onRequest as onManageCusConfigList }      from '../functions/api/manage
 import { onRequest as onManageCusConfigBlockIp }   from '../functions/api/manage/cusConfig/blockip.js';
 import { onRequest as onManageCusConfigBlockIpList}from '../functions/api/manage/cusConfig/blockipList.js';
 import { onRequest as onManageCusConfigWhiteIp }   from '../functions/api/manage/cusConfig/whiteip.js';
+import { onRequest as onManageCusConfigFiles }     from '../functions/api/manage/cusConfig/files.js';
 import { onRequest as onManageBatchList }          from '../functions/api/manage/batch/list.js';
 import { onRequest as onManageBatchSettings }      from '../functions/api/manage/batch/settings.js';
 import { onRequest as onManageBatchIndexChunk }    from '../functions/api/manage/batch/index/chunk.js';
@@ -336,6 +340,7 @@ const STATIC_ROUTES = new Map([
     ['/api/manage/cusConfig/blockip',      apiManageChain(onManageCusConfigBlockIp)],
     ['/api/manage/cusConfig/blockipList',  apiManageChain(onManageCusConfigBlockIpList)],
     ['/api/manage/cusConfig/whiteip',      apiManageChain(onManageCusConfigWhiteIp)],
+    ['/api/manage/cusConfig/files',        apiManageChain(onManageCusConfigFiles)],
     ['/api/manage/batch/list',             apiManageChain(onManageBatchList)],
     ['/api/manage/batch/settings',         apiManageChain(onManageBatchSettings)],
     ['/api/manage/batch/index/chunk',      apiManageChain(onManageBatchIndexChunk)],
@@ -360,6 +365,9 @@ const STATIC_ROUTES = new Map([
     ['/api/bing/wallpaper',                [checkDatabaseConfig, onBingWallpaperRequest]],
     ['/api/huggingface/getUploadUrl',      [checkDatabaseConfig, postOnly(onHfGetUploadUrlPost)]],
     ['/api/huggingface/commitUpload',      [checkDatabaseConfig, postOnly(onHfCommitPost)]],
+    ['/upload/huggingface/getUploadUrl',   [checkDatabaseConfig, postOnly(onUploadHfGetUploadUrlPost)]],
+    ['/upload/huggingface/commitUpload',    [checkDatabaseConfig, postOnly(onUploadHfCommitPost)]],
+    ['/upload/huggingface/completeMultipart', [checkDatabaseConfig, postOnly(onUploadHfCompleteMultipartPost)]],
     ['/api/directoryTree',                 [checkDatabaseConfig, getOnly(onDirectoryTreeGet)]],
     ['/api/site/storage-overview',         [checkDatabaseConfig, getOnly(onManageStatsRequest)]],
     ['/api/site/storage-panel',            [checkDatabaseConfig, getOnly(onManageSysConfigShowStats)]],
