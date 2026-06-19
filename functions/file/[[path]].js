@@ -39,7 +39,8 @@ export async function onRequest(context) {  // Contents of context object
         return new Response('Error: Decode Image ID Failed', { status: 400 });
     }
 
-    // 璇诲彇瀹夊叏閰嶇疆锛岃В鏋愬繀瑕佸弬鏁?    const securityConfig = await fetchSecurityConfig(env);
+    // 璇诲彇瀹夊叏閰嶇疆锛岃В鏋愬繀瑕佸弬鏁?
+    const securityConfig = await fetchSecurityConfig(env);
     context.securityConfig = securityConfig;
 
     const url = new URL(request.url);
@@ -55,7 +56,8 @@ export async function onRequest(context) {  // Contents of context object
         return await returnBlockImg(url);
     }
 
-    // 浠庢暟鎹簱涓幏鍙栧浘鐗囪褰?    const db = getDatabase(env);
+    // 浠庢暟鎹簱涓幏鍙栧浘鐗囪褰?
+    const db = getDatabase(env);
     const imgRecord = await db.getWithMetadata(fileId);
     if (!imgRecord) {
         return new Response('Error: Image Not Found', { status: 404 });
@@ -70,9 +72,11 @@ export async function onRequest(context) {  // Contents of context object
     const encodedFileName = encodeURIComponent(fileName);
     const fileType = imgRecord.metadata?.FileType || null;
 
-    // 妫€鏌ユ枃浠跺彲璁块棶鐘舵€?    let accessRes = await returnWithCheck(context, imgRecord);
+    // 妫€鏌ユ枃浠跺彲璁块棶鐘舵€?
+    let accessRes = await returnWithCheck(context, imgRecord);
     if (accessRes.status !== 200) {
-        return accessRes; // 濡傛灉涓嶅彲璁块棶锛岀洿鎺ヨ繑鍥?    }
+        return accessRes; // 濡傛灉涓嶅彲璁块棶锛岀洿鎺ヨ繑鍥?
+    }
 
     /* Cloudflare R2娓犻亾 */
     if (imgRecord.metadata?.Channel === 'CloudflareR2') {
@@ -141,7 +145,8 @@ export async function onRequest(context) {  // Contents of context object
         if (filePath === null) {
             return new Response('Error: Failed to fetch image path', { status: 500 });
         }
-        // 浣跨敤浠ｇ悊鍩熷悕鎴栧畼鏂瑰煙鍚?        const fileDomain = TgProxyUrl ? `https://${TgProxyUrl}` : 'https://api.telegram.org';
+        // 浣跨敤浠ｇ悊鍩熷悕鎴栧畼鏂瑰煙鍚?
+        const fileDomain = TgProxyUrl ? `https://${TgProxyUrl}` : 'https://api.telegram.org';
         targetUrl = `${fileDomain}/file/bot${TgBotToken}/${filePath}`;
     } else {
         targetUrl = 'https://telegra.ph/' + url.pathname + url.search;
@@ -213,7 +218,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     const TgBotToken = tgCredentials.botToken;
     const TgProxyUrl = tgCredentials.proxyUrl || '';
 
-    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?    let chunks = [];
+    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?
+    let chunks = [];
     try {
         if (imgRecord.value) {
             chunks = JSON.parse(imgRecord.value);
@@ -228,14 +234,17 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         return new Response('Error: No chunks found for this file', { status: 500 });
     }
 
-    // 楠岃瘉鍒嗙墖瀹屾暣鎬?    const expectedChunks = metadata.TotalChunks || chunks.length;
+    // 楠岃瘉鍒嗙墖瀹屾暣鎬?
+    const expectedChunks = metadata.TotalChunks || chunks.length;
     if (chunks.length !== expectedChunks) {
         return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
     }
 
-    // 璁＄畻鏂囦欢鎬诲ぇ灏?    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
+    // 璁＄畻鏂囦欢鎬诲ぇ灏?
+    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
 
-    // 鏋勫缓鍝嶅簲澶?    const headers = new Headers();
+    // 鏋勫缓鍝嶅簲澶?
+    const headers = new Headers();
     setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context));
     headers.set('Content-Length', totalSize.toString());
 
@@ -243,7 +252,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
     headers.set('ETag', etag);
 
-    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?    const ifNoneMatch = request.headers.get('If-None-Match');
+    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?
+    const ifNoneMatch = request.headers.get('If-None-Match');
     if (ifNoneMatch && ifNoneMatch === etag) {
         return new Response(null, {
             status: 304,
@@ -255,7 +265,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         });
     }
 
-    // 妫€鏌ange璇锋眰澶?    const range = request.headers.get('Range');
+    // 妫€鏌ange璇锋眰澶?
+    const range = request.headers.get('Range');
     let rangeStart = 0;
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
@@ -267,7 +278,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
             rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
             isRangeRequest = true;
 
-            // 楠岃瘉鑼冨洿鏈夋晥鎬?            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
+            // 楠岃瘉鑼冨洿鏈夋晥鎬?
+            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
                 return new Response('Range Not Satisfiable', { status: 416 });
             }
         }
@@ -310,7 +322,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
                         const chunkStart = Math.max(0, rangeStart - currentPosition);
                         const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
 
-                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?                        if (chunkStart > 0 || chunkEnd < chunkSize) {
+                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?
+                        if (chunkStart > 0 || chunkEnd < chunkSize) {
                             const partialData = chunkData.slice(chunkStart, chunkEnd);
                             controller.enqueue(partialData);
                         } else {
@@ -376,9 +389,11 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
             console.warn(`Chunk ${chunk.index} fetch attempt ${attempt + 1} failed:`, error.message);
 
             if (attempt === maxRetries - 1) {
-                return null; // 鏈€鍚庝竴娆″皾璇曚篃澶辫触浜?            }
+                return null; // 鏈€鍚庝竴娆″皾璇曚篃澶辫触浜?
+            }
 
-            // 閲嶈瘯鍓嶇瓑寰呬竴娈垫椂闂?            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            // 閲嶈瘯鍓嶇瓑寰呬竴娈垫椂闂?
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
         }
     }
 
@@ -396,7 +411,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     const channelId = discordCredentials.channelId;
     const proxyUrl = discordCredentials.proxyUrl;
 
-    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?    let chunks = [];
+    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?
+    let chunks = [];
     try {
         if (imgRecord.value) {
             chunks = JSON.parse(imgRecord.value);
@@ -411,14 +427,17 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         return new Response('Error: No chunks found for this file', { status: 500 });
     }
 
-    // 楠岃瘉鍒嗙墖瀹屾暣鎬?    const expectedChunks = metadata.TotalChunks || chunks.length;
+    // 楠岃瘉鍒嗙墖瀹屾暣鎬?
+    const expectedChunks = metadata.TotalChunks || chunks.length;
     if (chunks.length !== expectedChunks) {
         return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
     }
 
-    // 璁＄畻鏂囦欢鎬诲ぇ灏?    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
+    // 璁＄畻鏂囦欢鎬诲ぇ灏?
+    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
 
-    // 鏋勫缓鍝嶅簲澶?    const headers = new Headers();
+    // 鏋勫缓鍝嶅簲澶?
+    const headers = new Headers();
     setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context));
     headers.set('Content-Length', totalSize.toString());
 
@@ -426,7 +445,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
     headers.set('ETag', etag);
 
-    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?    const ifNoneMatch = request.headers.get('If-None-Match');
+    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?
+    const ifNoneMatch = request.headers.get('If-None-Match');
     if (ifNoneMatch && ifNoneMatch === etag) {
         return new Response(null, {
             status: 304,
@@ -438,7 +458,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         });
     }
 
-    // 妫€鏌ange璇锋眰澶?    const range = request.headers.get('Range');
+    // 妫€鏌ange璇锋眰澶?
+    const range = request.headers.get('Range');
     let rangeStart = 0;
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
@@ -450,7 +471,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
             rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
             isRangeRequest = true;
 
-            // 楠岃瘉鑼冨洿鏈夋晥鎬?            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
+            // 楠岃瘉鑼冨洿鏈夋晥鎬?
+            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
                 return new Response('Range Not Satisfiable', { status: 416 });
             }
         }
@@ -483,7 +505,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
                             break;
                         }
 
-                        // 鑾峰彇鍒嗙墖鏁版嵁锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?                        const chunkData = await fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 3);
+                        // 鑾峰彇鍒嗙墖鏁版嵁锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?
+                        const chunkData = await fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 3);
                         if (!chunkData) {
                             throw new Error(`Failed to fetch Discord chunk ${chunk.index} after retries`);
                         }
@@ -492,7 +515,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
                         const chunkStart = Math.max(0, rangeStart - currentPosition);
                         const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
 
-                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?                        if (chunkStart > 0 || chunkEnd < chunkSize) {
+                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?
+                        if (chunkStart > 0 || chunkEnd < chunkSize) {
                             const partialData = chunkData.slice(chunkStart, chunkEnd);
                             controller.enqueue(partialData);
                         } else {
@@ -531,7 +555,8 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     }
 }
 
-// 甯﹂噸璇曟満鍒剁殑Discord鍒嗙墖鑾峰彇鍑芥暟锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, maxRetries = 3) {
+// 甯﹂噸璇曟満鍒剁殑Discord鍒嗙墖鑾峰彇鍑芥暟锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?
+async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, maxRetries = 3) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             // 閫氳繃 Discord API 鑾峰彇鏂扮殑闄勪欢 URL锛堝洜涓?URL 浼氬湪绾?4灏忔椂鍚庤繃鏈燂級
@@ -568,9 +593,11 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
             console.warn(`Discord chunk ${chunk.index} fetch attempt ${attempt + 1} failed:`, error.message);
 
             if (attempt === maxRetries - 1) {
-                return null; // 鏈€鍚庝竴娆″皾璇曚篃澶辫触浜?            }
+                return null; // 鏈€鍚庝竴娆″皾璇曚篃澶辫触浜?
+            }
 
-            // 閲嶈瘯鍓嶇瓑寰呬竴娈垫椂闂?            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            // 閲嶈瘯鍓嶇瓑寰呬竴娈垫椂闂?
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
         }
     }
 
@@ -589,7 +616,8 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
 
         const R2DataBase = env.img_r2;
 
-        // 妫€鏌ange璇锋眰澶?        const range = request.headers.get('Range');
+        // 妫€鏌ange璇锋眰澶?
+        const range = request.headers.get('Range');
         let object;
 
         if (range) {
@@ -667,7 +695,8 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 return handleHeadRequest(headers);
             }
 
-            // 鏋勫缓璇锋眰澶?            const fetchHeaders = {};
+            // 鏋勫缓璇锋眰澶?
+            const fetchHeaders = {};
 
             // 鏀寔 Range 璇锋眰
             const range = request.headers.get('Range');
@@ -675,7 +704,8 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 fetchHeaders['Range'] = range;
             }
 
-            // 閫氳繃 CDN 鑾峰彇鏂囦欢锛堢洿鎺ヤ娇鐢ㄥ畬鏁磋矾寰勶紝鏃犻渶鎷兼帴锛?            const response = await fetch(cdnFileUrl, {
+            // 閫氳繃 CDN 鑾峰彇鏂囦欢锛堢洿鎺ヤ娇鐢ㄥ畬鏁磋矾寰勶紝鏃犻渶鎷兼帴锛?
+            const response = await fetch(cdnFileUrl, {
                 method: 'GET',
                 headers: fetchHeaders
             });
@@ -686,7 +716,8 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 return await handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
             }
 
-            // 鏋勫缓鍝嶅簲澶?            const headers = new Headers();
+            // 鏋勫缓鍝嶅簲澶?
+            const headers = new Headers();
             setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
             // 澶嶅埗鐩稿叧澶撮儴
@@ -744,7 +775,8 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
     const key = s3Credentials.key;
 
     try {
-        // 妫€鏌ange璇锋眰澶?        const range = request.headers.get('Range');
+        // 妫€鏌ange璇锋眰澶?
+        const range = request.headers.get('Range');
         const commandParams = {
             Bucket: bucketName,
             Key: key
@@ -758,10 +790,12 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
         const command = new GetObjectCommand(commandParams);
         const response = await s3Client.send(command);
 
-        // 璁剧疆鍝嶅簲澶?        const headers = new Headers();
+        // 璁剧疆鍝嶅簲澶?
+        const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
-        // 璁剧疆Content-Length鍜孋ontent-Range澶?        if (response.ContentLength) {
+        // 璁剧疆Content-Length鍜孋ontent-Range澶?
+        if (response.ContentLength) {
             headers.set('Content-Length', response.ContentLength.toString());
         }
 
@@ -774,7 +808,8 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
             return handleHeadRequest(headers);
         }
 
-        // 杩斿洖鍝嶅簲锛屾敮鎸佹祦寮忎紶杈?        const statusCode = range ? 206 : 200; // Range璇锋眰杩斿洖206 Partial Content
+        // 杩斿洖鍝嶅簲锛屾敮鎸佹祦寮忎紶杈?
+        const statusCode = range ? 206 : 200; // Range璇锋眰杩斿洖206 Partial Content
         return new Response(response.Body, {
             status: statusCode,
             headers
@@ -816,7 +851,8 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
             return handleHeadRequest(headers);
         }
 
-        // 鑾峰彇鏂囦欢鍐呭锛堟敮鎸?Range 璇锋眰锛?        const fetchHeaders = {};
+        // 鑾峰彇鏂囦欢鍐呭锛堟敮鎸?Range 璇锋眰锛?
+        const fetchHeaders = {};
         const range = request.headers.get('Range');
         if (range) {
             fetchHeaders['Range'] = range;
@@ -831,7 +867,8 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
             return new Response(`Error: Failed to fetch from Discord - ${response.status}`, { status: response.status });
         }
 
-        // 鏋勫缓鍝嶅簲澶?        const headers = new Headers();
+        // 鏋勫缓鍝嶅簲澶?
+        const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
         // 澶嶅埗鐩稿叧澶撮儴
@@ -883,7 +920,8 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             return handleHeadRequest(headers);
         }
 
-        // 鏋勫缓璇锋眰澶?        const fetchHeaders = {};
+        // 鏋勫缓璇锋眰澶?
+        const fetchHeaders = {};
 
         // 绉佹湁浠撳簱闇€瑕?Authorization
         if (hfIsPrivate && hfToken) {
@@ -905,7 +943,8 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             return new Response(`Error: Failed to fetch from HuggingFace - ${response.status}`, { status: response.status });
         }
 
-        // 鏋勫缓鍝嶅簲澶?        const headers = new Headers();
+        // 鏋勫缓鍝嶅簲澶?
+        const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
         // 澶嶅埗鐩稿叧澶撮儴
@@ -1023,4 +1062,3 @@ function getWebDAVPublicFileUrl(webdavCredentials, filePath) {
 }
 
 // upstream-274-safe-integration: HuggingFace HEAD Content-Length uses metadata.FileSizeBytes when present.
-

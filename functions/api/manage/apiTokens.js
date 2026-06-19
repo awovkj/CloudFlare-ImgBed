@@ -135,7 +135,7 @@ async function getApiTokens(db) {
     return { tokens: tokenList }
 }
 
-async function createApiToken(db, name, permissions, owner, expiresAt = null, autoDelete = false) {
+export async function createApiToken(db, name, permissions, owner, expiresAt = null, autoDelete = false, type = 'user') {
     const settingsStr = await db.get('manage@sysConfig@security')
     const settings = settingsStr ? JSON.parse(settingsStr) : {}
     
@@ -156,7 +156,8 @@ async function createApiToken(db, name, permissions, owner, expiresAt = null, au
         createdAt: now,
         updatedAt: now,
         expiresAt: expiresAt ?? null,
-        autoDelete: autoDelete === true
+        autoDelete: autoDelete === true,
+        type
     }
     
     settings.apiTokens.tokens[tokenId] = tokenData
@@ -173,7 +174,8 @@ async function createApiToken(db, name, permissions, owner, expiresAt = null, au
         createdAt: now,
         updatedAt: now,
         expiresAt: tokenData.expiresAt,
-        autoDelete: tokenData.autoDelete
+        autoDelete: tokenData.autoDelete,
+        type: tokenData.type
     }
 }
 

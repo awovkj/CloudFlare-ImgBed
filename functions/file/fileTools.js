@@ -23,6 +23,12 @@ export function decodeFilePathParam(path) {
 let _domainRegexCache = null;
 let _domainRegexCacheKey = null;
 
+export const FILE_CACHE_CONTROL = {
+    PUBLIC: 'public, max-age=2592000',
+    PRIVATE: 'private, max-age=86400',
+    NO_STORE: 'private, no-store, max-age=0',
+};
+
 // 判断请求域名是否在允许的域名列表中
 export function isDomainAllowed(context) {
     const { Referer, securityConfig, url } = context;
@@ -94,8 +100,7 @@ function isArchiveType(fileType) {
 }
 
 // 公共响应头设置函数
-export function setCommonHeaders(headers, encodedFileName, fileType, Referer, url) {
-    // 压缩包文件使用 attachment 确保正确下载
+export function setCommonHeaders(headers, encodedFileName, fileType, RefererOrCacheControl = FILE_CACHE_CONTROL.PUBLIC, url = null) {
     const dispositionType = isArchiveType(fileType) ? 'attachment' : 'inline';
     headers.set('Content-Disposition', `${dispositionType}; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
     headers.set('Access-Control-Allow-Origin', '*');
@@ -106,13 +111,20 @@ export function setCommonHeaders(headers, encodedFileName, fileType, Referer, ur
         headers.set('Content-Type', fileType);
     }
 
-    // 根据Referer设置CDN缓存策略（排除公开图库页面的请求）
-    if (Referer && Referer.includes(url.origin) && !isFromPublicBrowse(Referer, url.origin)) {
-        headers.set('Cache-Control', 'private, max-age=86400'); // 本地缓存 1天
+    const knownCacheControls = Object.values(FILE_CACHE_CONTROL);
+    if (knownCacheControls.includes(RefererOrCacheControl)) {
+        headers.set('Cache-Control', RefererOrCacheControl);
+        return;
+    }
+
+    const Referer = RefererOrCacheControl;
+    if (Referer && url?.origin && Referer.includes(url.origin) && !isFromPublicBrowse(Referer, url.origin)) {
+        headers.set('Cache-Control', FILE_CACHE_CONTROL.PRIVATE);
     } else {
-        headers.set('Cache-Control', 'public, max-age=2592000'); // CDN缓存 30天
+        headers.set('Cache-Control', FILE_CACHE_CONTROL.PUBLIC);
     }
 }
+
 
 // 设置Range请求相关头部
 export function setRangeHeaders(headers, rangeStart, rangeEnd, totalSize) {
