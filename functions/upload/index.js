@@ -87,7 +87,7 @@ export async function onRequest(context) {  // Contents of context object
 
 // 通用文件上传处理函数
 async function processFileUpload(context, formdata = null) {
-    const { request, url } = context;
+    const { request, url, env } = context;
     const HUGGINGFACE_DIRECT_THRESHOLD = 20 * 1024 * 1024;
 
     // 解析表单数据
