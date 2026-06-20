@@ -1,4 +1,4 @@
-.wrangler/*
+.wrangler/
 .test/
 .wrangler-worker-build/
 .wrangler-assets/
