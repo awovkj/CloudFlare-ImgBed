@@ -1,5 +1,6 @@
 .wrangler/
-.test/
+test/*
+docs/*
 .wrangler-worker-build/
 .wrangler-assets/
 .wrangler-pages-func-build/
