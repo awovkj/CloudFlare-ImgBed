@@ -1,6 +1,6 @@
 /* ========== 分块合并处理 ========== */
 import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink } from './uploadTools';
-import { retryFailedChunks, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
+import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
@@ -29,7 +29,12 @@ function isChunkStillProcessing(chunk) {
 }
 
 function isChunkRetryableFailure(chunk) {
-    return ['failed', 'timeout', 'retry_failed', 'retry_timeout'].includes(chunk.status);
+    return ['failed', 'timeout', 'retry_timeout'].includes(chunk.status) && chunk.hasData;
+}
+
+function isChunkTerminalFailure(chunk) {
+    return ['missing', 'error', 'retry_failed'].includes(chunk.status)
+        || (['failed', 'timeout', 'retry_timeout'].includes(chunk.status) && !chunk.hasData);
 }
 
 async function updateUploadSessionStatus(env, uploadId, patch = {}) {
@@ -139,6 +144,7 @@ export async function handleChunkMerge(context) {
         }
 
         const mergeProtectedUntil = Number(sessionInfo.mergeProtectedUntil || 0);
+        const sessionIsWaitingForChunks = sessionInfo.status === 'waiting_chunks';
         const mergeExpired = sessionInfo.status === 'merging'
             && mergeProtectedUntil
             && now >= mergeProtectedUntil;
@@ -185,6 +191,10 @@ export async function handleChunkMerge(context) {
             });
         }
 
+        if (sessionIsWaitingForChunks) {
+            console.log(`Upload ${uploadId} is waiting for chunks; rechecking chunk statuses before returning 409`);
+        }
+
         // 验证会话信息
         if (sessionInfo.originalFileName !== originalFileName ||
             sessionInfo.totalChunks !== totalChunks) {
@@ -207,7 +217,7 @@ export async function handleChunkMerge(context) {
         context.specifiedChannelName = channelName;
 
         // 检查分块上传状态
-        const chunkStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+        const chunkStatuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
 
         // 输出初始状态摘要
         const initialStatusSummary = summarizeChunkStatuses(chunkStatuses);
@@ -271,7 +281,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
 
         if (result.code === 'MERGE_IN_PROGRESS' || result.code === 'CHUNKS_INCOMPLETE') {
             await updateUploadSessionStatus(env, uploadId, {
-                status: 'merging',
+                status: 'waiting_chunks',
                 mergeLastPendingAt: Date.now(),
                 mergeLastStatusSummary: result.statusSummary || {},
                 mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS
@@ -332,11 +342,12 @@ async function finalizeMergeInBackground(context, params) {
                 return;
             }
 
-            if (currentSession.status !== 'merging') {
+            if (!['waiting_chunks', 'merging'].includes(currentSession.status)) {
                 return;
             }
 
             await updateUploadSessionStatus(env, uploadId, {
+                status: 'merging',
                 mergeBackgroundAttempt: attempt,
                 mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS
             });
@@ -353,7 +364,7 @@ async function finalizeMergeInBackground(context, params) {
             );
 
             const latestSession = await getUploadSessionInfo(env, uploadId);
-            if (!latestSession || latestSession.status !== 'merging') {
+            if (!latestSession || !['waiting_chunks', 'merging'].includes(latestSession.status)) {
                 return;
             }
 
@@ -372,7 +383,7 @@ async function finalizeMergeInBackground(context, params) {
                 retryAfterMs = result.retryAfterMs || MERGE_PENDING_RETRY_AFTER_MS;
 
                 await updateUploadSessionStatus(env, uploadId, {
-                    status: 'merging',
+                    status: 'waiting_chunks',
                     mergeLastPendingAt: Date.now(),
                     mergeLastStatusSummary: result.statusSummary || {},
                     mergeProtectedUntil: Date.now() + MERGE_CLEANUP_PROTECTION_MS,
@@ -385,13 +396,13 @@ async function finalizeMergeInBackground(context, params) {
             throw new Error(result.error || 'Background merge failed');
         } catch (error) {
             const latestSession = await getUploadSessionInfo(env, uploadId);
-            if (!latestSession || latestSession.status !== 'merging') {
+            if (!latestSession || !['waiting_chunks', 'merging'].includes(latestSession.status)) {
                 return;
             }
 
             const finalAttempt = attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS;
             await updateUploadSessionStatus(env, uploadId, {
-                status: finalAttempt ? 'merge_failed' : 'merging',
+                status: finalAttempt ? 'merge_failed' : 'waiting_chunks',
                 mergeBackgroundError: error.message,
                 mergeBackgroundErrorAt: Date.now(),
                 mergeBackgroundAttempt: attempt,
@@ -457,6 +468,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         let completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
         let processingChunks = chunkStatuses.filter(isChunkStillProcessing);
         let failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
+        let terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
 
         // 统计不同状态的分块
         const statusSummary = summarizeChunkStatuses(chunkStatuses);
@@ -473,6 +485,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
             processingChunks = chunkStatuses.filter(isChunkStillProcessing);
             failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
+            terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
         // 如果有失败的分块，尝试重试
@@ -488,11 +501,26 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
             processingChunks = chunkStatuses.filter(isChunkStillProcessing);
             failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
+            terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
         // 最终检查是否所有分块都完成
         if (completedChunks.length !== totalChunks) {
             const finalStatusSummary = summarizeChunkStatuses(chunkStatuses);
+
+            if (terminalFailedChunks.length > 0) {
+                return {
+                    success: false,
+                    code: 'CHUNKS_FAILED',
+                    error: `Cannot merge: ${terminalFailedChunks.length} chunks are unrecoverable. Status: ${JSON.stringify(finalStatusSummary)}`,
+                    statusSummary: finalStatusSummary,
+                    failedChunks: terminalFailedChunks.map(chunk => ({
+                        index: chunk.index,
+                        status: chunk.status,
+                        error: chunk.error || ''
+                    }))
+                };
+            }
 
             if (processingChunks.length > 0) {
                 return {
@@ -542,7 +570,7 @@ async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
     const intervalMs = options.intervalMs || SETTLE_INTERVAL_MS;
     const startedAt = Date.now();
 
-    let statuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+    let statuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
     while (Date.now() - startedAt < maxWaitMs) {
         const inProgressCount = statuses.filter(isChunkStillProcessing).length;
 
@@ -551,7 +579,7 @@ async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
         }
 
         await new Promise(resolve => setTimeout(resolve, intervalMs));
-        statuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+        statuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
     }
 
     return statuses;

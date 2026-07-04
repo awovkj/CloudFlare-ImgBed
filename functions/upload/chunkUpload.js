@@ -18,6 +18,80 @@ function getChunkRecordTtlSeconds(contextOrUrl) {
     return isChatRequestFromUrl(url) ? CHAT_UPLOAD_SESSION_TTL_SECONDS : DEFAULT_UPLOAD_SESSION_TTL_SECONDS;
 }
 
+function getUploadManifestKey(uploadId) {
+    return `upload_manifest_${uploadId}`;
+}
+
+function summarizeManifestChunks(chunks = {}) {
+    return Object.values(chunks).reduce((acc, chunk) => {
+        const status = chunk?.status || 'unknown';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+    }, {});
+}
+
+export async function getUploadManifest(env, uploadId) {
+    try {
+        const db = getDatabase(env);
+        const manifestData = await db.get(getUploadManifestKey(uploadId));
+        return manifestData ? JSON.parse(manifestData) : null;
+    } catch (error) {
+        console.warn(`Failed to read upload manifest for ${uploadId}:`, error);
+        return null;
+    }
+}
+
+async function putUploadManifest(env, uploadId, manifest, contextOrUrl = null) {
+    const db = getDatabase(env);
+    const chunks = manifest.chunks || {};
+    const updatedManifest = {
+        ...manifest,
+        uploadId,
+        chunks,
+        statusSummary: summarizeManifestChunks(chunks),
+        updatedAt: Date.now()
+    };
+
+    await db.put(getUploadManifestKey(uploadId), JSON.stringify(updatedManifest), {
+        expirationTtl: getChunkRecordTtlSeconds(contextOrUrl)
+    });
+
+    return updatedManifest;
+}
+
+export async function updateUploadManifestChunk(env, uploadId, chunkIndex, patch = {}, contextOrUrl = null) {
+    try {
+        const manifest = await getUploadManifest(env, uploadId) || {
+            uploadId,
+            totalChunks: patch.totalChunks || 0,
+            originalFileName: patch.originalFileName || '',
+            originalFileType: patch.originalFileType || 'application/octet-stream',
+            uploadChannel: patch.uploadChannel || '',
+            chunks: {},
+            createdAt: Date.now()
+        };
+
+        const key = String(chunkIndex);
+        manifest.chunks = manifest.chunks || {};
+        manifest.chunks[key] = {
+            ...(manifest.chunks[key] || {}),
+            ...patch,
+            index: chunkIndex,
+            updatedAt: Date.now()
+        };
+
+        if (patch.totalChunks && !manifest.totalChunks) manifest.totalChunks = patch.totalChunks;
+        if (patch.originalFileName && !manifest.originalFileName) manifest.originalFileName = patch.originalFileName;
+        if (patch.originalFileType && !manifest.originalFileType) manifest.originalFileType = patch.originalFileType;
+        if (patch.uploadChannel && !manifest.uploadChannel) manifest.uploadChannel = patch.uploadChannel;
+
+        return await putUploadManifest(env, uploadId, manifest, contextOrUrl);
+    } catch (error) {
+        console.warn(`Failed to update upload manifest for ${uploadId} chunk ${chunkIndex}:`, error);
+        return null;
+    }
+}
+
 // 初始化分块上传
 export async function initializeChunkedUpload(context) {
     const { request, env, url } = context;
@@ -77,6 +151,18 @@ export async function initializeChunkedUpload(context) {
         await db.put(sessionKey, JSON.stringify(sessionInfo), {
             expirationTtl: sessionTtlSeconds
         });
+
+        await putUploadManifest(env, uploadId, {
+            uploadId,
+            originalFileName,
+            originalFileType,
+            totalChunks,
+            uploadChannel,
+            channelName,
+            status: 'initialized',
+            chunks: {},
+            createdAt: timestamp
+        }, url);
 
         return createUploadJsonResponse({
             success: true,
@@ -174,6 +260,7 @@ export async function handleChunkUpload(context) {
             metadata: initialChunkMetadata,
             expirationTtl: chunkTtlSeconds
         });
+        await updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context);
 
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
@@ -302,6 +389,10 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
                     metadata: errorMetadata,
                     expirationTtl: getChunkRecordTtlSeconds(context)
                 });
+                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                    ...errorMetadata,
+                    hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
+                }, context);
             }
         } catch (metaError) {
             console.error('Failed to save timeout/error metadata:', metaError);
@@ -383,6 +474,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 await db.put(chunkKey, '', {
                     metadata: updatedMetadata,
                     expirationTtl: getChunkRecordTtlSeconds(context)                });
+                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                    ...updatedMetadata,
+                    hasData: false
+                }, context);
 
                 console.log(`Chunk ${chunkIndex} uploaded successfully to ${uploadChannel}${retry > 0 ? ` (after ${retry} retries)` : ''}`);
 
@@ -404,6 +499,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 await db.put(chunkKey, chunkData, {
                     metadata: failedMetadata,
                     expirationTtl: getChunkRecordTtlSeconds(context)                });
+                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                    ...failedMetadata,
+                    hasData: Boolean(chunkData && chunkData.byteLength > 0)
+                }, context);
 
                 console.warn(`Chunk ${chunkIndex} upload failed after ${MAX_RETRIES} attempts: ${failedMetadata.error}`);
 
@@ -442,6 +541,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 await db.put(chunkKey, fallbackChunkValue, {
                     metadata: errorMetadata,
                     expirationTtl: getChunkRecordTtlSeconds(context)                });
+                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                    ...errorMetadata,
+                    hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
+                }, context);
             }
         } catch (metaError) {
             console.error('Failed to save error metadata:', metaError);
@@ -1008,6 +1111,10 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
         metadata: retryMetadata,
         expirationTtl: getChunkRecordTtlSeconds(context)
     });
+    await updateUploadManifestChunk(env, uploadId, chunk.index, {
+        ...retryMetadata,
+        hasData: true
+    }, context);
 
     while (retryCount < maxRetries) {
         if (retryCount > 0) {
@@ -1055,6 +1162,10 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                     metadata: updatedMetadata,
                     expirationTtl: getChunkRecordTtlSeconds(context)
                 });
+                await updateUploadManifestChunk(env, uploadId, chunk.index, {
+                    ...updatedMetadata,
+                    hasData: false
+                }, context);
 
                 console.log(`Chunk ${chunk.index} retry successful after ${retryCount + 1} attempts`);
                 return { success: true, chunk, retryCount: retryCount + 1 };
@@ -1087,6 +1198,10 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                 metadata: failedRetryMetadata,
                 expirationTtl: getChunkRecordTtlSeconds(context)
             });
+            await updateUploadManifestChunk(env, uploadId, chunk.index, {
+                ...failedRetryMetadata,
+                hasData: Boolean(finalRecord.value && finalRecord.value.byteLength > 0)
+            }, context);
         }
     } catch (metaError) {
         console.error(`Failed to update retry error metadata for chunk ${chunk.index}:`, metaError);
@@ -1196,6 +1311,10 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
                             metadata: timeoutMetadata,
                             expirationTtl: getChunkRecordTtlSeconds(uploadId)
                         }).catch(err => console.warn(`Failed to update timeout status for chunk ${i}:`, err));
+                        await updateUploadManifestChunk(env, uploadId, i, {
+                            ...timeoutMetadata,
+                            hasData: Boolean(chunkRecord.value && chunkRecord.value.byteLength > 0)
+                        }).catch(err => console.warn(`Failed to update timeout manifest for chunk ${i}:`, err));
                     }
 
                     const hasData = status === 'completed'
@@ -1242,6 +1361,43 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
     return chunkStatuses;
 }
 
+export async function getChunkUploadStatusesWithManifest(env, uploadId, totalChunks) {
+    const recordStatuses = await checkChunkUploadStatuses(env, uploadId, totalChunks);
+    const manifest = await getUploadManifest(env, uploadId);
+    const manifestChunks = manifest?.chunks || {};
+
+    const mergedStatuses = recordStatuses.map((recordStatus) => {
+        const manifestChunk = manifestChunks[String(recordStatus.index)];
+        if (!manifestChunk) {
+            return recordStatus;
+        }
+
+        const manifestStatus = manifestChunk.status || recordStatus.status;
+        const shouldPreferManifest = manifestStatus === 'completed'
+            || ['missing', 'error', 'unknown'].includes(recordStatus.status)
+            || Number(manifestChunk.updatedAt || 0) >= Number(recordStatus.uploadTime || recordStatus.uploadStartTime || 0);
+
+        if (!shouldPreferManifest) {
+            return recordStatus;
+        }
+
+        return {
+            ...recordStatus,
+            ...manifestChunk,
+            key: recordStatus.key,
+            index: recordStatus.index,
+            status: manifestStatus,
+            uploadResult: manifestChunk.uploadResult || recordStatus.uploadResult,
+            error: manifestChunk.error || recordStatus.error,
+            hasData: manifestStatus === 'completed' ? false : Boolean(manifestChunk.hasData || recordStatus.hasData),
+            isTimeout: manifestStatus === 'timeout'
+        };
+    });
+
+    mergedStatuses.sort((a, b) => a.index - b.index);
+    return mergedStatuses;
+}
+
 
 async function isCleanupBlockedByActiveMerge(env, uploadId) {
     try {
@@ -1254,7 +1410,7 @@ async function isCleanupBlockedByActiveMerge(env, uploadId) {
         }
 
         const sessionInfo = JSON.parse(sessionData);
-        const isMerging = sessionInfo.status === 'merging';
+        const isMerging = sessionInfo.status === 'merging' || sessionInfo.status === 'waiting_chunks';
         const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
 
         return {
@@ -1296,6 +1452,7 @@ export async function cleanupChunkData(env, uploadId, totalChunks, options = {})
         // 清理multipart info（如果存在）
         const multipartKey = `multipart_${uploadId}`;
         await db.delete(multipartKey);
+        await db.delete(getUploadManifestKey(uploadId));
 
         return {
             skipped: false
@@ -1317,6 +1474,7 @@ export async function cleanupUploadSession(env, uploadId) {
 
         const sessionKey = `upload_session_${uploadId}`;
         await db.delete(sessionKey);
+        await db.delete(getUploadManifestKey(uploadId));
         console.log(`Cleaned up upload session for ${uploadId}`);
     } catch (cleanupError) {
         console.warn('Failed to cleanup upload session:', cleanupError);
@@ -1363,7 +1521,8 @@ export async function forceCleanupUpload(context, uploadId, totalChunks, options
         // 清理相关的键
         const keysToCleanup = [
             `upload_session_${uploadId}`,
-            `multipart_${uploadId}`
+            `multipart_${uploadId}`,
+            getUploadManifestKey(uploadId)
         ];
 
         keysToCleanup.forEach(key => {

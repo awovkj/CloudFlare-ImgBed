@@ -1,5 +1,5 @@
 import { getDatabase } from '../utils/databaseAdapter.js';
-import { checkChunkUploadStatuses } from './chunkUpload.js';
+import { getChunkUploadStatusesWithManifest } from './chunkUpload.js';
 
 export async function onRequest(context) {
     const { request, env } = context;
@@ -65,7 +65,7 @@ export async function onRequest(context) {
             });
         }
 
-        const chunkStatuses = await checkChunkUploadStatuses(env, uploadId, chunks);
+        const chunkStatuses = await getChunkUploadStatusesWithManifest(env, uploadId, chunks);
         
         const uploadedChunks = chunkStatuses
             .filter(chunk => chunk.status === 'completed')
