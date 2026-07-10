@@ -70,6 +70,7 @@
 
   global.TgUploadLaneScheduler = {
     DEFAULT_LANE,
+    MAX_CONCURRENT_PER_LANE,
     normalizeName,
     getLaneNames,
     acquireAvailableLane,

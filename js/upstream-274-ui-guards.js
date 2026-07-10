@@ -43,9 +43,22 @@
   patchXhr();
   if (global.document) {
     var apply = function() { markChannelNameInputs(global.document); };
+    // 合并突发的 DOM 变更：SPA 频繁变更 DOM，直接每次变更都全量扫描 input 成本高，
+    // 用 rAF（无则退化为 setTimeout）在一帧内合并为一次扫描。
+    var scheduled = false;
+    var scheduleApply = function() {
+      if (scheduled) return;
+      scheduled = true;
+      var run = function() { scheduled = false; apply(); };
+      if (typeof global.requestAnimationFrame === 'function') {
+        global.requestAnimationFrame(run);
+      } else {
+        setTimeout(run, 16);
+      }
+    };
     global.document.addEventListener && global.document.addEventListener('DOMContentLoaded', apply);
     setTimeout(apply, 0);
-    if (global.MutationObserver && global.document.documentElement) new global.MutationObserver(apply).observe(global.document.documentElement, { childList: true, subtree: true });
+    if (global.MutationObserver && global.document.documentElement) new global.MutationObserver(scheduleApply).observe(global.document.documentElement, { childList: true, subtree: true });
   }
   global.Upstream274UiGuards = { normalizeSessionMaxAgeDays: normalizeSessionMaxAgeDays, normalizeSecurityPayload: normalizeSecurityPayload, markChannelNameInputs: markChannelNameInputs };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

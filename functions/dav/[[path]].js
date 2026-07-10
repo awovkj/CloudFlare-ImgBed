@@ -3,6 +3,32 @@ import { fetchOthersConfig } from "../utils/sysConfig";
 import { getDatabase } from "../utils/databaseAdapter";
 import { createApiToken } from "../api/manage/apiTokens";
 
+// HTML 转义，防止目录/文件名或反射路径注入脚本（XSS）
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// 常量时间字符串比较，避免通过响应时间侧信道推断凭据
+function timingSafeEqualStr(a, b) {
+    const aStr = typeof a === 'string' ? a : '';
+    const bStr = typeof b === 'string' ? b : '';
+    const encoder = new TextEncoder();
+    const aBytes = encoder.encode(aStr);
+    const bBytes = encoder.encode(bStr);
+    // 长度不同直接不相等，但仍遍历以尽量减少长度泄露
+    let mismatch = aBytes.length === bBytes.length ? 0 : 1;
+    const len = Math.max(aBytes.length, bBytes.length);
+    for (let i = 0; i < len; i++) {
+        mismatch |= (aBytes[i] || 0) ^ (bBytes[i] || 0);
+    }
+    return mismatch === 0;
+}
+
 export async function onRequest(context) {
     const { request, env } = context;
 
@@ -82,8 +108,21 @@ async function checkAuth(request, env) {
         return new Response('Malformed Authorization header', { status: 400 });
     }
 
-    const [user, pass] = atob(encoded).split(':');
-    if (user !== davUser || pass !== davPass) {
+    let decoded;
+    try {
+        decoded = atob(encoded);
+    } catch (e) {
+        return new Response('Malformed Authorization header', { status: 400 });
+    }
+    // 仅按首个冒号拆分：密码本身可能包含冒号
+    const sepIndex = decoded.indexOf(':');
+    const user = sepIndex === -1 ? decoded : decoded.substring(0, sepIndex);
+    const pass = sepIndex === -1 ? '' : decoded.substring(sepIndex + 1);
+
+    // 常量时间比较，避免时间侧信道
+    const userValid = timingSafeEqualStr(user, davUser);
+    const passValid = timingSafeEqualStr(pass, davPass);
+    if (!userValid || !passValid) {
         return new Response('Invalid credentials', { status: 403 });
     }
 
@@ -279,25 +318,26 @@ function generateDirectoryListingHtml(basePath, contents) {
     for (const dir of contents.directories) {
         const fullDirPath = `/dav/${dir}/`;
         const dirName = dir.split('/').pop();
-        dirLinks += `<li><a href="${fullDirPath}"><strong>${dirName}/</strong></a></li>`;
+        dirLinks += `<li><a href="${escapeHtml(encodeURI(fullDirPath))}"><strong>${escapeHtml(dirName)}/</strong></a></li>`;
     }
 
     for (const file of contents.files) {
-        const fullFilePath = `/dav/${file.name}`; 
+        const fullFilePath = `/dav/${file.name}`;
         const fileName = file.name.split('/').pop();
-        const fileSize = file.metadata && file.metadata['FileSize'] 
-            ? `${file.metadata['FileSize']} MB` 
+        const fileSize = file.metadata && file.metadata['FileSize']
+            ? `${file.metadata['FileSize']} MB`
             : 'N/A';
-        fileLinks += `<li><a href="${fullFilePath}">${fileName}</a> - ${fileSize}</li>`;
+        fileLinks += `<li><a href="${escapeHtml(encodeURI(fullFilePath))}">${escapeHtml(fileName)}</a> - ${escapeHtml(fileSize)}</li>`;
     }
-    
+
     let parentDirLink = '';
     if (basePath !== '/') {
         const parentPath = new URL('..', `http://dummy.com${basePath}`).pathname;
-        parentDirLink = `<li><a href="/dav${parentPath}"><strong>../ (Parent Directory)</strong></a></li>`;
+        parentDirLink = `<li><a href="${escapeHtml(encodeURI('/dav' + parentPath))}"><strong>../ (Parent Directory)</strong></a></li>`;
     }
 
-    return `<!DOCTYPE html><html><head><title>Index of ${basePath}</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:sans-serif;padding:20px}li{margin:5px 0}</style></head><body><h1>Index of ${basePath}</h1><ul>${parentDirLink}${dirLinks}${fileLinks}</ul></body></html>`;
+    const safeBasePath = escapeHtml(basePath);
+    return `<!DOCTYPE html><html><head><title>Index of ${safeBasePath}</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:sans-serif;padding:20px}li{margin:5px 0}</style></head><body><h1>Index of ${safeBasePath}</h1><ul>${parentDirLink}${dirLinks}${fileLinks}</ul></body></html>`;
 }
 
 function generateWebDAVXml(basePath, contents) {

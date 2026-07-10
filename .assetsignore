@@ -43,5 +43,16 @@ LICENSE
 .kiro/
 .vscode/
 
-# 压缩文件（已有 index.html，无需上传 .gz）
+# 压缩文件（Cloudflare 自动压缩，无需上传预压缩的 .gz）
 *.gz
+**/*.gz
+
+# Source maps（仅调试用，禁止上线，体积可达数 MB）
+*.map
+**/*.map
+
+# README/文档用截图（仅 README 引用，约 43MB，禁止作为站点资源上传）
+static/readme/
+
+# 未被任何页面引用的历史截图
+screenshot-home.png

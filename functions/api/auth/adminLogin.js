@@ -6,7 +6,15 @@ import { getDatabase } from "../../utils/databaseAdapter.js";
 export async function onRequestPost(context) {
     const { request, env } = context;
 
-    const { username, password } = await request.json();
+    let username, password;
+    try {
+        ({ username, password } = await request.json());
+    } catch (error) {
+        return new Response(JSON.stringify({ error: 'Invalid request body' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
 
     // 读取安全设置
     let securityConfig;

@@ -7,7 +7,7 @@
 import fs   from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset } from './asset-ignore.mjs';
+import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset, pruneDeployArtifacts } from './asset-ignore.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root      = path.resolve(__dirname, '..');
@@ -37,6 +37,7 @@ for (const existingEntry of fs.readdirSync(dest)) {
 }
 
 let copied = 0;
+let failed = 0;
 for (const entry of sourceEntries) {
     const src = path.join(sourceRoot, entry);
     const dst = path.join(dest, entry);
@@ -44,8 +45,20 @@ for (const entry of sourceEntries) {
         fs.cpSync(src, dst, { recursive: true });
         copied++;
     } catch (error) {
-        console.warn(`  skip ${entry}: ${error.message}`);
+        failed++;
+        console.error(`  FAIL ${entry}: ${error.message}`);
     }
 }
 
+// 递归清理嵌套开发/文档产物，确保 .wrangler-assets 不含 source map、预压缩 .gz、README 截图
+const { removedFiles, removedBytes } = pruneDeployArtifacts(dest);
+if (removedFiles > 0) {
+    console.log(`✓ Pruned ${removedFiles} dev artifact(s) (~${(removedBytes / 1048576).toFixed(1)} MB)`);
+}
+
 console.log(`✓ Copied ${copied} entries from ${path.basename(sourceRoot)} to .wrangler-assets/`);
+
+if (failed > 0) {
+    console.error(`✗ ${failed} entr${failed === 1 ? 'y' : 'ies'} failed to copy`);
+    process.exit(1);
+}

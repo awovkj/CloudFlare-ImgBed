@@ -55,6 +55,10 @@ let indexMemoryCache = {
     expiresAt: 0
 };
 
+// 短 TTL 内跳过挂起操作检查：readIndex 每次都要 list 一遍操作前缀，
+// 该标记在确认无挂起操作后短暂生效，新操作写入（本隔离实例）时立即失效
+let noPendingOpsUntil = 0;
+
 /**
  * 根据数据库类型获取索引分块大小
  * @param {Object} env - 环境变量
@@ -333,6 +337,7 @@ export async function mergeOperationsToIndex(context, options = {}) {
 
         if (operations.length === 0) {
             console.log('No pending operations to merge');
+            noPendingOpsUntil = Date.now() + INDEX_MEMORY_CACHE_TTL_MS;
             return {
                 success: true,
                 processedOperations: 0,
@@ -535,13 +540,16 @@ export async function readIndex(context, options = {}) {
         const dirPrefix = directory === '' || directory.endsWith('/') ? directory : directory + '/';
 
         // 处理挂起的操作（失败时不阻塞读取，使用现有索引）
-        try {
-            const mergeResult = await mergeOperationsToIndex(context);
-            if (!mergeResult.success) {
-                console.warn('Failed to merge operations, proceeding with existing index:', mergeResult.error);
+        // 短 TTL 内已确认无挂起操作时直接跳过，避免每次读取都做一遍 KV list
+        if (Date.now() >= noPendingOpsUntil) {
+            try {
+                const mergeResult = await mergeOperationsToIndex(context);
+                if (!mergeResult.success) {
+                    console.warn('Failed to merge operations, proceeding with existing index:', mergeResult.error);
+                }
+            } catch (mergeError) {
+                console.warn('Error during operations merge, proceeding with existing index:', mergeError.message);
             }
-        } catch (mergeError) {
-            console.warn('Error during operations merge, proceeding with existing index:', mergeError.message);
         }
 
         // 获取当前索引
@@ -550,164 +558,141 @@ export async function readIndex(context, options = {}) {
             throw new Error('Failed to get index');
         }
 
-        let filteredFiles = index.files;
+        // 预计算过滤参数，单次遍历完成全部过滤，避免对大索引做多轮全量扫描
+        const normalizedDir = directory ? (directory.endsWith('/') ? directory : directory + '/') : '';
+        const channelLowerArr = channelArr.map(ch => ch.toLowerCase());
+        const includeTagsLower = includeTags.map(t => t.toLowerCase());
+        const excludeTagsLower = excludeTags.map(t => t.toLowerCase());
+        const searchLower = search ? search.toLowerCase() : '';
 
-        // 目录过滤
-        if (directory) {
-            const normalizedDir = directory.endsWith('/') ? directory : directory + '/';
-            filteredFiles = filteredFiles.filter(file => {
-                const fileDir = file.metadata.Directory ? file.metadata.Directory : extractDirectory(file.id);
-                return fileDir.startsWith(normalizedDir) || file.metadata.Directory === directory;
-            });
-        }
+        const filteredFiles = [];
+        const directFiles = [];
+        const directories = new Set();
 
-        // 渠道过滤（支持多选，OR 逻辑）
-        if (channelArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => 
-                channelArr.some(ch => file.metadata.Channel?.toLowerCase() === ch.toLowerCase())
-            );
-        }
+        for (const file of index.files) {
+            const meta = file.metadata;
+            const fileDir = meta.Directory ? meta.Directory : extractDirectory(file.id);
 
-        // 列表类型过滤（黑白名单，支持多选，OR 逻辑）
-        // White=白名单, Block=黑名单, None=未设置
-        if (listTypeArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const fileListType = file.metadata.ListType;
-                return listTypeArr.some(lt => {
+            // 目录过滤
+            if (directory && !(fileDir.startsWith(normalizedDir) || meta.Directory === directory)) {
+                continue;
+            }
+
+            // 渠道过滤（支持多选，OR 逻辑）
+            if (channelLowerArr.length > 0) {
+                const fileChannelLower = meta.Channel?.toLowerCase();
+                if (!channelLowerArr.some(ch => fileChannelLower === ch)) continue;
+            }
+
+            // 列表类型过滤（黑白名单，支持多选，OR 逻辑）
+            // White=白名单, Block=黑名单, None=未设置
+            if (listTypeArr.length > 0) {
+                const fileListType = meta.ListType;
+                const matched = listTypeArr.some(lt => {
                     if (lt === 'None') {
                         // 未设置：ListType 为空、undefined、null 或字符串 'None'
                         return !fileListType || fileListType === '' || fileListType === 'None';
                     }
                     return fileListType === lt;
                 });
-            });
-        }
+                if (!matched) continue;
+            }
 
-        // 访问状态筛选（综合判断 ListType 和 Label，支持多选，OR 逻辑）
-        // 'normal' = 正常：非已屏蔽状态
-        // 'blocked' = 已屏蔽：ListType === 'Block' || (Label === 'adult' && ListType !== 'White')
-        // 注意：白名单优先，即使 Label 是 adult，只要 ListType 是 White 就是正常
-        if (accessStatusArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const fileListType = file.metadata.ListType;
-                const fileLabel = file.metadata.Label;
-                const isBlocked = fileListType === 'Block' || (fileLabel === 'adult' && fileListType !== 'White');
-
-                return accessStatusArr.some(status => {
-                    if (status === 'normal') {
-                        return !isBlocked;
-                    } else if (status === 'blocked') {
-                        return isBlocked;
-                    }
+            // 访问状态筛选（综合判断 ListType 和 Label，支持多选，OR 逻辑）
+            // 'normal' = 正常：非已屏蔽状态
+            // 'blocked' = 已屏蔽：ListType === 'Block' || (Label === 'adult' && ListType !== 'White')
+            // 注意：白名单优先，即使 Label 是 adult，只要 ListType 是 White 就是正常
+            if (accessStatusArr.length > 0) {
+                const isBlocked = meta.ListType === 'Block' || (meta.Label === 'adult' && meta.ListType !== 'White');
+                const matched = accessStatusArr.some(status => {
+                    if (status === 'normal') return !isBlocked;
+                    if (status === 'blocked') return isBlocked;
                     return false;
                 });
-            });
-        }
+                if (!matched) continue;
+            }
 
-        // 审查结果筛选 (label)（支持多选，OR 逻辑）
-        // 'normal' 匹配 Label 为 'everyone', 'None', '', null, undefined
-        // 'teen' 匹配 Label 为 'teen'
-        // 'adult' 匹配 Label 为 'adult'
-        if (labelArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const fileLabel = file.metadata.Label;
-                return labelArr.some(lbl => {
+            // 审查结果筛选 (label)（支持多选，OR 逻辑）
+            // 'normal' 匹配 Label 为 'everyone', 'None', '', null, undefined
+            if (labelArr.length > 0) {
+                const fileLabel = meta.Label;
+                const matched = labelArr.some(lbl => {
                     if (lbl === 'normal') {
                         return !fileLabel || fileLabel === '' || fileLabel === 'None' || fileLabel === 'everyone';
-                    } else if (lbl === 'teen') {
-                        return fileLabel === 'teen';
-                    } else if (lbl === 'adult') {
-                        return fileLabel === 'adult';
                     }
+                    if (lbl === 'teen') return fileLabel === 'teen';
+                    if (lbl === 'adult') return fileLabel === 'adult';
                     return false;
                 });
-            });
-        }
+                if (!matched) continue;
+            }
 
-        // 文件类型筛选 (fileType)（支持多选，OR 逻辑）
-        // 'image' 匹配 FileType 以 'image/' 开头
-        // 'video' 匹配 FileType 以 'video/' 开头
-        // 'audio' 匹配 FileType 以 'audio/' 开头
-        // 'other' 匹配不属于以上三类的文件
-        if (fileTypeArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const mimeType = file.metadata.FileType || '';
-                return fileTypeArr.some(ft => {
-                    if (ft === 'image') {
-                        return mimeType.startsWith('image/');
-                    } else if (ft === 'video') {
-                        return mimeType.startsWith('video/');
-                    } else if (ft === 'audio') {
-                        return mimeType.startsWith('audio/');
-                    } else if (ft === 'other') {
-                        return !mimeType.startsWith('image/') && 
-                               !mimeType.startsWith('video/') && 
+            // 文件类型筛选 (fileType)（支持多选，OR 逻辑）
+            if (fileTypeArr.length > 0) {
+                const mimeType = meta.FileType || '';
+                const matched = fileTypeArr.some(ft => {
+                    if (ft === 'image') return mimeType.startsWith('image/');
+                    if (ft === 'video') return mimeType.startsWith('video/');
+                    if (ft === 'audio') return mimeType.startsWith('audio/');
+                    if (ft === 'other') {
+                        return !mimeType.startsWith('image/') &&
+                               !mimeType.startsWith('video/') &&
                                !mimeType.startsWith('audio/');
                     }
                     return false;
                 });
-            });
-        }
+                if (!matched) continue;
+            }
 
-        // 渠道名称筛选 (channelName)（支持多选，OR 逻辑）
-        // 支持 "type:name" 格式（如 "TelegramNew:default"）或单独的名称
-        if (channelNameArr.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const fileChannel = file.metadata.Channel;
-                const fileChannelName = file.metadata.ChannelName;
-
-                return channelNameArr.some(filterValue => {
-                    // 检查是否是 "type:name" 格式
+            // 渠道名称筛选 (channelName)（支持多选，OR 逻辑）
+            // 支持 "type:name" 格式（如 "TelegramNew:default"）或单独的名称
+            if (channelNameArr.length > 0) {
+                const matched = channelNameArr.some(filterValue => {
                     if (filterValue.includes(':')) {
                         const [type, name] = filterValue.split(':', 2);
                         // 同时匹配渠道类型和名称（大小写敏感）
-                        return fileChannel === type && fileChannelName === name;
-                    } else {
-                        // 只匹配名称（向后兼容）
-                        return fileChannelName === filterValue;
+                        return meta.Channel === type && meta.ChannelName === name;
                     }
+                    // 只匹配名称（向后兼容）
+                    return meta.ChannelName === filterValue;
                 });
-            });
-        }
+                if (!matched) continue;
+            }
 
-        // 标签过滤（独立于搜索关键字）
-        if (includeTags.length > 0 || excludeTags.length > 0) {
-            filteredFiles = filteredFiles.filter(file => {
-                const fileTags = (file.metadata.Tags || []).map(t => t.toLowerCase());
-
-                // 检查必须包含的标签
-                if (includeTags.length > 0) {
-                    const hasAllIncludeTags = includeTags.every(tag => 
-                        fileTags.includes(tag.toLowerCase())
-                    );
-                    if (!hasAllIncludeTags) {
-                        return false;
-                    }
+            // 标签过滤（独立于搜索关键字）
+            if (includeTagsLower.length > 0 || excludeTagsLower.length > 0) {
+                const fileTags = (meta.Tags || []).map(t => t.toLowerCase());
+                if (includeTagsLower.length > 0 && !includeTagsLower.every(tag => fileTags.includes(tag))) {
+                    continue;
                 }
-
-                // 检查必须排除的标签
-                if (excludeTags.length > 0) {
-                    const hasAnyExcludeTag = excludeTags.some(tag => 
-                        fileTags.includes(tag.toLowerCase())
-                    );
-                    if (hasAnyExcludeTag) {
-                        return false;
-                    }
+                if (excludeTagsLower.length > 0 && excludeTagsLower.some(tag => fileTags.includes(tag))) {
+                    continue;
                 }
+            }
 
-                return true;
-            });
-        }
-
-        // 搜索过滤（仅关键字）
-        if (search) {
-            const searchLower = search.toLowerCase();
-            filteredFiles = filteredFiles.filter(file => {
+            // 搜索过滤（仅关键字）
+            if (searchLower) {
                 const matchesKeyword =
-                    file.metadata.FileName?.toLowerCase().includes(searchLower) ||
+                    meta.FileName?.toLowerCase().includes(searchLower) ||
                     file.id.toLowerCase().includes(searchLower);
-                return matchesKeyword;
-            });
+                if (!matchesKeyword) continue;
+            }
+
+            filteredFiles.push(file);
+
+            // 当前目录下的直接文件（不包含子目录文件）
+            if (fileDir === dirPrefix) {
+                directFiles.push(file);
+            }
+
+            // 提取直接子目录
+            if (fileDir && fileDir.startsWith(dirPrefix)) {
+                const relativePath = fileDir.substring(dirPrefix.length);
+                const firstSlashIndex = relativePath.indexOf('/');
+                if (firstSlashIndex !== -1) {
+                    directories.add(dirPrefix + relativePath.substring(0, firstSlashIndex));
+                }
+            }
         }
 
         // 如果只需要总数
@@ -720,40 +705,16 @@ export async function readIndex(context, options = {}) {
 
         // 分页处理
         const totalCount = filteredFiles.length;
-
-        let resultFiles = filteredFiles;
-
-        // 计算当前目录下的直接文件（不包含子目录文件）
-        const directFiles = filteredFiles.filter(file => {
-            const fileDir = file.metadata.Directory ? file.metadata.Directory : extractDirectory(file.id);
-            return fileDir === dirPrefix;
-        });
         const directFileCount = directFiles.length;
 
         // 如果不包含子目录文件，获取当前目录下的直接文件
-        if (!includeSubdirFiles) {
-            resultFiles = directFiles;
-        }
+        let resultFiles = includeSubdirFiles ? filteredFiles : directFiles;
 
         if (count !== -1) {
             const startIndex = Math.max(0, start);
             const endIndex = startIndex + Math.max(1, count);
             resultFiles = resultFiles.slice(startIndex, endIndex);
         }
-
-        // 提取目录信息
-        const directories = new Set();
-        filteredFiles.forEach(file => {
-            const fileDir = file.metadata.Directory ? file.metadata.Directory : extractDirectory(file.id);
-            if (fileDir && fileDir.startsWith(dirPrefix)) {
-                const relativePath = fileDir.substring(dirPrefix.length);
-                const firstSlashIndex = relativePath.indexOf('/');
-                if (firstSlashIndex !== -1) {
-                    const subDir = dirPrefix + relativePath.substring(0, firstSlashIndex);
-                    directories.add(subDir);
-                }
-            }
-        });
 
         // 直接子文件夹数目
         const directFolderCount = directories.size;
@@ -1080,6 +1041,8 @@ async function recordOperation(context, type, data) {
     const operationKey = OPERATION_KEY_PREFIX + operationId;
     await db.put(operationKey, JSON.stringify(operation));
 
+    noPendingOpsUntil = 0;
+
     return operationId;
 }
 
@@ -1100,40 +1063,58 @@ async function getAllPendingOperations(context, lastOperationId = null) {
     let operationCount = 0;
 
     try {
+        // 先收集待处理操作的键名（受 MAX_OPERATION_COUNT 限制）
+        const pendingKeys = [];
         while (true) {
             const response = await db.list({
                 prefix: OPERATION_KEY_PREFIX,
                 limit: KV_LIST_LIMIT,
                 cursor: cursor
             });
-            
+
             for (const item of response.keys) {
                 // 如果指定了lastOperationId，跳过已处理的操作
                 if (lastOperationId && item.name <= OPERATION_KEY_PREFIX + lastOperationId) {
                     continue;
                 }
-                
-                if (operationCount >= MAX_OPERATION_COUNT) {
+
+                if (pendingKeys.length >= MAX_OPERATION_COUNT) {
                     isALL = false; // 达到最大操作数量，停止获取
                     break;
                 }
 
-                try {
-                    const operationData = await db.get(item.name);
-                    if (operationData) {
-                        const operation = JSON.parse(operationData);
-                        operation.id = item.name.substring(OPERATION_KEY_PREFIX.length);
-                        operations.push(operation);
-                        operationCount++;
-                    }
-                } catch (error) {
-                    isALL = false;
-                    console.warn(`Failed to parse operation ${item.name}:`, error);
-                }
+                pendingKeys.push(item.name);
             }
-            
+
             cursor = response.cursor;
-            if (!cursor || operationCount >= MAX_OPERATION_COUNT) break;
+            if (!cursor || pendingKeys.length >= MAX_OPERATION_COUNT) break;
+        }
+
+        // 并行获取操作内容，避免逐个串行等待 KV 读取
+        const operationValues = await Promise.all(pendingKeys.map(async (keyName) => {
+            try {
+                return { keyName, data: await db.get(keyName) };
+            } catch (error) {
+                console.warn(`Failed to read operation ${keyName}:`, error);
+                return { keyName, data: null, failed: true };
+            }
+        }));
+
+        for (const { keyName, data, failed } of operationValues) {
+            if (failed) {
+                isALL = false;
+                continue;
+            }
+            if (!data) continue;
+            try {
+                const operation = JSON.parse(data);
+                operation.id = keyName.substring(OPERATION_KEY_PREFIX.length);
+                operations.push(operation);
+                operationCount++;
+            } catch (error) {
+                isALL = false;
+                console.warn(`Failed to parse operation ${keyName}:`, error);
+            }
         }
     } catch (error) {
         console.error('Error getting pending operations:', error);
@@ -1248,10 +1229,22 @@ function applyBatchAddOperation(index, data) {
         }
     }
 
-    // 批量插入新文件
-    for (const fileItem of filesToAdd) {
-        insertFileInOrder(index.files, fileItem);
-        addedCount++;
+    // 批量插入新文件：排序后与现有有序数组单次归并，避免逐条 splice 的 O(k·n)
+    if (filesToAdd.length > 0) {
+        // 与 insertFileInOrder 一致：按时间戳降序，时间戳相同时新文件排在前面
+        filesToAdd.sort((a, b) => (b.metadata.TimeStamp || 0) - (a.metadata.TimeStamp || 0));
+        const existing = index.files;
+        const merged = new Array(existing.length + filesToAdd.length);
+        let i = 0, j = 0, k = 0;
+        while (i < existing.length && j < filesToAdd.length) {
+            const existingTs = existing[i].metadata.TimeStamp || 0;
+            const newTs = filesToAdd[j].metadata.TimeStamp || 0;
+            merged[k++] = newTs >= existingTs ? filesToAdd[j++] : existing[i++];
+        }
+        while (i < existing.length) merged[k++] = existing[i++];
+        while (j < filesToAdd.length) merged[k++] = filesToAdd[j++];
+        index.files = merged;
+        addedCount = filesToAdd.length;
     }
 
     return { addedCount, updatedCount };

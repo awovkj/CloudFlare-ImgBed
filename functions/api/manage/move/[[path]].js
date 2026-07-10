@@ -43,9 +43,12 @@ export async function onRequest(context) {
                     headers: request.headers,
                 });
                 const listResponse = await fetch(listRequest);
+                if (!listResponse.ok) {
+                    throw new Error(`Failed to list folder contents: ${listResponse.status}`);
+                }
                 const listData = await listResponse.json();
 
-                const files = listData.files;
+                const files = Array.isArray(listData.files) ? listData.files : [];
                 const folderDist = currentFolder.dist === '' ? curFolderName : `${currentFolder.dist}/${curFolderName}`;
 
                 // 处理当前文件夹下的所有文件
@@ -64,7 +67,7 @@ export async function onRequest(context) {
                 }
 
                 // 将子文件夹添加到队列
-                const directories = listData.directories;
+                const directories = Array.isArray(listData.directories) ? listData.directories : [];
                 for (const dir of directories) {
                     folderQueue.push({
                         path: dir,
@@ -135,6 +138,14 @@ async function moveFile(env, fileId, newFileId, cdnUrl, url) {
 
         // 读取图片信息
         const img = await db.getWithMetadata(fileId);
+
+        // 目标位置已存在文件时拒绝，避免静默覆盖导致数据丢失（与 rename 行为一致）
+        if (fileId !== newFileId) {
+            const existingTarget = await db.getWithMetadata(newFileId);
+            if (existingTarget && existingTarget.value !== null) {
+                throw new Error('目标文件名已存在');
+            }
+        }
 
         // 如果是R2渠道的图片，需要移动R2中对应的图片
         if (img.metadata?.Channel === 'CloudflareR2') {

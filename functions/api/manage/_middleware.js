@@ -91,8 +91,12 @@ async function refreshSecurityConfigIfNeeded(env, now = Date.now()) {
 
 /**
  * 根据请求路径提取所需权限
+ * API Token 仅授予 upload/list/delete 三种细粒度权限，用于程序化的文件读写。
+ * 其余管理端点（rename/move/metadata/block/white/sysConfig/apiTokens 等）属于
+ * 管理员专属操作，必须 fail-closed：默认要求 token 不具备的 'admin' 权限，
+ * 从而拒绝任何 API Token，只允许 session/basic 管理员认证通过，防止权限提升。
  * @param {string} pathname - 请求路径
- * @returns {string|null} 需要的权限类型或null
+ * @returns {string} 需要的权限类型
  */
 function extractRequiredPermission(pathname) {
   // 提取路径中的关键部分
@@ -108,8 +112,8 @@ function extractRequiredPermission(pathname) {
     return 'list';
   }
 
-  // 其他情况返回null
-  return null;
+  // 其余管理端点默认要求管理员权限（token 无此权限，等同拒绝 token 访问）
+  return 'admin';
 }
 
 // CORS 跨域响应头

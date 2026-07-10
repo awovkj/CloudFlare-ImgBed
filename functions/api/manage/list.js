@@ -198,8 +198,7 @@ export async function onRequest(context) {
     } catch (error) {
         console.error('Error in list-indexed API:', error);
         return new Response(JSON.stringify({
-            error: 'Internal server error',
-            message: error.message
+            error: 'Internal server error'
         }), {
             status: 500,
             headers: { "Content-Type": "application/json", ...corsHeaders }
@@ -230,19 +229,16 @@ async function getAllFileRecords(env, dir) {
 
             cursor = response.cursor;
 
-            for (const item of response.keys) {
-                // 跳过管理相关的键
-                if (item.name.startsWith('manage@') || item.name.startsWith('chunk_')) {
-                    continue;
-                }
-
-                // 跳过没有元数据的文件
-                if (!item.metadata || !item.metadata.TimeStamp) {
-                    continue;
-                }
-
-                allRecords.push(await serializeFileRecordForManagement(db, env, item, metadataViewContext));
-            }
+            // 过滤后按页批量序列化，避免逐条串行等待
+            const pageItems = response.keys.filter(item =>
+                !item.name.startsWith('manage@') &&
+                !item.name.startsWith('chunk_') &&
+                item.metadata && item.metadata.TimeStamp
+            );
+            const pageRecords = await Promise.all(
+                pageItems.map(item => serializeFileRecordForManagement(db, env, item, metadataViewContext))
+            );
+            allRecords.push(...pageRecords);
 
             if (!cursor) break;
 

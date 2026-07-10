@@ -39,26 +39,28 @@ export async function onRequest(context) {  // Contents of context object
         return new Response('Error: Decode Image ID Failed', { status: 400 });
     }
 
-    // 璇诲彇瀹夊叏閰嶇疆锛岃В鏋愬繀瑕佸弬鏁?
-    const securityConfig = await fetchSecurityConfig(env);
-    context.securityConfig = securityConfig;
-
     const url = new URL(request.url);
     context.url = url;
 
     const Referer = request.headers.get('Referer')
     context.Referer = Referer;
 
-    context.fileAccess = await buildFileAccessContext(context);
+    const db = getDatabase(env);
 
-    // 妫€鏌ュ紩鐢ㄥ煙鍚嶆槸鍚﹁鍏佽
+    // Fetch security config, admin-preview auth and file record in parallel
+    // (independent KV round-trips on the hot file-serving path)
+    const [securityConfig, fileAccess, imgRecord] = await Promise.all([
+        fetchSecurityConfig(env),
+        buildFileAccessContext(context),
+        db.getWithMetadata(fileId),
+    ]);
+    context.securityConfig = securityConfig;
+    context.fileAccess = fileAccess;
+
     if (!isDomainAllowed(context)) {
         return await returnBlockImg(url);
     }
 
-    // 浠庢暟鎹簱涓幏鍙栧浘鐗囪褰?
-    const db = getDatabase(env);
-    const imgRecord = await db.getWithMetadata(fileId);
     if (!imgRecord) {
         return new Response('Error: Image Not Found', { status: 404 });
     }

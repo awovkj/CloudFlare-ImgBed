@@ -431,12 +431,14 @@
 
         setupRouteListener() {
             if (this.statsDisabled) return;
-            
+
             const checkRoute = () => {
                 if (!this.statsDisabled) {
                     this.updateVisibility();
                 }
             };
+            // 保存引用，便于 cleanup 时移除，避免实例随监听器泄漏
+            this._checkRoute = checkRoute;
 
             window.addEventListener('popstate', checkRoute);
             window.addEventListener('hashchange', checkRoute);
@@ -484,6 +486,12 @@
         }
 
         cleanup() {
+            // 移除路由监听，避免被禁用后实例仍被 window 监听器持有而泄漏
+            if (this._checkRoute) {
+                window.removeEventListener('popstate', this._checkRoute);
+                window.removeEventListener('hashchange', this._checkRoute);
+                this._checkRoute = null;
+            }
             if (this.container) {
                 this.container.innerHTML = '';
                 this.container.style.display = 'none';

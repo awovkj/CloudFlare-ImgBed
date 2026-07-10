@@ -1,6 +1,27 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { normalizeWebDAVHeaders } from '../../../utils/storage/webdavAPI.js';
 
+// 上传配置 KV 读取的短 TTL 缓存：getUploadConfig 在单个请求内可能被调用多次
+// （渠道凭据解析、配置加载等），只缓存原始 KV 字符串，配置对象每次重建，
+// 避免调用方（如 fetchUploadConfig 的渠道过滤）修改共享对象造成串扰
+const UPLOAD_SETTINGS_CACHE_TTL_MS = 5000;
+let uploadSettingsCache = {
+    value: null,
+    expiresAt: 0
+};
+
+async function getUploadSettingsStr(db) {
+    if (uploadSettingsCache.expiresAt > Date.now()) {
+        return uploadSettingsCache.value;
+    }
+    const settingsStr = await db.get('manage@sysConfig@upload');
+    uploadSettingsCache = {
+        value: settingsStr,
+        expiresAt: Date.now() + UPLOAD_SETTINGS_CACHE_TTL_MS
+    };
+    return settingsStr;
+}
+
 export async function onRequest(context) {
     // 上传设置相关，GET方法读取设置，POST方法保存设置
     const {
@@ -32,6 +53,7 @@ export async function onRequest(context) {
 
         // 写入数据库
         await db.put('manage@sysConfig@upload', JSON.stringify(settings))
+        uploadSettingsCache = { value: null, expiresAt: 0 }
 
         return new Response(JSON.stringify(settings), {
             headers: {
@@ -44,8 +66,8 @@ export async function onRequest(context) {
 
 export async function getUploadConfig(db, env) {
     const settings = {}
-    // 读取数据库中的设置
-    const settingsStr = await db.get('manage@sysConfig@upload')
+    // 读取数据库中的设置（短 TTL 缓存，见 getUploadSettingsStr）
+    const settingsStr = await getUploadSettingsStr(db)
     const settingsKV = settingsStr ? JSON.parse(settingsStr) : {}
 
     // =====================读取tg渠道配置=====================
