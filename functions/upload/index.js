@@ -20,7 +20,7 @@ import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurit
 // 等敏感字段（服务端读取时会从系统配置按渠道名重新解析，无需存储）。
 async function persistMetadata(db, fullId, metadata) {
     cleanPersistedMetadataInPlace(metadata);
-    await persistMetadata(db, fullId, metadata);
+    await db.put(fullId, "", { metadata });
 }
 
 

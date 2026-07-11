@@ -1,5 +1,6 @@
 .wrangler/
 test/*
+!test/upload-metadata-persistence.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/
