@@ -3,14 +3,32 @@ import { destroySessionsByAuthType } from "../../utils/auth/sessionManager.js";
 
 /**
  * 认证重置接口
- * 
- * 使用方式：
+ *
+ * 使用方式（改为 POST + 请求头传递密钥，避免密钥进入浏览器历史、访问日志与 Referer）：
  * 1. 设置环境变量 RESET_KEY（任意字符串，建议足够复杂）
- * 2. 浏览器访问 /api/resetAuth?key=你设置的RESET_KEY
- * 3. 成功后所有认证配置被清除，可以直接进入管理端重新设置
+ * 2. 执行：curl -X POST https://你的域名/api/resetAuth -H "X-Reset-Key: 你设置的RESET_KEY"
+ * 3. 成功后认证配置被清除，可直接进入管理端重新设置
  * 4. 用完后建议删除或更换 RESET_KEY 环境变量
  */
-export async function onRequestGet(context) {
+
+// 常量时间字符串比较，避免通过响应时间侧信道推断密钥
+function timingSafeEqualStr(a, b) {
+    const aStr = typeof a === 'string' ? a : '';
+    const bStr = typeof b === 'string' ? b : '';
+    const enc = new TextEncoder();
+    const ab = enc.encode(aStr);
+    const bb = enc.encode(bStr);
+    let mismatch = ab.length === bb.length ? 0 : 1;
+    const len = Math.max(ab.length, bb.length);
+    for (let i = 0; i < len; i++) {
+        mismatch |= (ab[i] || 0) ^ (bb[i] || 0);
+    }
+    return mismatch === 0;
+}
+
+const NO_STORE_JSON = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+
+export async function onRequestPost(context) {
     const { request, env } = context;
 
     // 检查是否配置了重置密钥
@@ -18,20 +36,15 @@ export async function onRequestGet(context) {
     if (!resetKey || resetKey.trim() === '') {
         return new Response(JSON.stringify({
             error: 'RESET_KEY not configured. Set the RESET_KEY environment variable first.'
-        }), {
-            status: 403,
-            headers: { 'Content-Type': 'application/json' },
-        });
+        }), { status: 403, headers: NO_STORE_JSON });
     }
 
-    // 从 URL 参数中获取密钥
-    const url = new URL(request.url);
-    const key = url.searchParams.get('key');
+    // 从请求头获取密钥（不再使用 URL 查询参数）
+    const key = request.headers.get('X-Reset-Key') || '';
 
-    if (!key || key !== resetKey) {
+    if (!timingSafeEqualStr(key, resetKey)) {
         return new Response(JSON.stringify({ error: 'Invalid reset key' }), {
-            status: 403,
-            headers: { 'Content-Type': 'application/json' },
+            status: 403, headers: NO_STORE_JSON,
         });
     }
 
@@ -55,16 +68,11 @@ export async function onRequestGet(context) {
             success: true,
             message: 'Auth credentials reset. Other security settings preserved. All sessions cleared.',
             sessionsCleared: { admin: adminDestroyed, user: userDestroyed }
-        }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-        });
+        }), { status: 200, headers: NO_STORE_JSON });
     } catch (err) {
+        console.error('resetAuth failed:', err);
         return new Response(JSON.stringify({
-            error: 'Reset failed: ' + err.message
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
+            error: 'Reset failed'
+        }), { status: 500, headers: NO_STORE_JSON });
     }
 }

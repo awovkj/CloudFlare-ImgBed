@@ -81,6 +81,36 @@ export function isFromPublicBrowse(Referer, origin) {
     return false;
 }
 
+// 严格的同源判断：必须解析 Referer 的 origin 后与本站 origin 精确相等。
+// 不能用 referer.includes(origin)——https://evil.com/?x=https://mysite.com 会被误判为同源，
+// 从而绕过黑名单/成人内容访问控制。
+export function isSameOrigin(referer, origin) {
+    if (!referer || !origin) return false;
+    try {
+        return new URL(referer).origin === origin;
+    } catch (e) {
+        return false;
+    }
+}
+
+// 页面型活跃内容：直接以文档形式渲染即可执行脚本，必须强制下载（attachment）。
+const FORCE_DOWNLOAD_TYPES = new Set([
+    'text/html', 'application/xhtml+xml',
+    'application/javascript', 'text/javascript', 'application/x-javascript',
+    'text/ecmascript', 'application/ecmascript',
+]);
+
+// 可内联但需沙箱化的活跃内容：SVG/XML 直接导航时可能执行脚本，
+// 保留 inline 展示（图标/图片场景），用 CSP sandbox + script-src 'none' 中和脚本。
+const SANDBOX_INLINE_TYPES = new Set([
+    'image/svg+xml', 'text/xml', 'application/xml',
+]);
+
+function normalizeMime(fileType) {
+    if (!fileType) return '';
+    return fileType.split(';')[0].trim().toLowerCase();
+}
+
 // 判断是否为压缩包文件 — 使用 Set O(1) 查找替代多次 includes()
 const ARCHIVE_TYPES = new Set([
     'zip', 'rar', '7z', 'tar', 'gzip',
@@ -101,8 +131,17 @@ function isArchiveType(fileType) {
 
 // 公共响应头设置函数
 export function setCommonHeaders(headers, encodedFileName, fileType, RefererOrCacheControl = FILE_CACHE_CONTROL.PUBLIC, url = null) {
-    const dispositionType = isArchiveType(fileType) ? 'attachment' : 'inline';
+    const mime = normalizeMime(fileType);
+    // 页面型活跃内容或压缩包强制下载；SVG/XML 保留 inline 但下方加沙箱 CSP
+    const forceDownload = isArchiveType(fileType) || FORCE_DOWNLOAD_TYPES.has(mime);
+    const dispositionType = forceDownload ? 'attachment' : 'inline';
     headers.set('Content-Disposition', `${dispositionType}; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
+    // 禁止 MIME 嗅探，防止被当作可执行内容
+    headers.set('X-Content-Type-Options', 'nosniff');
+    // 对可内联的活跃内容加沙箱 CSP，直接导航时中和脚本执行（不影响 <img> 嵌入展示）
+    if (SANDBOX_INLINE_TYPES.has(mime)) {
+        headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Accept-Ranges', 'bytes');
     headers.set('Vary', 'Range');
@@ -118,7 +157,7 @@ export function setCommonHeaders(headers, encodedFileName, fileType, RefererOrCa
     }
 
     const Referer = RefererOrCacheControl;
-    if (Referer && url?.origin && Referer.includes(url.origin) && !isFromPublicBrowse(Referer, url.origin)) {
+    if (Referer && url?.origin && isSameOrigin(Referer, url.origin) && !isFromPublicBrowse(Referer, url.origin)) {
         headers.set('Cache-Control', FILE_CACHE_CONTROL.PRIVATE);
     } else {
         headers.set('Cache-Control', FILE_CACHE_CONTROL.PUBLIC);
@@ -149,15 +188,31 @@ export function handleHeadRequest(headers, etag = null) {
     });
 }
 
+// 转发到第三方上游（Telegram/Telegraph/Discord 等）时，仅保留必要的条件/范围请求头，
+// 绝不透传 Cookie、Authorization、authCode 等凭据，防止泄露给第三方。
+const FORWARDABLE_UPSTREAM_HEADERS = ['range', 'if-none-match', 'if-modified-since', 'accept', 'accept-encoding'];
+
+function buildUpstreamHeaders(request) {
+    const headers = new Headers();
+    for (const name of FORWARDABLE_UPSTREAM_HEADERS) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+    }
+    return headers;
+}
+
 // 优化：使用指数退避重试，避免连续立即重试打满上游服务
 export async function getFileContent(request, targetUrl, max_retries = 2) {
     let retries = 0;
+    const upstreamHeaders = buildUpstreamHeaders(request);
+    // 仅对可带 body 的方法转发 body（GET/HEAD 不允许 body）
+    const forwardBody = request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined;
     while (retries <= max_retries) {
         try {
             const response = await fetch(targetUrl, {
                 method: request.method,
-                headers: request.headers,
-                body: request.body,
+                headers: upstreamHeaders,
+                body: forwardBody,
             });
             if (response.ok || response.status === 304) {
                 return response;
@@ -192,7 +247,7 @@ export async function returnWithCheck(context, imgRecord) {
 
     // Referer header equal to the dashboard page or upload page (排除公开图库页面的请求)
     const referer = request.headers.get('Referer');
-    if (referer && referer.includes(url.origin) && !isFromPublicBrowse(referer, url.origin)) {
+    if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
         //show the image
         return response;
     }

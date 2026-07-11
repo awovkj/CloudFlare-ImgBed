@@ -14,6 +14,14 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { buildUploadResults, createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
+import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
+
+// 持久化文件记录前统一清洗元数据：剥离 S3 密钥、Telegram/Discord/HF Token、WebDAV 凭据
+// 等敏感字段（服务端读取时会从系统配置按渠道名重新解析，无需存储）。
+async function persistMetadata(db, fullId, metadata) {
+    cleanPersistedMetadataInPlace(metadata);
+    await persistMetadata(db, fullId, metadata);
+}
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -124,6 +132,10 @@ async function processFileUpload(context, formdata = null) {
     // 获取文件信息
     const time = new Date().getTime();
     const file = formdata.get('file');
+    // 缺少 file 或类型不正确时返回 400，而不是在访问 file.type 时抛 500
+    if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
+        return createResponse('Error: No file provided', { status: 400 });
+    }
     const fileType = file.type;
     let fileName = file.name;
     const fileSizeBytes = file.size; // 文件大小，单位字节
@@ -259,9 +271,7 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
 
     // 写入数据库
     try {
-        await db.put(fullId, "", {
-            metadata: metadata,
-        });
+        await persistMetadata(db, fullId, metadata);
     } catch (error) {
         return createResponse('Error: Failed to write to database', { status: 500 });
     }
@@ -351,7 +361,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
         // 图像审查
         if (uploadModerate && uploadModerate.enabled) {
             try {
-                await db.put(fullId, "", { metadata });
+                await persistMetadata(db, fullId, metadata);
             } catch {
                 return createResponse("Error: Failed to write to KV database", { status: 500 });
             }
@@ -363,7 +373,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
 
         // 写入数据库
         try {
-            await db.put(fullId, "", { metadata });
+            await persistMetadata(db, fullId, metadata);
         } catch {
             return createResponse("Error: Failed to write to database", { status: 500 });
         }
@@ -474,9 +484,7 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
             if (tgProxyUrl) {
                 metadata.TgProxyUrl = tgProxyUrl;
             }
-            await db.put(fullId, "", {
-                metadata: metadata,
-            });
+            await persistMetadata(db, fullId, metadata);
         } catch (error) {
             res = createResponse('Error: Failed to write to KV database', { status: 500 });
         }
@@ -506,12 +514,20 @@ async function uploadFileToExternal(context, fullId, metadata, returnLink) {
     if (extUrl === null || extUrl === undefined) {
         return createResponse('Error: No url provided', { status: 400 });
     }
-    metadata.ExternalLink = extUrl;
+    // 仅允许 http/https 外链，防止 javascript:/data: 等协议造成开放重定向或 XSS
+    let parsedExtUrl;
+    try {
+        parsedExtUrl = new URL(String(extUrl));
+    } catch {
+        return createResponse('Error: Invalid external url', { status: 400 });
+    }
+    if (parsedExtUrl.protocol !== 'http:' && parsedExtUrl.protocol !== 'https:') {
+        return createResponse('Error: Only http/https external urls are allowed', { status: 400 });
+    }
+    metadata.ExternalLink = parsedExtUrl.toString();
     // 写入KV数据库
     try {
-        await db.put(fullId, "", {
-            metadata: metadata,
-        });
+        await persistMetadata(db, fullId, metadata);
     } catch (error) {
         return createResponse('Error: Failed to write to KV database', { status: 500 });
     }
@@ -589,7 +605,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
 
         // 写入 KV 数据库
         try {
-            await db.put(fullId, "", { metadata });
+            await persistMetadata(db, fullId, metadata);
         } catch (error) {
             return createResponse('Error: Failed to write to KV database', { status: 500 });
         }
@@ -674,7 +690,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
             } else {
                 // 私有仓库：先写入KV，再通过自己的域名访问进行审查
                 try {
-                    await db.put(fullId, "", { metadata });
+                    await persistMetadata(db, fullId, metadata);
                 } catch (error) {
                     return createResponse('Error: Failed to write to KV database', { status: 500 });
                 }
@@ -687,7 +703,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
 
         // 写入 KV 数据库
         try {
-            await db.put(fullId, "", { metadata });
+            await persistMetadata(db, fullId, metadata);
         } catch (error) {
             return createResponse('Error: Failed to write to KV database', { status: 500 });
         }

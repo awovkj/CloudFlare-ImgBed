@@ -56,7 +56,12 @@ export async function getIPAddress(ip) {
 }
 
 export function sanitizeFileName(fileName) {
-    fileName = decodeURIComponent(fileName);
+    // 仅在检测到合法 %xx 序列时才解码，避免 "100%.png" 等文件名触发 URIError
+    if (/%[0-9a-fA-F]{2}/.test(fileName)) {
+        try {
+            fileName = decodeURIComponent(fileName);
+        } catch {}
+    }
     fileName = fileName.split('/').pop();
     return fileName.replace(/[\\\/:\*\?"'<>\| \(\)\[\]\{\}#%\^`~;@&=\+\$,]/g, '_');
 }

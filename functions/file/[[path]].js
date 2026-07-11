@@ -111,8 +111,17 @@ export async function onRequest(context) {  // Contents of context object
 
     /* 澶栭摼娓犻亾 */
     if (imgRecord.metadata?.Channel === 'External') {
-        // 鐩存帴閲嶅畾鍚戝埌澶栭摼
-        return Response.redirect(imgRecord.metadata?.ExternalLink, 302);
+        // 仅允许 http/https 外链重定向，防止历史数据中的 javascript:/data: 等协议造成开放重定向或 XSS
+        const externalLink = imgRecord.metadata?.ExternalLink;
+        try {
+            const parsed = new URL(String(externalLink));
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return new Response('Error: Invalid external link', { status: 400 });
+            }
+            return Response.redirect(parsed.toString(), 302);
+        } catch {
+            return new Response('Error: Invalid external link', { status: 400 });
+        }
     }
 
     /* Telegram鍙奣elegraph娓犻亾 */

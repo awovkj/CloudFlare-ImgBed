@@ -82,10 +82,10 @@ export async function onRequest(context) {
     }
 
     let allRecords = await getRandomFileList(context, requestUrl, dir, fileType, orientation);
-    const allRecordsBeforeOrientationFilter = allRecords;
 
+    // 自动方向模式下若该方向无匹配，回退为不限方向重新查询（而非复用同一个已过滤的空数组）
     if (isAutoMode && orientation && allRecords.length === 0) {
-        allRecords = allRecordsBeforeOrientationFilter;
+        allRecords = await getRandomFileList(context, requestUrl, dir, fileType, '');
     }
 
     const responseHeaders = new Headers(corsHeaders);

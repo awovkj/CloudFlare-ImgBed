@@ -145,30 +145,25 @@ async function deleteFile(env, fileId, cdnUrl, url) {
             return true;
         }
 
-        // 如果是R2渠道的图片，需要删除R2中对应的图片
+        // 远端删除：任一渠道删除失败则中止，保留数据库记录以便重试，
+        // 避免"远端文件残留 + 数据库引用丢失"导致无法回收的存储泄漏。
+        let remoteDeleted = true;
         if (img.metadata?.Channel === 'CloudflareR2') {
             const R2DataBase = env.img_r2;
             await R2DataBase.delete(fileId);
+        } else if (img.metadata?.Channel === 'S3') {
+            remoteDeleted = await deleteS3File(env, img);
+        } else if (img.metadata?.Channel === 'Discord') {
+            remoteDeleted = await deleteDiscordFile(env, img);
+        } else if (img.metadata?.Channel === 'HuggingFace') {
+            remoteDeleted = await deleteHuggingFaceFile(env, img);
+        } else if (img.metadata?.Channel === 'WebDAV') {
+            remoteDeleted = await deleteWebDAVFile(env, img);
         }
 
-        // S3 渠道的图片，需要删除S3中对应的图片
-        if (img.metadata?.Channel === 'S3') {
-            await deleteS3File(env, img);
-        }
-
-        // Discord 渠道的图片，需要删除 Discord 中对应的消息
-        if (img.metadata?.Channel === 'Discord') {
-            await deleteDiscordFile(env, img);
-        }
-
-        // HuggingFace 渠道的图片，需要删除 HuggingFace 中对应的文件
-        if (img.metadata?.Channel === 'HuggingFace') {
-            await deleteHuggingFaceFile(env, img);
-        }
-
-        // WebDAV 渠道的图片，需要删除 WebDAV 中对应的文件
-        if (img.metadata?.Channel === 'WebDAV') {
-            await deleteWebDAVFile(env, img);
+        if (remoteDeleted === false) {
+            console.error(`Remote delete failed for ${fileId} (channel ${img.metadata?.Channel}); keeping DB record for retry`);
+            return false;
         }
 
         // 删除数据库中的记录

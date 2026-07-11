@@ -39,9 +39,14 @@ LICENSE
 .git/
 .github/
 
-# IDE
+# IDE / 工具
 .kiro/
 .vscode/
+.claude/
+
+# 开发目录（测试、文档）禁止部署为站点资源
+test/
+docs/
 
 # 压缩文件（Cloudflare 自动压缩，无需上传预压缩的 .gz）
 *.gz

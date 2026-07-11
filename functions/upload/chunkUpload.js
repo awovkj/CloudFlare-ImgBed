@@ -6,6 +6,7 @@ import { DiscordAPI } from '../utils/discordAPI';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
+import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
@@ -1675,6 +1676,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
         }
 
         // 写入最终的数据库记录，分片信息作为value
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(fullId, chunksData, { metadata });
 
         // 异步结束上传

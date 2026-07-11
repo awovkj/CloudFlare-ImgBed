@@ -6,6 +6,7 @@ import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
 import { buildUploadResult } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
+import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
 const RETRY_SETTLE_WAIT_MS = 45000;
@@ -635,6 +636,7 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
         await db.delete(multipartKey);
 
         // 写入数据库
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(finalFileId, "", { metadata });
 
         // 结束上传
@@ -737,6 +739,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
         await db.delete(multipartKey);
 
         // 写入数据库
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(finalFileId, "", { metadata });
 
         // 异步结束上传
@@ -827,6 +830,7 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
         const chunksData = JSON.stringify(chunks);
 
         // 写入数据库
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(finalFileId, chunksData, { metadata });
 
         // 异步结束上传
@@ -897,6 +901,7 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
         const chunksData = JSON.stringify(chunks);
 
         // 写入数据库
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(finalFileId, chunksData, { metadata });
 
         // 异步结束上传

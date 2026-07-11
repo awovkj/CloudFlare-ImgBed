@@ -66,6 +66,7 @@ import { onRequest as onManageBatchRestoreChunk }  from '../functions/api/manage
 
 // music
 import { onRequest as onMusicListRequest }         from '../functions/api/music/list.js';
+import { onRequest as onMusicPageRequest }          from '../functions/music/index.js';
 
 // video
 import { onRequest as onVideoListRequest }         from '../functions/api/video/list.js';
@@ -354,6 +355,9 @@ const STATIC_ROUTES = new Map([
     ['/api/fetchRes',                      [checkDatabaseConfig, onFetchResRequest]],
     ['/api/public/list',                   [checkDatabaseConfig, onPublicListRequest]],
     ['/api/music/list',                    [checkDatabaseConfig, onMusicListRequest]],
+    ['/music',                             [checkDatabaseConfig, onMusicPageRequest]],
+    ['/music/',                            [checkDatabaseConfig, onMusicPageRequest]],
+    ['/music.html',                        [checkDatabaseConfig, onMusicPageRequest]],
     ['/api/video/list',                    [checkDatabaseConfig, onVideoListRequest]],
     ['/chat',                              [checkDatabaseConfig, onChatPageRequest]],
     ['/chat/',                             [checkDatabaseConfig, onChatPageRequest]],

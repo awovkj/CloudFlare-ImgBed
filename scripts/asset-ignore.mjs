@@ -16,6 +16,15 @@ const COMMON_ASSET_IGNORES = [
     'scripts',
     'scripts/',
     'wrangler.log',
+    // 开发/文档/测试目录，禁止作为站点资源部署
+    '.claude',
+    '.claude/',
+    '.github',
+    '.github/',
+    'docs',
+    'docs/',
+    'test',
+    'test/',
 ];
 
 export function loadAssetIgnore(root) {

@@ -9,6 +9,7 @@ import { fetchPageConfig, fetchUploadConfig } from '../../utils/sysConfig.js';
 import { getDatabase } from '../../utils/databaseAdapter.js';
 import { moderateContent, endUpload, getUploadIp, getIPAddress, sanitizeUploadFolder, createResponse } from '../uploadTools.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
+import { cleanPersistedMetadataInPlace } from '../../utils/metadata/metadataSecurity.js';
 
 export async function onRequestPost(context) {
     const { request, env, waitUntil } = context;
@@ -123,6 +124,7 @@ export async function onRequestPost(context) {
 
         // 写入数据库
         const db = getDatabase(env);
+        cleanPersistedMetadataInPlace(metadata);
         await db.put(fullId, "", { metadata });
 
         // 结束上传（更新索引等）
