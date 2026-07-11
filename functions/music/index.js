@@ -32,7 +32,11 @@ export async function onRequest(context) {
         }
 
         const musicHtmlUrl = new URL('/music.html', request.url);
-        const musicHtml = await env.ASSETS.fetch(new Request(musicHtmlUrl.toString(), request));
+        const assetRequest = new Request(musicHtmlUrl.toString(), {
+            method: 'GET',
+            headers: request.headers,
+        });
+        const musicHtml = await env.ASSETS.fetch(assetRequest);
 
         if (musicHtml.ok) {
             const html = await musicHtml.text();
