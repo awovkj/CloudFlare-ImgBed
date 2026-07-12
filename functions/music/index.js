@@ -1,5 +1,13 @@
-import { fetchOthersConfig } from '../utils/sysConfig.js';
-import { userAuthCheck, UnauthorizedResponse } from '../utils/userAuth.js';
+import { getMusicAccessState } from '../utils/auth/musicAuth.js';
+
+const noStoreHeaders = { 'Cache-Control': 'no-store' };
+
+function accessErrorResponse(state) {
+    if (state === 'disabled') {
+        return new Response('Music player is disabled', { status: 403, headers: noStoreHeaders });
+    }
+    return new Response('Music player configuration unavailable', { status: 503, headers: noStoreHeaders });
+}
 
 export async function onRequest(context) {
     const { request, env } = context;
@@ -15,20 +23,16 @@ export async function onRequest(context) {
         if (url.search) {
             redirectUrl.search = url.search;
         }
-        return Response.redirect(redirectUrl.toString(), 302);
+        return new Response(null, {
+            status: 302,
+            headers: { Location: redirectUrl.toString(), ...noStoreHeaders },
+        });
     }
 
     try {
-        const othersConfig = await fetchOthersConfig(env);
-        const musicConfig = othersConfig.musicPlayer || {};
-
-        if (!musicConfig.enabled) {
-            return new Response('Music player is disabled', { status: 403 });
-        }
-
-        // 客户端认证检查
-        if (!await userAuthCheck(env, url, request)) {
-            return UnauthorizedResponse('Unauthorized');
+        const access = await getMusicAccessState(env, request);
+        if (access.state !== 'authorized' && access.state !== 'unauthorized') {
+            return accessErrorResponse(access.state);
         }
 
         const musicHtmlUrl = new URL('/music.html', request.url);
@@ -41,9 +45,10 @@ export async function onRequest(context) {
         if (musicHtml.ok) {
             const html = await musicHtml.text();
             return new Response(html, {
-                status: 200,
+                status: access.authorized ? 200 : 401,
                 headers: {
                     'Content-Type': 'text/html; charset=utf-8',
+                    ...noStoreHeaders,
                 }
             });
         } else {

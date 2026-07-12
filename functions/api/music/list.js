@@ -1,6 +1,6 @@
 import { readIndex } from '../../utils/indexManager.js';
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
-import { userAuthCheck } from '../../utils/userAuth.js';
+import { getMusicAccessState } from '../../utils/auth/musicAuth.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -8,6 +8,22 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
 };
+
+const accessResponseHeaders = {
+    'Content-Type': 'application/json',
+    ...corsHeaders,
+    'Cache-Control': 'no-store',
+};
+
+function accessErrorResponse(state) {
+    const status = state === 'disabled' ? 403 : state === 'unauthorized' ? 401 : 503;
+    const error = state === 'disabled'
+        ? 'Music player is disabled'
+        : state === 'unauthorized'
+            ? 'Unauthorized'
+            : 'Music player configuration unavailable';
+    return new Response(JSON.stringify({ error }), { status, headers: accessResponseHeaders });
+}
 
 /**
  * 清理歌曲显示名：去除常见数字前缀
@@ -40,11 +56,9 @@ export async function onRequest(context) {
     try {
         // 客户端认证检查
         const url = new URL(request.url);
-        if (!await userAuthCheck(env, url, request)) {
-            return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-                status: 401,
-                headers: { 'Content-Type': 'application/json', ...corsHeaders }
-            });
+        const access = await getMusicAccessState(env, request);
+        if (!access.authorized) {
+            return accessErrorResponse(access.state);
         }
 
         const othersConfig = await fetchOthersConfig(env);
