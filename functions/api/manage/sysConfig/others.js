@@ -1,4 +1,20 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { hashPassword } from '../../../utils/auth/passwordHash.js';
+import { destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
+
+function sanitizeManagementSettings(settings) {
+    const sanitized = JSON.parse(JSON.stringify(settings));
+    const musicPlayer = sanitized.musicPlayer || {};
+    const passwordConfigured = Boolean(musicPlayer.passwordHash);
+
+    delete musicPlayer.password;
+    delete musicPlayer.passwordHash;
+    delete musicPlayer.clearPassword;
+    musicPlayer.passwordConfigured = passwordConfigured;
+    sanitized.musicPlayer = musicPlayer;
+
+    return sanitized;
+}
 
 export async function onRequest(context) {
     // 其他设置相关，GET方法读取设置，POST方法保存设置
@@ -17,7 +33,7 @@ export async function onRequest(context) {
     if (request.method === 'GET') {
         const settings = await getOthersConfig(db, env)
 
-        return new Response(JSON.stringify(settings), {
+        return new Response(JSON.stringify(sanitizeManagementSettings(settings)), {
             headers: {
                 'content-type': 'application/json',
             },
@@ -26,13 +42,43 @@ export async function onRequest(context) {
 
     // POST保存设置
     if (request.method === 'POST') {
+        const settings = await getOthersConfig(db, env)
         const body = await request.json()
-        const settings = body
+        const newMusicPlayer = body.musicPlayer || {}
+        const oldMusicPlayer = settings.musicPlayer || {}
+        const oldPasswordHash = settings.musicPlayer?.passwordHash
+        let musicPasswordChanged = false
+
+        Object.assign(settings, body)
+        settings.musicPlayer = {
+            ...oldMusicPlayer,
+            ...newMusicPlayer,
+        }
+
+        delete settings.musicPlayer.password
+        delete settings.musicPlayer.clearPassword
+        delete settings.musicPlayer.passwordConfigured
+
+        if (newMusicPlayer.clearPassword === true) {
+            delete settings.musicPlayer.passwordHash
+            musicPasswordChanged = true
+        } else if (typeof newMusicPlayer.password === 'string' && newMusicPlayer.password !== '') {
+            settings.musicPlayer.passwordHash = await hashPassword(newMusicPlayer.password)
+            musicPasswordChanged = true
+        } else if (oldPasswordHash) {
+            settings.musicPlayer.passwordHash = oldPasswordHash
+        } else {
+            delete settings.musicPlayer.passwordHash
+        }
 
         // 写入数据库
         await db.put('manage@sysConfig@others', JSON.stringify(settings))
 
-        return new Response(JSON.stringify(settings), {
+        if (musicPasswordChanged) {
+            await destroySessionsByAuthType(env, 'music')
+        }
+
+        return new Response(JSON.stringify(sanitizeManagementSettings(settings)), {
             headers: {
                 'content-type': 'application/json',
             },
@@ -102,6 +148,7 @@ export async function getOthersConfig(db, env) {
     settings.musicPlayer = {
         enabled: kvMusicPlayer.enabled ?? false,
         musicDir: kvMusicPlayer.musicDir || '',
+        passwordHash: kvMusicPlayer.passwordHash || '',
         fixed: false,
     }
 
