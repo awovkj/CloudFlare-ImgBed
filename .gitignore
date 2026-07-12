@@ -5,6 +5,7 @@ test/*
 !test/music-session-manager.test.js
 !test/music-config-password.test.js
 !test/music-auth-helpers.test.js
+!test/music-auth-api.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/
