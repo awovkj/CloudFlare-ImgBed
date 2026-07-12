@@ -2,6 +2,7 @@
 test/*
 !test/upload-metadata-persistence.test.js
 !test/music-page-route.test.js
+!test/music-session-manager.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/

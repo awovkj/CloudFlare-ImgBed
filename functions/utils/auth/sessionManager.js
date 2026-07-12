@@ -10,11 +10,13 @@ import { fetchSecurityConfig } from '../sysConfig.js';
 import { normalizeSessionMaxAgeDays, sessionMaxAgeDaysToTtl } from './sessionConfig.js';
 
 const SESSION_PREFIX = 'manage@session@';
+const MUSIC_SESSION_MAX_AGE_DAYS = 7;
 
 // Cookie 名称映射
 const COOKIE_NAMES = {
     admin: 'admin_session',
     user: 'user_session',
+    music: 'music_session',
 };
 
 /**
@@ -28,10 +30,13 @@ export async function createSession(env, authType, username = '') {
     // 读取安全策略配置
     const securityConfig = await fetchSecurityConfig(env);
     const accessConfig = securityConfig.access || {};
-    const secure = accessConfig.sessionSecure ?? false;
-    const rawMaxAgeDays = authType === 'admin'
-        ? (accessConfig.adminSessionMaxAge ?? 14)
-        : (accessConfig.userSessionMaxAge ?? 14);
+    const isMusicSession = authType === 'music';
+    const secure = isMusicSession ? true : (accessConfig.sessionSecure ?? false);
+    const rawMaxAgeDays = isMusicSession
+        ? MUSIC_SESSION_MAX_AGE_DAYS
+        : authType === 'admin'
+            ? (accessConfig.adminSessionMaxAge ?? 14)
+            : (accessConfig.userSessionMaxAge ?? 14);
     const maxAgeDays = normalizeSessionMaxAgeDays(rawMaxAgeDays);
     const maxAge = sessionMaxAgeDaysToTtl(maxAgeDays);
 
@@ -49,7 +54,7 @@ export async function createSession(env, authType, username = '') {
     });
 
     const cookieName = COOKIE_NAMES[authType] || 'session';
-    const cookie = buildSessionCookie(cookieName, token, maxAge, secure);
+    const cookie = buildSessionCookie(cookieName, token, maxAge, secure, isMusicSession ? 'Lax' : 'Strict');
     return { token, cookie };
 }
 
@@ -127,7 +132,14 @@ export async function destroySession(env, request, authType) {
         if (token) {
             await db.delete(`${SESSION_PREFIX}${token}`);
         }
-        return buildSessionCookie(cookieName, '', 0, secure);
+        const isMusicSession = authType === 'music';
+        return buildSessionCookie(
+            cookieName,
+            '',
+            0,
+            isMusicSession ? true : secure,
+            isMusicSession ? 'Lax' : 'Strict'
+        );
     } else {
         // 销毁所有类型的会话
         const cookies = [];
@@ -136,7 +148,14 @@ export async function destroySession(env, request, authType) {
             if (token) {
                 await db.delete(`${SESSION_PREFIX}${token}`);
             }
-            cookies.push(buildSessionCookie(cookieName, '', 0, secure));
+            const isMusicSession = type === 'music';
+            cookies.push(buildSessionCookie(
+                cookieName,
+                '',
+                0,
+                isMusicSession ? true : secure,
+                isMusicSession ? 'Lax' : 'Strict'
+            ));
         }
         return cookies;
     }
@@ -210,12 +229,12 @@ function getCookieValue(request, name) {
  * @param {boolean} secure - 是否添加 Secure 属性
  * @returns {string}
  */
-function buildSessionCookie(name, token, maxAge, secure = false) {
+function buildSessionCookie(name, token, maxAge, secure = false, sameSite = 'Strict') {
     const parts = [
         `${name}=${token}`,
         `Path=/`,
         `HttpOnly`,
-        `SameSite=Strict`,
+        `SameSite=${sameSite}`,
         `Max-Age=${maxAge}`,
     ];
     if (secure) {
