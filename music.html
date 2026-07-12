@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
 <title>音乐播放器</title>
 <link rel="stylesheet" href="/css/theme-m3.css">
 <style>
@@ -17,6 +18,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
 .lyrics-card{grid-column:2;grid-row:2;align-self:start;position:relative;max-width:620px;min-height:220px;max-height:34vh;margin-top:2px;padding-left:18px;border:none;border-radius:0;background:transparent;box-shadow:none;overflow:hidden}.lyrics-card::before{content:"";position:absolute;left:0;top:18px;bottom:42px;width:2px;border-radius:99px;background:linear-gradient(to bottom,transparent,rgba(201,238,233,.66) 18%,rgba(255,255,255,.2) 82%,transparent)}.lyrics-head{position:absolute;right:8px;top:0;z-index:2;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:0;border-bottom:none}.lyrics-head h3{font-size:18px;color:rgba(255,255,255,.78)}.lyrics-head p{margin-top:4px;font-size:12px;color:var(--faint)}.lyrics-status{flex:0 0 auto;padding:6px 10px;border:1px solid var(--line-soft);border-radius:999px;background:rgba(13,49,59,.38);font-size:11px;font-weight:700;color:rgba(255,255,255,.74);backdrop-filter:blur(10px)}.lyrics-section{max-height:34vh;overflow:auto;padding:22px 16px 80px 0;scroll-behavior:smooth;mask-image:linear-gradient(to bottom,transparent,#000 15%,#000 72%,transparent);-webkit-mask-image:linear-gradient(to bottom,transparent,#000 15%,#000 72%,transparent)}.lyrics-section::-webkit-scrollbar{width:0}.lyrics-content{display:grid;gap:6px;text-align:left}.lyrics-line{padding:2px 0;border-radius:0;font-size:18px;line-height:1.72;color:rgba(255,255,255,.3);cursor:pointer;text-shadow:0 10px 28px rgba(5,20,25,.16);transition:color .24s var(--ease),transform .24s var(--ease),opacity .24s var(--ease)}.lyrics-line:hover{color:rgba(255,255,255,.64);background:transparent}.lyrics-line.active{background:transparent;color:rgba(255,255,255,.92);font-weight:800;transform:translateX(12px) scale(1.02);box-shadow:none}.lyrics-empty{padding:44px 0 24px;text-align:left;color:var(--faint);font-size:15px;border:none;border-radius:0;background:transparent}
 .playlist-panel{position:fixed;right:26px;top:76px;z-index:9;width:330px;min-width:0;max-width:330px;height:calc(100vh - 220px);min-height:280px;border-left:1px solid var(--line-soft);background:rgba(15,45,54,.16);display:flex;flex-direction:column;border-radius:22px;backdrop-filter:blur(14px);overflow:hidden}.playlist-top{padding:18px 16px 12px;display:grid;gap:14px}.playlist-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.playlist-heading h2{font-size:24px;letter-spacing:-.04em;color:var(--ink-strong)}.playlist-heading p{margin-top:6px;font-size:12px;line-height:1.5;color:var(--muted)}.playlist-toggle{width:34px;height:34px;flex:0 0 auto}.playlist-toggle .arrow{display:inline-block;transition:transform .2s var(--ease)}.playlist-toggle .arrow.open{transform:rotate(180deg)}.playlist-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:7px}.search-box{position:relative;min-width:0}.search-box::before{content:"⌕";position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;color:var(--faint)}.search-box input{width:100%;height:36px;padding:0 10px 0 34px;border:1px solid var(--line-soft);border-radius:12px;background:rgba(255,255,255,.07);font:inherit;font-size:12px;color:var(--ink);outline:none}.search-box input:focus{border-color:var(--line);background:rgba(255,255,255,.1)}.search-box input::placeholder{color:var(--faint)}.toolbar-btn{min-width:36px;height:36px;padding:0 10px;border:1px solid var(--line-soft);border-radius:12px;background:rgba(255,255,255,.07);color:var(--muted);font:800 11px var(--body);cursor:pointer}.toolbar-btn:hover,.toolbar-btn.active{background:rgba(255,255,255,.16);border-color:var(--line);color:var(--ink)}.playlist-summary{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--faint)}.playlist-summary strong{color:var(--ink)}.playlist-scroll-wrap{flex:1;min-height:0;padding:0 10px 12px;overflow:hidden}.playlist{height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;flex-direction:column;gap:6px;padding-right:3px;transition:max-height .2s var(--ease),opacity .2s var(--ease),transform .2s var(--ease)}.playlist.closed{max-height:0;overflow:hidden;opacity:0;transform:translateY(-6px);pointer-events:none}.playlist::-webkit-scrollbar{width:5px}.playlist::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:999px}.playlist-item{width:100%;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px;border:1px solid transparent;border-radius:14px;background:transparent;color:inherit;text-align:left;cursor:pointer}.playlist-item:hover{background:rgba(255,255,255,.08);border-color:var(--line-soft)}.playlist-item.active{background:rgba(255,255,255,.16);border-color:var(--line);box-shadow:none}.pl-cover{position:relative;width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.12);overflow:visible}.pl-cover img,.pl-cover-fallback{width:100%;height:100%;border-radius:8px;object-fit:cover;display:flex;align-items:center;justify-content:center}.pl-cover-fallback{font-size:15px;color:var(--ink);background:rgba(255,255,255,.1)}.pl-index{position:absolute;right:-6px;bottom:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line-soft);background:#244f5a;font-size:9px;font-weight:900;color:var(--ink)}.playlist-item.active .pl-index{background:var(--ink);color:#2f5b63;border-color:transparent}.pl-info{min-width:0;display:flex;flex-direction:column;gap:3px}.pl-name{font-size:13px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pl-artist{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pl-duration{font-size:11px;color:var(--faint);white-space:nowrap}.pl-playing-icon{width:14px;height:12px;display:flex;align-items:flex-end;gap:2px}.pl-playing-icon span{width:3px;background:currentColor;border-radius:2px;animation:eq .65s ease infinite alternate}.pl-playing-icon span:nth-child(2){animation-delay:.15s}.pl-playing-icon span:nth-child(3){animation-delay:.3s}.auth-card{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:18px}.auth-card input{width:min(220px,100%);padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.1);color:var(--ink);font:inherit;outline:none}.auth-card button{padding:12px 20px;border:none;border-radius:14px;background:var(--ink);color:#2f5b63;font:800 14px var(--body);cursor:pointer}
 @media(max-width:1180px){body{overflow:auto}.player-layout{min-height:100vh;grid-template-columns:1fr;grid-template-rows:auto;align-items:start;align-content:start;padding:86px 18px 150px}.cover-card{grid-row:auto;width:min(420px,82vw);min-width:260px}.now-playing,.lyrics-card{grid-column:1;grid-row:auto;max-width:none}.lyrics-card{min-height:220px;max-height:36vh;margin-top:0;padding-left:16px}.playlist-panel{position:relative;right:auto;top:auto;z-index:auto;grid-column:1;justify-self:stretch;margin-top:0;width:auto;max-width:none;height:auto;max-height:420px;border-left:none}.control-panel{grid-template-columns:220px 1fr 220px;height:118px}.header-stats{display:none}}@media(max-width:720px){.player-header{left:14px;right:14px}.player-layout{padding:72px 14px 154px;gap:18px}.cover-card{width:min(330px,86vw)}.track-name{font-size:40px}.track-meta{font-size:16px}.lyrics-card{min-height:190px;max-height:32vh;padding-left:14px}.lyrics-card::before{top:14px;bottom:34px}.lyrics-section{max-height:32vh;padding:18px 6px 62px 0}.playlist-panel{border-radius:18px;width:auto;min-width:0}.control-panel{height:124px;grid-template-columns:1fr;grid-template-rows:auto auto;gap:6px;padding:14px 12px 22px}.volume-card{display:none}.transport-actions{grid-column:1;grid-row:1;justify-self:start}.utility-actions{grid-column:1;grid-row:1;justify-self:end}.primary-controls{grid-column:auto;grid-row:auto;top:42px}.progress-meta{bottom:8px}.bottom-pulse{top:12px}.lyrics-line{font-size:16px;line-height:1.68}.playlist-toolbar{grid-template-columns:1fr 1fr}.search-box{grid-column:1/-1}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.logout-btn{pointer-events:auto;padding:8px 13px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.08);color:var(--ink);font:700 12px var(--body);cursor:pointer}.logout-btn:hover{background:rgba(255,255,255,.16)}.auth-error{width:100%;min-height:20px;margin-top:4px;color:#ffe0dc;font-size:13px}
 .playlist-item{contain:layout paint;content-visibility:auto;contain-intrinsic-size:56px}
 </style>
 </head>
@@ -82,32 +84,51 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     mainContent: document.getElementById('mainContent')
   };
 
-  function getAuthParam() {
-    const params = new URLSearchParams(window.location.search);
-    const authCode = params.get('authCode');
-    return authCode ? '&authCode=' + encodeURIComponent(authCode) : '';
-  }
-
-  function showAuthPrompt() {
+  function showAuthPrompt(message) {
     ui.mainContent.innerHTML =
       '<div class="empty-state">' +
       '<div class="icon">\u{1F512}</div>' +
       '<p>需要认证</p>' +
       '<div class="hint">请输入访问密码以继续访问当前音乐列表</div>' +
-      '<div class="auth-card">' +
-      '<input type="password" id="authInput" placeholder="密码">' +
-      '<button onclick="var c=document.getElementById(\'authInput\').value;if(c){var u=new URL(location.href);u.searchParams.set(\'authCode\',c);location.href=u.toString()}">确定</button>' +
-      '</div></div>';
-    const inp = document.getElementById('authInput');
-    if (inp) {
-      inp.focus();
-      inp.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-          var c = this.value;
-          if (c) { var u = new URL(location.href); u.searchParams.set('authCode', c); location.href = u.toString(); }
-        }
+      '<form class="auth-card" id="music-login-form">' +
+      '<input type="password" id="music-password" placeholder="密码" autocomplete="current-password" required>' +
+      '<button type="submit">登录</button>' +
+      '<div class="auth-error" id="music-login-error" role="alert">' + escHtml(message || '') + '</div>' +
+      '</form></div>';
+    const form = document.getElementById('music-login-form');
+    const input = document.getElementById('music-password');
+    if (input) input.focus();
+    if (form) form.addEventListener('submit', submitMusicLogin);
+  }
+
+  async function submitMusicLogin(event) {
+    event.preventDefault();
+    const passwordInput = document.getElementById('music-password');
+    const error = document.getElementById('music-login-error');
+    const password = passwordInput ? passwordInput.value : '';
+    if (!password) return;
+    if (error) error.textContent = '';
+    try {
+      const response = await fetch('/api/music/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
       });
+      if (response.ok) return location.reload();
+      let message = '登录失败，请稍后重试';
+      if (response.status === 401) message = '密码错误，请重新输入';
+      if (response.status === 429) message = '尝试次数过多，请稍后再试';
+      if (response.status === 503) message = '服务暂不可用，请稍后再试';
+      if (error) error.textContent = message;
+    } catch (e) {
+      if (error) error.textContent = '网络连接失败，请稍后再试';
     }
+  }
+
+  async function logoutMusic() {
+    await fetch('/api/music/logout', { method: 'POST', credentials: 'same-origin' });
+    location.reload();
   }
 
   function loadSettings(){
@@ -129,7 +150,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   }
 
   function fetchMusicPage(page, pageSize) {
-    return fetch(`/api/music/list?page=${page}&pageSize=${pageSize}${getAuthParam()}`)
+    return fetch(`/api/music/list?page=${page}&pageSize=${pageSize}`, { credentials: 'same-origin' })
       .then(async r => {
         if (r.status === 401) {
           showAuthPrompt();
@@ -1014,6 +1035,7 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
             <h1>Music</h1>
           </div>
         </div>
+        <button class="logout-btn" id="music-logout" type="button">退出登录</button>
       </header>
       <div class="player-layout">
         <section class="player-main">
@@ -1429,6 +1451,10 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
     ui.mounted = true;
 
     ui.mainContent.addEventListener('click', function(e) {
+      if (e.target.closest('#music-logout')) {
+        logoutMusic().catch(() => showAuthPrompt('退出失败，请稍后重试'));
+        return;
+      }
       const playlistItem = e.target.closest('.playlist-item');
       if (playlistItem && ui.playlist && ui.playlist.contains(playlistItem)) {
         const idx = parseInt(playlistItem.dataset.index, 10);
@@ -1593,7 +1619,8 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
   loadSettings();
 
   const PAGE_SIZE = 50;
-  fetchMusicPage(1, PAGE_SIZE)
+  function loadMusicPage() {
+    return fetchMusicPage(1, PAGE_SIZE)
     .then(data => {
       if (!data) return;
       totalMusicCount = data.totalCount || 0;
@@ -1623,6 +1650,12 @@ html{background:var(--bg-deep);color-scheme:dark}body{min-height:100vh;overflow:
           '<div class="hint">请检查网络连接</div></div>';
       }
     });
+  }
+
+  fetch('/api/music/session', { credentials: 'same-origin' })
+    .then(response => response.json())
+    .then(session => session.valid ? loadMusicPage() : showAuthPrompt())
+    .catch(() => showAuthPrompt('服务暂不可用，请稍后再试'));
 })();
 </script>
 </body>
