@@ -9,7 +9,7 @@ const corsHeaders = {
     'Access-Control-Max-Age': '86400',
 };
 
-const accessResponseHeaders = {
+const musicResponseHeaders = {
     'Content-Type': 'application/json',
     ...corsHeaders,
     'Cache-Control': 'no-store',
@@ -22,7 +22,7 @@ function accessErrorResponse(state) {
         : state === 'unauthorized'
             ? 'Unauthorized'
             : 'Music player configuration unavailable';
-    return new Response(JSON.stringify({ error }), { status, headers: accessResponseHeaders });
+    return new Response(JSON.stringify({ error }), { status, headers: musicResponseHeaders });
 }
 
 /**
@@ -49,7 +49,7 @@ export async function onRequest(context) {
     if (request.method !== 'GET') {
         return new Response(JSON.stringify({ error: 'Method not allowed' }), {
             status: 405,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            headers: musicResponseHeaders
         });
     }
 
@@ -67,7 +67,7 @@ export async function onRequest(context) {
         if (!musicConfig.enabled) {
             return new Response(JSON.stringify({ error: 'Music player is disabled', enabled: false }), {
                 status: 403,
-                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                headers: musicResponseHeaders
             });
         }
 
@@ -99,7 +99,7 @@ export async function onRequest(context) {
                 message: 'Index loading failed, please try again later'
             }), {
                 status: 500,
-                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+                headers: musicResponseHeaders
             });
         }
 
@@ -227,7 +227,7 @@ export async function onRequest(context) {
             hasMore: page < totalPages,
             musicDir: musicConfig.musicDir || '/',
         }), {
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            headers: musicResponseHeaders
         });
 
     } catch (error) {
@@ -237,7 +237,7 @@ export async function onRequest(context) {
             message: error.message
         }), {
             status: 500,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            headers: musicResponseHeaders
         });
     }
 }

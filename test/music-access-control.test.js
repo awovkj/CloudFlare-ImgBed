@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import { onRequest as musicPage } from '../functions/music/index.js';
 import { onRequest as musicList } from '../functions/api/music/list.js';
@@ -137,6 +138,16 @@ describe('Music page access control', () => {
 });
 
 describe('Music list access control', () => {
+  it('marks every JSON response, including successful lists, as no-store', () => {
+    const source = fs.readFileSync('functions/api/music/list.js', 'utf8');
+
+    assert.match(source, /const musicResponseHeaders = \{[\s\S]*?'Cache-Control': 'no-store'[\s\S]*?\};/);
+    assert.doesNotMatch(
+      source,
+      /headers:\s*\{\s*'Content-Type': 'application\/json',\s*\.\.\.corsHeaders\s*\}/,
+    );
+  });
+
   for (const [name, options, status] of [
     ['disabled', { musicPlayer: { enabled: false } }, 403],
     ['password missing', { musicPlayer: { enabled: true } }, 503],
