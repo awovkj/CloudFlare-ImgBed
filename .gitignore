@@ -7,6 +7,7 @@ test/*
 !test/music-auth-helpers.test.js
 !test/music-auth-api.test.js
 !test/music-access-control.test.js
+!test/music-admin-password-ui.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/
