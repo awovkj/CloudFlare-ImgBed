@@ -82,5 +82,5 @@ export function classifyChunkStatuses(statuses) {
 }
 
 export function uploadError(code, message, options = {}) {
-  return { success: false, code, message, ...options };
+  return { ...options, success: false, code, message };
 }

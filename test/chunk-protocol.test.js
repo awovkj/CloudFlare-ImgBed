@@ -124,6 +124,9 @@ describe('chunk protocol', () => {
 
   it('creates stable upload error payloads with optional details', () => {
     assert.deepEqual(uploadError('CHUNK_UPLOAD_RETRYABLE', 'try again', {
+      success: true,
+      code: 'OVERRIDDEN',
+      message: 'overridden',
       retryable: true,
       retryAfterMs: 500,
     }), {
