@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 import { validateChunkInitialization } from '../functions/upload/chunkProtocol.js';
 
-function createKv() {
+function createKv(config = {}) {
   const values = new Map();
   const puts = [];
 
@@ -14,6 +14,9 @@ function createKv() {
       return values.has(key) ? values.get(key) : null;
     },
     async put(key, value, options = {}) {
+      if (config.failPut?.(key)) {
+        throw new Error('secret persistence detail');
+      }
       puts.push({ key, value, options });
       values.set(key, value);
     },
@@ -165,5 +168,39 @@ describe('chunk initialization', () => {
     assert.equal(Object.hasOwn(session, 'fileSize'), false);
     assert.equal(Object.hasOwn(session, 'chunkSize'), false);
     assert.equal(Object.hasOwn(session, 'fileFingerprint'), false);
+  });
+
+  it('returns a stable JSON 500 without leaking internal initialization errors', async () => {
+    const { initializeChunkedUpload } = await import('../functions/upload/chunkUpload.js');
+    const kv = createKv({ failPut: () => true });
+    const request = createInitializationRequest({
+      originalFileName: 'video.mp4',
+      totalChunks: 1,
+    }, '&uploadChannel=telegram');
+
+    const originalConsoleError = console.error;
+    const loggedErrors = [];
+    console.error = (...args) => loggedErrors.push(args);
+    let response;
+    try {
+      response = await withStubbedIpLookup(() => initializeChunkedUpload({
+        request,
+        url: new URL(request.url),
+        env: { img_url: kv },
+      }));
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.equal(response.status, 500);
+    const responseText = await response.text();
+    assert.deepEqual(JSON.parse(responseText), {
+      success: false,
+      code: 'CHUNK_INITIALIZATION_FAILED',
+      message: 'Failed to initialize chunked upload',
+    });
+    assert.equal(responseText.includes('secret persistence detail'), false);
+    assert.equal(loggedErrors.length, 1);
+    assert.equal(loggedErrors[0][1].message, 'secret persistence detail');
   });
 });

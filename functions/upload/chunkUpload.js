@@ -214,7 +214,11 @@ export async function initializeChunkedUpload(context) {
         });
 
     } catch (error) {
-        return createResponse(`Error: Failed to initialize chunked upload - ${error.message}`, { status: 500 });
+        console.error('Failed to initialize chunked upload:', error);
+        return createUploadJsonResponse(uploadError(
+            'CHUNK_INITIALIZATION_FAILED',
+            'Failed to initialize chunked upload'
+        ), 500);
     }
 }
 
