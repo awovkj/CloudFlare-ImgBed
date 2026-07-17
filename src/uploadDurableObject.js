@@ -4,8 +4,7 @@
 // Worker 仅作为薄代理，将 /upload 请求转发到此 DO 处理。
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
-
-const ALLOWED_METHODS = new Set(['GET', 'POST', 'OPTIONS']);
+import { isUploadDurableObjectMethodAllowed } from './uploadRequestRouting.js';
 
 export class UploadDurableObject {
     constructor(state, env) {
@@ -16,7 +15,7 @@ export class UploadDurableObject {
 
     async fetch(request) {
         // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
-        if (!ALLOWED_METHODS.has(request.method)) {
+        if (!isUploadDurableObjectMethodAllowed(request.method)) {
             return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
                 status: 405,
                 headers: { 'Content-Type': 'application/json' }

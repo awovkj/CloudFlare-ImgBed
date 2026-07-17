@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import {
   extractUploadId,
+  isUploadDurableObjectMethodAllowed,
+  resolveUploadDurableObject,
   shouldRouteUploadToDurableObject,
 } from '../src/uploadRequestRouting.js';
+
+function createNamespace() {
+  const calls = [];
+  return {
+    calls,
+    idFromName(uploadId) {
+      calls.push(['idFromName', uploadId]);
+      return `named:${uploadId}`;
+    },
+    newUniqueId() {
+      calls.push(['newUniqueId']);
+      return 'unique:1';
+    },
+    get(id) {
+      calls.push(['get', id]);
+      return { id };
+    },
+  };
+}
 
 describe('upload durable object routing', () => {
   it('prefers the uploadId query parameter over the request header', async () => {
@@ -60,9 +80,12 @@ describe('upload durable object routing', () => {
     };
 
     const uploadId = await extractUploadId(request);
+    const namespace = createNamespace();
 
     assert.equal(uploadId, null);
     assert.equal(shouldRouteUploadToDurableObject(request, uploadId), false);
+    assert.equal(resolveUploadDurableObject(namespace, request, uploadId), null);
+    assert.deepEqual(namespace.calls, []);
     assert.equal(cloneCalls, 0);
     assert.equal(request.bodyUsed, false, 'legacy fallback must leave the original chunk body untouched');
   });
@@ -76,11 +99,42 @@ describe('upload durable object routing', () => {
     assert.equal(shouldRouteUploadToDurableObject(ordinaryRequest, null), true);
   });
 
-  it('uses a named durable object for upload IDs and allows cleanup GET requests', () => {
-    const workerSource = fs.readFileSync('src/worker.js', 'utf8');
-    const durableObjectSource = fs.readFileSync('src/uploadDurableObject.js', 'utf8');
+  it('resolves upload IDs through idFromName and namespace.get', () => {
+    const namespace = createNamespace();
+    const request = new Request('https://example.com/upload?chunked=true&uploadId=upload-1', {
+      method: 'POST',
+    });
 
-    assert.match(workerSource, /idFromName\(uploadId\)/);
-    assert.match(durableObjectSource, /\['GET', 'POST', 'OPTIONS'\]/);
+    assert.deepEqual(resolveUploadDurableObject(namespace, request, 'upload-1'), { id: 'named:upload-1' });
+    assert.deepEqual(namespace.calls, [
+      ['idFromName', 'upload-1'],
+      ['get', 'named:upload-1'],
+    ]);
+  });
+
+  it('resolves init and ordinary no-ID requests through newUniqueId and namespace.get', () => {
+    for (const url of [
+      'https://example.com/upload?initChunked=true',
+      'https://example.com/upload',
+    ]) {
+      const namespace = createNamespace();
+      const request = new Request(url, { method: 'POST' });
+
+      assert.deepEqual(resolveUploadDurableObject(namespace, request, null), { id: 'unique:1' });
+      assert.deepEqual(namespace.calls, [
+        ['newUniqueId'],
+        ['get', 'unique:1'],
+      ]);
+    }
+  });
+
+  it('allows GET, POST, and OPTIONS in the upload durable object only', () => {
+    assert.equal(isUploadDurableObjectMethodAllowed('GET'), true);
+    assert.equal(isUploadDurableObjectMethodAllowed('POST'), true);
+    assert.equal(isUploadDurableObjectMethodAllowed('OPTIONS'), true);
+
+    for (const method of ['PUT', 'PATCH', 'DELETE', 'HEAD']) {
+      assert.equal(isUploadDurableObjectMethodAllowed(method), false);
+    }
   });
 });

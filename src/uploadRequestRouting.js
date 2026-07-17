@@ -44,3 +44,20 @@ export function shouldRouteUploadToDurableObject(request, uploadId) {
     const isMergeRequest = url.searchParams.get('merge') === 'true';
     return !isChunkRequest || isMergeRequest;
 }
+
+export function resolveUploadDurableObject(namespace, request, uploadId) {
+    if (!shouldRouteUploadToDurableObject(request, uploadId)) {
+        return null;
+    }
+
+    const id = uploadId
+        ? namespace.idFromName(uploadId)
+        : namespace.newUniqueId();
+    return namespace.get(id);
+}
+
+const UPLOAD_DURABLE_OBJECT_METHODS = new Set(['GET', 'POST', 'OPTIONS']);
+
+export function isUploadDurableObjectMethodAllowed(method) {
+    return UPLOAD_DURABLE_OBJECT_METHODS.has(method);
+}
