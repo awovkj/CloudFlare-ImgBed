@@ -3,8 +3,9 @@
  * 优化：缓存 prepared statements，减少重复解析开销
  */
 class D1Database {
-    constructor(db) {
+    constructor(db, now) {
         this.db = db;
+        this.now = now || Date.now;
         this._stmtCache = new Map();
     }
 
@@ -36,11 +37,18 @@ D1Database.prototype.putFile = function(fileId, value, options) {
  * 获取文件记录 (替代 KV.get)
  */
 D1Database.prototype.getFile = function(fileId) {
+    var self = this;
     return this._prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first().then(function(result) {
         if (!result) return null;
+        var metadata = JSON.parse(result.metadata || '{}');
+        var envelope = metadata.__imgbedInternal;
+        if (envelope && envelope.marker === 'kv-expiry-v1' && self.now() >= envelope.expiresAt) {
+            return self.deleteFile(fileId).then(function() { return null; });
+        }
+        if (envelope && envelope.marker === 'kv-expiry-v1') delete metadata.__imgbedInternal;
         return {
             value: result.value,
-            metadata: JSON.parse(result.metadata || '{}')
+            metadata: metadata
         };
     });
 };
@@ -58,20 +66,21 @@ D1Database.prototype.deleteFile = function(fileId) {
  */
 D1Database.prototype.listFiles = function(options) {
     options = options || {};
+    var self = this;
     var prefix = options.prefix || '';
     var limit = options.limit || 1000;
     var cursor = options.cursor || null;
     
-    var query = 'SELECT id, metadata FROM files';
-    var params = [];
+    var query = "SELECT id, metadata FROM files WHERE (json_extract(metadata, '$.__imgbedInternal.marker') IS NULL OR json_extract(metadata, '$.__imgbedInternal.marker') != ? OR json_extract(metadata, '$.__imgbedInternal.expiresAt') IS NULL OR CAST(json_extract(metadata, '$.__imgbedInternal.expiresAt') AS INTEGER) > ?)";
+    var params = ['kv-expiry-v1', this.now()];
     
     if (prefix) {
-        query += ' WHERE id LIKE ?';
+        query += ' AND id LIKE ?';
         params.push(prefix + '%');
     }
     
     if (cursor) {
-        query += prefix ? ' AND' : ' WHERE';
+        query += ' AND';
         query += ' id > ?';
         params.push(cursor);
     }
@@ -90,7 +99,10 @@ D1Database.prototype.listFiles = function(options) {
 
         return {
             keys: results.map(function(row) {
-                return { name: row.id, metadata: JSON.parse(row.metadata || '{}') };
+                var metadata = JSON.parse(row.metadata || '{}');
+                var env = metadata.__imgbedInternal;
+                if (env && env.marker === 'kv-expiry-v1') delete metadata.__imgbedInternal;
+                return { name: row.id, metadata: metadata };
             }),
             cursor: hasMore && results.length > 0 ? results[results.length - 1].id : null,
             list_complete: !hasMore
@@ -246,6 +258,12 @@ D1Database.prototype.put = function(key, value, options) {
         var operation = JSON.parse(value);
         return this.putIndexOperation(operationId, operation);
     } else {
+        if (options.expirationTtl !== undefined || options.expiration !== undefined) {
+            options = Object.assign({}, options, { metadata: Object.assign({}, options.metadata || {}) });
+            options.metadata.__imgbedInternal = { marker: 'kv-expiry-v1', expiresAt: options.expiration !== undefined
+                ? options.expiration * 1000
+                : this.now() + options.expirationTtl * 1000 };
+        }
         return this.putFile(key, value, options);
     }
 };
