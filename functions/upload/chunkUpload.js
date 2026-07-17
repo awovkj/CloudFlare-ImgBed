@@ -1,8 +1,9 @@
 /* ======= 客户端分块上传处理 ======= */
-import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools.js';
 import { buildUploadResults, createUploadJsonResponse } from './uploadShared.js';
-import { TelegramAPI } from '../utils/telegramAPI';
-import { DiscordAPI } from '../utils/discordAPI';
+import { uploadError, validateChunkInitialization } from './chunkProtocol.js';
+import { TelegramAPI } from '../utils/telegramAPI.js';
+import { DiscordAPI } from '../utils/discordAPI.js';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
@@ -105,16 +106,37 @@ export async function initializeChunkedUpload(context) {
 
         const originalFileName = formdata.get('originalFileName');
         const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
-        const totalChunks = parseInt(formdata.get('totalChunks'));
+        const initialization = validateChunkInitialization({
+            totalChunks: formdata.get('totalChunks'),
+            fileSize: formdata.get('fileSize'),
+            chunkSize: formdata.get('chunkSize'),
+            fileFingerprint: formdata.get('fileFingerprint')
+        });
 
-        if (!originalFileName || (originalFileType === null || originalFileType === undefined) || !totalChunks) {
-            return createResponse('Error: Missing initialization parameters', { status: 400 });
+        if (!originalFileName) {
+            return createUploadJsonResponse(uploadError(
+                'INVALID_CHUNK_REQUEST',
+                'Invalid chunk upload initialization parameters'
+            ), 400);
         }
+
+        if (!initialization.ok) {
+            return createUploadJsonResponse(uploadError(
+                initialization.code,
+                'Invalid chunk upload initialization parameters'
+            ), 400);
+        }
+
+        const { totalChunks, fileSize, chunkSize, fileFingerprint } = initialization;
+        const optionalInitializationMetadata = {
+            ...(fileSize !== undefined ? { fileSize } : {}),
+            ...(chunkSize !== undefined ? { chunkSize } : {}),
+            ...(fileFingerprint !== undefined ? { fileFingerprint } : {})
+        };
 
         // 生成唯一的 uploadId
         const timestamp = Date.now();
-        const random = Math.random().toString(36).slice(2, 11);
-        const uploadId = `upload_${timestamp}_${random}`;
+        const uploadId = `upload_${crypto.randomUUID()}`;
 
         // 获取上传IP
         const uploadIp = getUploadIp(request);
@@ -126,7 +148,10 @@ export async function initializeChunkedUpload(context) {
         const channelName = url.searchParams.get('channelName') || '';
 
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
-            return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+            return createUploadJsonResponse(uploadError(
+                'INVALID_UPLOAD_CHANNEL',
+                'Chat uploads only support Telegram channels'
+            ), 400);
         }
 
         const isChatUpload = isChatRequestFromUrl(url);
@@ -135,16 +160,20 @@ export async function initializeChunkedUpload(context) {
 
         // 存储上传会话信息
         const sessionInfo = {
+            schemaVersion: 2,
+            revision: 0,
             uploadId,
             originalFileName,
             originalFileType,
             totalChunks,
+            ...optionalInitializationMetadata,
             uploadChannel,
             channelName,
             uploadIp,
             ipAddress,
             status: 'initialized',
             createdAt: timestamp,
+            updatedAt: timestamp,
             expiresAt: timestamp + sessionTtlMs
         };
 
@@ -155,15 +184,20 @@ export async function initializeChunkedUpload(context) {
         });
 
         await putUploadManifest(env, uploadId, {
+            schemaVersion: 2,
+            revision: 0,
             uploadId,
             originalFileName,
             originalFileType,
             totalChunks,
+            ...optionalInitializationMetadata,
             uploadChannel,
             channelName,
             status: 'initialized',
             chunks: {},
-            createdAt: timestamp
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            expiresAt: timestamp + sessionTtlMs
         }, url);
 
         return createUploadJsonResponse({

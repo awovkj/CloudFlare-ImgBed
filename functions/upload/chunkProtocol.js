@@ -34,6 +34,9 @@ export function validateChunkInitialization(input) {
   const result = { ok: true, totalChunks };
   if (fileSizeResult.value !== undefined) result.fileSize = fileSizeResult.value;
   if (chunkSizeResult.value !== undefined) result.chunkSize = chunkSizeResult.value;
+  if (input?.fileFingerprint !== undefined && input?.fileFingerprint !== null && input.fileFingerprint !== '') {
+    result.fileFingerprint = String(input.fileFingerprint);
+  }
   return result;
 }
 
