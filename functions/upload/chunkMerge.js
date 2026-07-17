@@ -7,6 +7,7 @@ import { fetchPageConfig } from '../utils/sysConfig.js';
 import { buildUploadResult } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
+import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
 const RETRY_SETTLE_WAIT_MS = 45000;
@@ -106,6 +107,12 @@ export async function handleChunkMerge(context) {
         totalChunks = parseInt(formdata.get('totalChunks'));
         originalFileName = formdata.get('originalFileName');
         originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
+
+        try {
+            assertRouteUploadIdMatches(context.data?.routeUploadId, uploadId);
+        } catch (error) {
+            return createRouteUploadIdMismatchResponse(error);
+        }
 
         if (!uploadId || !totalChunks || !originalFileName) {
             return createResponse('Error: Missing merge parameters', { status: 400 });

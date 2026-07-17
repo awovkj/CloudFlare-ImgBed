@@ -4,7 +4,12 @@
 // Worker 仅作为薄代理，将 /upload 请求转发到此 DO 处理。
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
-import { isUploadDurableObjectMethodAllowed } from './uploadRequestRouting.js';
+import {
+    buildUploadDurableObjectRouteData,
+    createRouteUploadIdMismatchResponse,
+    isRouteUploadIdMismatchError,
+    isUploadDurableObjectRequestAllowed,
+} from './uploadRequestRouting.js';
 
 export class UploadDurableObject {
     constructor(state, env) {
@@ -15,7 +20,7 @@ export class UploadDurableObject {
 
     async fetch(request) {
         // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
-        if (!isUploadDurableObjectMethodAllowed(request.method)) {
+        if (!isUploadDurableObjectRequestAllowed(request)) {
             return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
                 status: 405,
                 headers: { 'Content-Type': 'application/json' }
@@ -26,6 +31,9 @@ export class UploadDurableObject {
             const context = this._buildContext(request);
             return await onUploadRequest(context);
         } catch (error) {
+            if (isRouteUploadIdMismatchError(error)) {
+                return createRouteUploadIdMismatchResponse(error);
+            }
             console.error('[UploadDO] Unhandled error:', error);
             return new Response(JSON.stringify({
                 error: 'Upload Durable Object internal error',
@@ -49,7 +57,7 @@ export class UploadDurableObject {
             request,
             env: this.env,
             params: {},
-            data: {},
+            data: buildUploadDurableObjectRouteData(request),
             waitUntil: this.ctx.waitUntil.bind(this.ctx),
             passThroughOnException: () => {},
             next: () => new Response('Not Found', { status: 404 }),

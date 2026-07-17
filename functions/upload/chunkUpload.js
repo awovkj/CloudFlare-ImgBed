@@ -7,6 +7,7 @@ import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipa
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
+import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
@@ -199,6 +200,12 @@ export async function handleChunkUpload(context) {
         const uploadId = formdata.get('uploadId');
         const originalFileName = formdata.get('originalFileName');
         const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
+
+        try {
+            assertRouteUploadIdMatches(context.data?.routeUploadId, uploadId);
+        } catch (error) {
+            return createRouteUploadIdMismatchResponse(error);
+        }
 
         if (!chunk || Number.isNaN(chunkIndex) || !totalChunks || !uploadId || !originalFileName || (originalFileType === null || originalFileType === undefined)) {
             return createResponse('Error: Missing chunk upload parameters', { status: 400 });

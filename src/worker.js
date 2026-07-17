@@ -6,7 +6,13 @@ export { UploadDurableObject } from './uploadDurableObject.js';
 // upload
 import { onRequest as onUploadRequest }        from '../functions/upload/index.js';
 import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkStatus.js';
-import { extractUploadId, resolveUploadDurableObject } from './uploadRequestRouting.js';
+import {
+    createRouteUploadIdMismatchResponse,
+    dispatchUploadToDurableObject,
+    extractUploadId,
+    isRouteUploadIdMismatchError,
+    resolveUploadDurableObject,
+} from './uploadRequestRouting.js';
 // chunkUpload.js / chunkMerge.js 是工具函数库，无 onRequest，
 // 已被 upload/index.js 内部调用，不在此单独注册路由。
 import { checkDatabaseConfig } from '../functions/utils/middleware.js';
@@ -287,22 +293,28 @@ async function forwardToUploadDO(context) {
         return onUploadRequest(context);
     }
 
+    let stub;
     try {
         const uploadId = await extractUploadId(request);
 
         // 旧客户端把 uploadId 和二进制分片放在同一个 multipart body 中。
         // 不解析/复制大分片，直接交给 Worker 保持兼容。
-        const stub = resolveUploadDurableObject(env.UPLOAD_DO, request, uploadId);
-        if (!stub) {
-            return onUploadRequest(context);
-        }
-
-        return await stub.fetch(request);
+        stub = resolveUploadDurableObject(env.UPLOAD_DO, request, uploadId);
     } catch (error) {
-        // DO 调用失败，自动 fallback 到 Worker 直接处理
-        console.error('[worker] DO forwarding failed, falling back to Worker:', error.message);
+        if (isRouteUploadIdMismatchError(error)) {
+            return createRouteUploadIdMismatchResponse(error);
+        }
+        // 仅 dispatch 前的解析/namespace 错误可安全回退，原始 body 尚未发送。
+        console.error('[worker] DO routing failed, falling back to Worker:', error.message);
         return onUploadRequest(context);
     }
+
+    if (!stub) {
+        return onUploadRequest(context);
+    }
+
+    // 一旦向 DO 发起 fetch，请求 body 可能已被消费，失败时绝不再次本地执行。
+    return dispatchUploadToDurableObject(stub, request);
 }
 // ── 路由表 ────────────────────────────────────────────────────────────────────
 //

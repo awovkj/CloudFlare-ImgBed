@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
+  assertRouteUploadIdMatches,
+  buildUploadDurableObjectRouteData,
+  createRouteUploadIdMismatchResponse,
+  dispatchUploadToDurableObject,
   extractUploadId,
-  isUploadDurableObjectMethodAllowed,
+  isRouteUploadIdMismatchError,
+  isUploadDurableObjectRequestAllowed,
   resolveUploadDurableObject,
   shouldRouteUploadToDurableObject,
 } from '../src/uploadRequestRouting.js';
@@ -26,10 +32,9 @@ function createNamespace() {
 }
 
 describe('upload durable object routing', () => {
-  it('prefers the uploadId query parameter over the request header', async () => {
+  it('uses the uploadId query parameter when present', async () => {
     const request = new Request('https://example.com/upload?chunked=true&uploadId=query-id', {
       method: 'POST',
-      headers: { 'X-Upload-Id': 'header-id' },
     });
 
     assert.equal(await extractUploadId(request), 'query-id');
@@ -42,6 +47,18 @@ describe('upload durable object routing', () => {
     });
 
     assert.equal(await extractUploadId(request), 'header-id');
+  });
+
+  it('rejects conflicting query and header upload IDs with a stable mismatch error', async () => {
+    const request = new Request('https://example.com/upload?chunked=true&uploadId=query-id', {
+      method: 'POST',
+      headers: { 'X-Upload-Id': 'header-id' },
+    });
+
+    await assert.rejects(
+      extractUploadId(request),
+      error => isRouteUploadIdMismatchError(error) && error.code === 'ROUTE_UPLOAD_ID_MISMATCH',
+    );
   });
 
   it('extracts a merge uploadId from a small compatibility FormData body', async () => {
@@ -62,6 +79,21 @@ describe('upload durable object routing', () => {
     assert.equal(await extractUploadId(request), 'merge-id');
     assert.equal(cloneCalls, 1, 'small merge compatibility forms may be cloned once');
     assert.equal(request.bodyUsed, false, 'compatibility extraction must preserve the original request body');
+  });
+
+  it('rejects a merge body uploadId that differs from its route uploadId', async () => {
+    const form = new FormData();
+    form.set('uploadId', 'body-id');
+    form.set('totalChunks', '3');
+    const request = new Request('https://example.com/upload?chunked=true&merge=true&uploadId=route-id', {
+      method: 'POST',
+      body: form,
+    });
+
+    await assert.rejects(
+      extractUploadId(request),
+      error => isRouteUploadIdMismatchError(error) && error.code === 'ROUTE_UPLOAD_ID_MISMATCH',
+    );
   });
 
   it('does not parse a legacy chunk body without a query or header uploadId', async () => {
@@ -128,13 +160,71 @@ describe('upload durable object routing', () => {
     }
   });
 
-  it('allows GET, POST, and OPTIONS in the upload durable object only', () => {
-    assert.equal(isUploadDurableObjectMethodAllowed('GET'), true);
-    assert.equal(isUploadDurableObjectMethodAllowed('POST'), true);
-    assert.equal(isUploadDurableObjectMethodAllowed('OPTIONS'), true);
+  it('returns a 502 response when durable object fetch fails instead of retrying the request locally', async () => {
+    const request = new Request('https://example.com/upload?initChunked=true', { method: 'POST' });
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    let response;
+    try {
+      response = await dispatchUploadToDurableObject({
+        async fetch(receivedRequest) {
+          assert.equal(receivedRequest, request);
+          throw new Error('do unavailable');
+        },
+      }, request);
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), {
+      success: false,
+      code: 'UPLOAD_DURABLE_OBJECT_FETCH_FAILED',
+      message: 'Upload Durable Object request failed',
+    });
+
+    const workerSource = fs.readFileSync('src/worker.js', 'utf8');
+    assert.match(workerSource, /return dispatchUploadToDurableObject\(stub, request\);/);
+    assert.doesNotMatch(workerSource, /stub\.fetch\(request\)/);
+  });
+
+  it('stores and enforces the query or header route uploadId in durable object context data', async () => {
+    const queryRequest = new Request('https://example.com/upload?uploadId=query-id', {
+      headers: { 'X-Upload-Id': 'query-id' },
+    });
+    const headerRequest = new Request('https://example.com/upload', {
+      headers: { 'X-Upload-Id': 'header-id' },
+    });
+
+    assert.deepEqual(buildUploadDurableObjectRouteData(queryRequest), { routeUploadId: 'query-id' });
+    assert.deepEqual(buildUploadDurableObjectRouteData(headerRequest), { routeUploadId: 'header-id' });
+    assert.doesNotThrow(() => assertRouteUploadIdMatches('route-id', 'route-id'));
+    let mismatchError;
+    assert.throws(() => assertRouteUploadIdMatches('route-id', 'body-id'), error => {
+      mismatchError = error;
+      return isRouteUploadIdMismatchError(error);
+    });
+    const mismatchResponse = createRouteUploadIdMismatchResponse(mismatchError);
+    assert.equal(mismatchResponse.status, 400);
+    assert.equal((await mismatchResponse.json()).code, 'ROUTE_UPLOAD_ID_MISMATCH');
+
+    for (const path of ['functions/upload/chunkUpload.js', 'functions/upload/chunkMerge.js']) {
+      const source = fs.readFileSync(path, 'utf8');
+      assert.match(source, /assertRouteUploadIdMatches\(context\.data\?\.routeUploadId, uploadId\)/);
+      assert.match(source, /return createRouteUploadIdMismatchResponse\(error\)/);
+    }
+    assert.match(fs.readFileSync('src/uploadDurableObject.js', 'utf8'), /data: buildUploadDurableObjectRouteData\(request\)/);
+  });
+
+  it('allows POST and OPTIONS, and allows GET only for cleanup requests', () => {
+    assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload', { method: 'POST' })), true);
+    assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload', { method: 'OPTIONS' })), true);
+    assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload?cleanup=true', { method: 'GET' })), true);
+    assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload', { method: 'GET' })), false);
 
     for (const method of ['PUT', 'PATCH', 'DELETE', 'HEAD']) {
-      assert.equal(isUploadDurableObjectMethodAllowed(method), false);
+      assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload?cleanup=true', { method })), false);
     }
+    assert.match(fs.readFileSync('src/uploadDurableObject.js', 'utf8'), /isUploadDurableObjectRequestAllowed\(request\)/);
   });
 });
