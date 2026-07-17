@@ -7,8 +7,8 @@ import { onRequest as onUploadRequest } from '../functions/upload/index.js';
 import {
     buildUploadDurableObjectRouteData,
     createRouteUploadIdMismatchResponse,
+    getUploadRequestMethodRejection,
     isRouteUploadIdMismatchError,
-    isUploadDurableObjectRequestAllowed,
 } from './uploadRequestRouting.js';
 
 export class UploadDurableObject {
@@ -20,11 +20,9 @@ export class UploadDurableObject {
 
     async fetch(request) {
         // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
-        if (!isUploadDurableObjectRequestAllowed(request)) {
-            return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
-                status: 405,
-                headers: { 'Content-Type': 'application/json' }
-            });
+        const methodRejection = getUploadRequestMethodRejection(request);
+        if (methodRejection) {
+            return methodRejection;
         }
 
         try {

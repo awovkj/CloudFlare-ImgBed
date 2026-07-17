@@ -6,6 +6,8 @@ export class RouteUploadIdMismatchError extends Error {
     }
 }
 
+export const MAX_MERGE_FORM_DATA_BYTES = 64 * 1024;
+
 export function isRouteUploadIdMismatchError(error) {
     return error?.code === 'ROUTE_UPLOAD_ID_MISMATCH';
 }
@@ -41,9 +43,16 @@ export async function extractUploadId(request) {
 
     const isMergeRequest = url.searchParams.get('merge') === 'true';
     const contentType = request.headers.get('content-type') || '';
+    const contentLengthHeader = request.headers.get('content-length');
+    const contentLength = Number(contentLengthHeader);
+    const hasSafeMergeFormDataLength = contentLengthHeader !== null
+        && Number.isInteger(contentLength)
+        && contentLength > 0
+        && contentLength <= MAX_MERGE_FORM_DATA_BYTES;
     if (request.method !== 'POST'
         || !isMergeRequest
-        || !contentType.toLowerCase().includes('multipart/form-data')) {
+        || !contentType.toLowerCase().includes('multipart/form-data')
+        || !hasSafeMergeFormDataLength) {
         return routeUploadId;
     }
 
@@ -66,8 +75,7 @@ export function shouldRouteUploadToDurableObject(request, uploadId) {
 
     const url = new URL(request.url);
     const isChunkRequest = url.searchParams.get('chunked') === 'true';
-    const isMergeRequest = url.searchParams.get('merge') === 'true';
-    return !isChunkRequest || isMergeRequest;
+    return !isChunkRequest;
 }
 
 export function resolveUploadDurableObject(namespace, request, uploadId) {
@@ -120,4 +128,14 @@ export function isUploadDurableObjectRequestAllowed(request) {
         return false;
     }
     return new URL(request.url).searchParams.get('cleanup') === 'true';
+}
+
+export function getUploadRequestMethodRejection(request) {
+    if (isUploadDurableObjectRequestAllowed(request)) {
+        return null;
+    }
+    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+        status: 405,
+        headers: { 'Content-Type': 'application/json' },
+    });
 }

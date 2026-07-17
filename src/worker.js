@@ -10,6 +10,7 @@ import {
     createRouteUploadIdMismatchResponse,
     dispatchUploadToDurableObject,
     extractUploadId,
+    getUploadRequestMethodRejection,
     isRouteUploadIdMismatchError,
     resolveUploadDurableObject,
 } from './uploadRequestRouting.js';
@@ -287,6 +288,11 @@ function matchDynamicRoute(pathname) {
  */
 async function forwardToUploadDO(context) {
     const { request, env } = context;
+
+    const methodRejection = getUploadRequestMethodRejection(request);
+    if (methodRejection) {
+        return methodRejection;
+    }
 
     // fallback：绑定不存在 或 手动禁用
     if (!env.UPLOAD_DO || env.DISABLE_UPLOAD_DO === 'true') {

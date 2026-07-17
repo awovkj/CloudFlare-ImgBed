@@ -6,8 +6,10 @@ import {
   createRouteUploadIdMismatchResponse,
   dispatchUploadToDurableObject,
   extractUploadId,
+  getUploadRequestMethodRejection,
   isRouteUploadIdMismatchError,
   isUploadDurableObjectRequestAllowed,
+  MAX_MERGE_FORM_DATA_BYTES,
   resolveUploadDurableObject,
   shouldRouteUploadToDurableObject,
 } from '../src/uploadRequestRouting.js';
@@ -67,6 +69,7 @@ describe('upload durable object routing', () => {
     form.set('totalChunks', '3');
     const request = new Request('https://example.com/upload?chunked=true&merge=true', {
       method: 'POST',
+      headers: { 'Content-Length': '256' },
       body: form,
     });
     const originalClone = request.clone.bind(request);
@@ -87,6 +90,7 @@ describe('upload durable object routing', () => {
     form.set('totalChunks', '3');
     const request = new Request('https://example.com/upload?chunked=true&merge=true&uploadId=route-id', {
       method: 'POST',
+      headers: { 'Content-Length': '256' },
       body: form,
     });
 
@@ -94,6 +98,34 @@ describe('upload durable object routing', () => {
       extractUploadId(request),
       error => isRouteUploadIdMismatchError(error) && error.code === 'ROUTE_UPLOAD_ID_MISMATCH',
     );
+  });
+
+  it('does not clone merge FormData when Content-Length is missing, invalid, or too large', async () => {
+    for (const contentLength of [null, '0', 'invalid', String(MAX_MERGE_FORM_DATA_BYTES + 1)]) {
+      const form = new FormData();
+      form.set('uploadId', 'body-only-id');
+      form.set('totalChunks', '3');
+      const headers = contentLength === null ? undefined : { 'Content-Length': contentLength };
+      const request = new Request('https://example.com/upload?chunked=true&merge=true', {
+        method: 'POST',
+        headers,
+        body: form,
+      });
+      let cloneCalls = 0;
+      request.clone = () => {
+        cloneCalls += 1;
+        throw new Error('unsafe merge bodies must not be cloned');
+      };
+
+      const uploadId = await extractUploadId(request);
+
+      assert.equal(uploadId, null);
+      assert.equal(cloneCalls, 0);
+      assert.equal(shouldRouteUploadToDurableObject(request, uploadId), false);
+      const namespace = createNamespace();
+      assert.equal(resolveUploadDurableObject(namespace, request, uploadId), null);
+      assert.deepEqual(namespace.calls, []);
+    }
   });
 
   it('does not parse a legacy chunk body without a query or header uploadId', async () => {
@@ -225,6 +257,17 @@ describe('upload durable object routing', () => {
     for (const method of ['PUT', 'PATCH', 'DELETE', 'HEAD']) {
       assert.equal(isUploadDurableObjectRequestAllowed(new Request('https://example.com/upload?cleanup=true', { method })), false);
     }
-    assert.match(fs.readFileSync('src/uploadDurableObject.js', 'utf8'), /isUploadDurableObjectRequestAllowed\(request\)/);
+
+    const rejected = getUploadRequestMethodRejection(new Request('https://example.com/upload', { method: 'GET' }));
+    assert.equal(rejected.status, 405);
+    assert.equal(getUploadRequestMethodRejection(new Request('https://example.com/upload?cleanup=true')), null);
+
+    const workerSource = fs.readFileSync('src/worker.js', 'utf8');
+    const durableObjectSource = fs.readFileSync('src/uploadDurableObject.js', 'utf8');
+    assert.ok(
+      workerSource.indexOf('const methodRejection = getUploadRequestMethodRejection(request)') < workerSource.indexOf("!env.UPLOAD_DO"),
+      'Worker must reject disallowed methods before binding/disable/direct fallback checks',
+    );
+    assert.match(durableObjectSource, /getUploadRequestMethodRejection\(request\)/);
   });
 });
