@@ -6,6 +6,7 @@ export { UploadDurableObject } from './uploadDurableObject.js';
 // upload
 import { onRequest as onUploadRequest }        from '../functions/upload/index.js';
 import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkStatus.js';
+import { extractUploadId, shouldRouteUploadToDurableObject } from './uploadRequestRouting.js';
 // chunkUpload.js / chunkMerge.js 是工具函数库，无 onRequest，
 // 已被 upload/index.js 内部调用，不在此单独注册路由。
 import { checkDatabaseConfig } from '../functions/utils/middleware.js';
@@ -287,8 +288,18 @@ async function forwardToUploadDO(context) {
     }
 
     try {
-        // 每次上传请求分配独立的 DO 实例，最大化并行性
-        const id = env.UPLOAD_DO.newUniqueId();
+        const uploadId = await extractUploadId(request);
+
+        // 旧客户端把 uploadId 和二进制分片放在同一个 multipart body 中。
+        // 不解析/复制大分片，直接交给 Worker 保持兼容。
+        if (!shouldRouteUploadToDurableObject(request, uploadId)) {
+            return onUploadRequest(context);
+        }
+
+        // 同一 uploadId 始终落到同一个 DO；初始化和普通上传使用独立实例。
+        const id = uploadId
+            ? env.UPLOAD_DO.idFromName(uploadId)
+            : env.UPLOAD_DO.newUniqueId();
         const stub = env.UPLOAD_DO.get(id);
         return await stub.fetch(request);
     } catch (error) {

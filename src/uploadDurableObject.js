@@ -5,6 +5,8 @@
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
 
+const ALLOWED_METHODS = new Set(['GET', 'POST', 'OPTIONS']);
+
 export class UploadDurableObject {
     constructor(state, env) {
         this.state = state;
@@ -13,8 +15,8 @@ export class UploadDurableObject {
     }
 
     async fetch(request) {
-        // 仅允许 POST 和 OPTIONS 请求
-        if (request.method !== 'POST' && request.method !== 'OPTIONS') {
+        // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
+        if (!ALLOWED_METHODS.has(request.method)) {
             return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
                 status: 405,
                 headers: { 'Content-Type': 'application/json' }
