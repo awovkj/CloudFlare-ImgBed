@@ -626,32 +626,41 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
             const multipartUpload = await R2DataBase.createMultipartUpload(finalFileId);
             const multipartInfo = {
                 uploadId: multipartUpload.uploadId,
-                key: finalFileId
+                key: finalFileId,
+                status: 'initialized',
+                createdAt: Date.now()
             };
 
-            // 保存multipart info
             await db.put(multipartKey, JSON.stringify(multipartInfo), {
-                expirationTtl: getChunkRecordTtlSeconds(context)            });
+                expirationTtl: getChunkRecordTtlSeconds(context)
+            });
+            
+            console.log(`R2 multipart upload initialized for ${finalFileId}`);
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 40;
+            const maxRetries = 60;
+            const pollInterval = 500;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 250));
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
                     retryCount++;
-                    console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
+                    if (retryCount % 10 === 0) {
+                        console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
+                    }
                 }
             }
 
             if (!multipartInfoData) {
-                return { success: false, error: 'Multipart upload not initialized after waiting' };
+                return { success: false, error: 'Multipart upload not initialized after waiting 30 seconds' };
             }
 
             const multipartInfo = JSON.parse(multipartInfoData);
             finalFileId = multipartInfo.key;
+            
+            console.log(`R2 chunk ${chunkIndex} found multipart info for ${finalFileId}`);
 
             const multipartUpload = R2DataBase.resumeMultipartUpload(finalFileId, multipartInfo.uploadId);
             const uploadedPart = await multipartUpload.uploadPart(chunkIndex + 1, chunkData);
@@ -753,32 +762,41 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 
             const multipartInfo = {
                 uploadId: createResponse.UploadId,
-                key: finalFileId
+                key: finalFileId,
+                status: 'initialized',
+                createdAt: Date.now()
             };
 
-            // 保存multipart info
             await db.put(multipartKey, JSON.stringify(multipartInfo), {
-                expirationTtl: getChunkRecordTtlSeconds(context)            });
+                expirationTtl: getChunkRecordTtlSeconds(context)
+            });
+            
+            console.log(`S3 multipart upload initialized for ${finalFileId}`);
         } else {
             let multipartInfoData = null;
             let retryCount = 0;
-            const maxRetries = 40;
+            const maxRetries = 60;
+            const pollInterval = 500;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, 250));
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
                     retryCount++;
-                    console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
+                    if (retryCount % 10 === 0) {
+                        console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
+                    }
                 }
             }
 
             if (!multipartInfoData) {
-                return { success: false, error: 'Multipart upload not initialized after waiting' };
+                return { success: false, error: 'Multipart upload not initialized after waiting 30 seconds' };
             }
 
             const multipartInfo = JSON.parse(multipartInfoData);
             finalFileId = multipartInfo.key;
+            
+            console.log(`S3 chunk ${chunkIndex} found multipart info for ${finalFileId}`);
 
             const uploadResponse = await s3Client.send(new UploadPartCommand({
                 Bucket: bucketName,
@@ -1096,9 +1114,12 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
         }
 
         results.push(...batchResults);
+
+        if (i + batchSize < chunksToRetry.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
     }
 
-    // 统计结果
     const successCount = results.filter(r => r.success).length;
     const failureCount = results.filter(r => !r.success).length;
 

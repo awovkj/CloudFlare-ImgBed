@@ -5,6 +5,7 @@ import { validateChunkInitialization } from '../functions/upload/chunkProtocol.j
 
 function createKv(config = {}) {
   const values = new Map();
+  const metadata = new Map();
   const puts = [];
 
   return {
@@ -19,9 +20,17 @@ function createKv(config = {}) {
       }
       puts.push({ key, value, options });
       values.set(key, value);
+      metadata.set(key, options.metadata || null);
+    },
+    async getWithMetadata(key) {
+      return {
+        value: values.has(key) ? values.get(key) : null,
+        metadata: metadata.get(key) || null,
+      };
     },
     async delete(key) {
       values.delete(key);
+      metadata.delete(key);
     },
   };
 }
@@ -202,5 +211,97 @@ describe('chunk initialization', () => {
     assert.equal(responseText.includes('secret persistence detail'), false);
     assert.equal(loggedErrors.length, 1);
     assert.equal(loggedErrors[0][1].message, 'secret persistence detail');
+  });
+
+  it('eagerly creates and persists one R2 multipart before session', async () => {
+    const { initializeChunkedUpload } = await import('../functions/upload/chunkUpload.js');
+    const kv = createKv();
+    const calls = { create: 0, abort: 0 };
+    const r2 = { createMultipartUpload: async key => { calls.create++; return { uploadId: 'r2-u1' }; }, resumeMultipartUpload: () => ({ abort: async () => { calls.abort++; } }) };
+    const request = createInitializationRequest({ originalFileName: 'a.bin', totalChunks: 2 }, '&uploadChannel=cfr2&channelName=r2-primary');
+    const response = await withStubbedIpLookup(() => initializeChunkedUpload({ request, url: new URL(request.url), env: { img_url: kv, img_r2: r2 }, uploadConfig: { cfr2: { channels: [{ name: 'r2-primary' }] } } }));
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(calls.create, 1);
+    const multipart = JSON.parse(kv.values.get(`multipart_${payload.uploadId}`));
+    assert.deepEqual(multipart, { backend: 'cfr2', uploadId: 'r2-u1', key: multipart.key, channelName: 'r2-primary' });
+    assert.equal(typeof multipart.key, 'string');
+  });
+
+  it('uploads R2 chunk zero by resuming the existing schema-v2 multipart', async () => {
+    const { handleChunkUpload, initializeChunkedUpload } = await import('../functions/upload/chunkUpload.js');
+    const kv = createKv();
+    const calls = { create: 0, resume: 0, uploadPart: 0 };
+    const r2 = {
+      async createMultipartUpload() {
+        calls.create++;
+        return { uploadId: 'r2-u1' };
+      },
+      resumeMultipartUpload() {
+        calls.resume++;
+        return {
+          async uploadPart(partNumber) {
+            calls.uploadPart++;
+            assert.equal(partNumber, 1);
+            return { etag: 'etag-1' };
+          },
+        };
+      },
+    };
+    const initRequest = createInitializationRequest({ originalFileName: 'a.bin', totalChunks: 1 }, '&uploadChannel=cfr2&channelName=r2-primary');
+    const initResponse = await withStubbedIpLookup(() => initializeChunkedUpload({
+      request: initRequest,
+      url: new URL(initRequest.url),
+      env: { img_url: kv, img_r2: r2 },
+    }));
+    const { uploadId } = await initResponse.json();
+
+    const form = new FormData();
+    form.set('file', new Blob(['chunk-zero']));
+    form.set('chunkIndex', '0');
+    form.set('totalChunks', '1');
+    form.set('uploadId', uploadId);
+    form.set('originalFileName', 'a.bin');
+    form.set('originalFileType', 'application/octet-stream');
+    const request = new Request(`https://example.com/upload?uploadChannel=cfr2`, { method: 'POST', body: form });
+    const response = await handleChunkUpload({
+      request,
+      url: new URL(request.url),
+      env: { img_url: kv, img_r2: r2 },
+      waitUntil() {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.create, 1);
+    assert.equal(calls.resume, 1);
+    assert.equal(calls.uploadPart, 1);
+  });
+
+  it('aborts R2 multipart and removes initialization records when later persistence fails', async () => {
+    const { initializeChunkedUpload } = await import('../functions/upload/chunkUpload.js');
+    const kv = createKv({ failPut: key => key.startsWith('upload_manifest_') });
+    const calls = { abort: 0 };
+    const r2 = {
+      async createMultipartUpload() {
+        return { uploadId: 'r2-u1' };
+      },
+      resumeMultipartUpload(key, uploadId) {
+        assert.equal(typeof key, 'string');
+        assert.equal(uploadId, 'r2-u1');
+        return { abort: async () => { calls.abort++; } };
+      },
+    };
+    const request = createInitializationRequest({ originalFileName: 'a.bin', totalChunks: 2 }, '&uploadChannel=cfr2');
+    const response = await withStubbedIpLookup(() => initializeChunkedUpload({
+      request,
+      url: new URL(request.url),
+      env: { img_url: kv, img_r2: r2 },
+    }));
+
+    assert.equal(response.status, 500);
+    assert.equal(calls.abort, 1);
+    assert.equal([...kv.values.keys()].some(key => key.startsWith('multipart_')), false);
+    assert.equal([...kv.values.keys()].some(key => key.startsWith('upload_session_')), false);
+    assert.equal([...kv.values.keys()].some(key => key.startsWith('upload_manifest_')), false);
   });
 });
