@@ -1,5 +1,5 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink } from './uploadTools';
+import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink, sanitizeUploadFolder } from './uploadTools';
 import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
@@ -218,6 +218,11 @@ export async function handleChunkMerge(context) {
         uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
             return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
+        }
+
+        // WebDAV 渠道不支持分块上传
+        if (uploadChannel === 'webdav') {
+            return createResponse('Error: WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.', { status: 400 });
         }
 
         // 获取指定的渠道名称（优先URL参数，其次会话信息）
@@ -445,7 +450,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         // 获得上传IP
         const uploadIp = getUploadIp(request);
 
-        const normalizedFolder = (url.searchParams.get('uploadFolder') || '').replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+        const normalizedFolder = sanitizeUploadFolder(url.searchParams.get('uploadFolder') || '');
 
         // 构建基础metadata
         const metadata = {

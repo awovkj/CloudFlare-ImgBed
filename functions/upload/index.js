@@ -10,6 +10,7 @@ import { handleChunkMerge } from "./chunkMerge";
 import { TelegramAPI } from "../utils/telegramAPI";
 import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
+import { WebDAVAPI } from "../utils/storage/webdavAPI.js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { buildUploadResults, createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
@@ -213,6 +214,7 @@ async function processFileUpload(context, formdata = null) {
         'Discord':      (ctx, id, meta, link) => uploadFileToDiscord(ctx, id, meta, link),
         'HuggingFace':  (ctx, id, meta, link) => uploadFileToHuggingFace(ctx, id, meta, link),
         'External':     (ctx, id, meta, link) => uploadFileToExternal(ctx, id, meta, link),
+        'WebDAV':       (ctx, id, meta, link) => uploadFileToWebDAV(ctx, id, meta, link),
         'TelegramNew':  (ctx, id, meta, link) => uploadFileToTelegram(ctx, id, meta, fileExt, fileName, fileType, link),
     };
 
@@ -408,7 +410,7 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
 
     const telegramAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
 
-    const CHUNK_SIZE = 19 * 1024 * 1024; // 19MB (TG Bot upload limit: 20MB)
+    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile 下载限制 20MB，预留 4MB 余量)
 
     if (fileSize > CHUNK_SIZE) {
         // 大文件分片上传
@@ -720,6 +722,71 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
 }
 
 
+// 上传到 WebDAV
+async function uploadFileToWebDAV(context, fullId, metadata, returnLink) {
+    const { env, waitUntil, uploadConfig, securityConfig, url, formdata, specifiedChannelName } = context;
+    const db = getDatabase(env);
+
+    const webdavSettings = uploadConfig.webdav;
+    if (!webdavSettings || !webdavSettings.channels || webdavSettings.channels.length === 0) {
+        return createResponse('Error: No WebDAV channel configured', { status: 400 });
+    }
+
+    const webdavChannel = selectChannel(webdavSettings, specifiedChannelName);
+    if (!webdavChannel || !webdavChannel.baseUrl) {
+        return createResponse('Error: WebDAV channel not properly configured', { status: 400 });
+    }
+
+    const file = formdata.get('file');
+    if (!file) {
+        return createResponse('Error: No file provided', { status: 400 });
+    }
+
+    try {
+        const webdavAPI = new WebDAVAPI(webdavChannel);
+        await webdavAPI.putFile(fullId, file, file.type || metadata.FileType || 'application/octet-stream');
+
+        metadata.Channel = "WebDAV";
+        metadata.ChannelName = webdavChannel.name || "WebDAV_env";
+        metadata.WebDAVFilePath = fullId;
+        const webdavPublicUrl = webdavChannel.publicUrl
+            ? webdavAPI.buildPublicUrl(fullId, webdavChannel.publicUrl)
+            : '';
+
+        const uploadModerate = securityConfig.upload?.moderate;
+        if (uploadModerate && uploadModerate.enabled) {
+            if (webdavPublicUrl) {
+                metadata.Label = await moderateContent(env, webdavPublicUrl, context.securityConfig);
+            } else {
+                // 无公开直链时先落库，再通过自身域名代理访问进行审查
+                try {
+                    await persistMetadata(db, fullId, metadata);
+                } catch {
+                    return createResponse('Error: Failed to write to database', { status: 500 });
+                }
+
+                const moderateUrl = `https://${url.hostname}/file/${fullId}`;
+                await purgeCDNCache(env, moderateUrl, url);
+                metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
+            }
+        }
+
+        try {
+            await persistMetadata(db, fullId, metadata);
+        } catch {
+            return createResponse('Error: Failed to write to database', { status: 500 });
+        }
+
+        waitUntil(endUpload(context, fullId, metadata));
+
+        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+    } catch (error) {
+        console.error('WebDAV upload error:', error.message);
+        return createResponse(`Error: WebDAV upload failed - ${error.message}`, { status: 500 });
+    }
+}
+
+
 // 自动切换渠道重试
 // 优化：用调度表消除重复 if/else，减少代码体积（影响冷启动解析时间）
 async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink) {
@@ -730,11 +797,12 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
         'TelegramNew':  (ctx, id, meta, link) => uploadFileToTelegram(ctx, id, meta, fileExt, fileName, fileType, link),
         'S3':           (ctx, id, meta, link) => uploadFileToS3(ctx, id, meta, link),
         'HuggingFace':  (ctx, id, meta, link) => uploadFileToHuggingFace(ctx, id, meta, link),
+        'WebDAV':       (ctx, id, meta, link) => uploadFileToWebDAV(ctx, id, meta, link),
         'Discord':      (ctx, id, meta, link) => uploadFileToDiscord(ctx, id, meta, link),
     };
 
     // 渠道列表（Discord 因为有 10MB 限制，放在最后尝试）
-    const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'Discord'];
+    const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord'];
     const errMessages = { [uploadChannel]: 'Error: ' + uploadChannel + err };
 
     // 先用原渠道再试一次（关闭服务端压缩）

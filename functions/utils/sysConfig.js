@@ -49,7 +49,8 @@ const DEFAULT_UPLOAD_CONFIG = {
     cfr2: { channels: [] },
     s3: { channels: [] },
     discord: { channels: [] },
-    huggingface: { channels: [] }
+    huggingface: { channels: [] },
+    webdav: { channels: [] }
 };
 
 const DEFAULT_SECURITY_CONFIG = {
@@ -129,14 +130,16 @@ function filterEnabledChannels(settings, channelGroups) {
 
 export async function fetchUploadConfig(env, context = null) {
     const settings = await fetchConfigWithFallback(env, 'upload', getUploadConfig, DEFAULT_UPLOAD_CONFIG);
-    filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface']);
+    settings.webdav = settings.webdav || { channels: [] };
+    filterEnabledChannels(settings, ['telegram', 'cfr2', 's3', 'discord', 'huggingface', 'webdav']);
 
-    // 根据容量限制过滤渠道（R2、S3、HuggingFace）
+    // 根据容量限制过滤渠道（R2、S3、HuggingFace、WebDAV）
     // 需要 context 来调用 getIndexMeta
     if (context) {
         settings.cfr2.channels = await filterChannelsByQuota(context, settings.cfr2.channels);
         settings.s3.channels = await filterChannelsByQuota(context, settings.s3.channels);
         settings.huggingface.channels = await filterChannelsByQuota(context, settings.huggingface.channels);
+        settings.webdav.channels = await filterChannelsByQuota(context, settings.webdav.channels);
     }
 
     return settings;

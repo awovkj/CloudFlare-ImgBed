@@ -8,6 +8,7 @@ const CHANNEL_MAP = {
     discord: 'Discord',
     huggingface: 'HuggingFace',
     external: 'External',
+    webdav: 'WebDAV',
 };
 
 export function resolveUploadChannel(channel) {

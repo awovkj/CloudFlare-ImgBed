@@ -304,7 +304,7 @@ export async function purgeCDNCache(env, cdnUrl, url, normalizedFolder) {
 export async function endUpload(context, fileId, metadata) {
     const { env, url } = context;
     const cdnUrl = `https://${url.hostname}/file/${fileId}`;
-    const normalizedFolder = (url.searchParams.get('uploadFolder') || '').replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+    const normalizedFolder = sanitizeUploadFolder(url.searchParams.get('uploadFolder') || '');
     await purgeCDNCache(env, cdnUrl, url, normalizedFolder);
     await addFileToIndex(context, fileId, metadata);
 }
@@ -359,7 +359,7 @@ export async function buildUniqueFileId(context, fileName, fileType = 'applicati
     const nameType = url.searchParams.get('uploadNameType') || 'default';
     const uploadFolder = url.searchParams.get('uploadFolder') || '';
     const normalizedFolder = uploadFolder
-        ? uploadFolder.replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '')
+        ? sanitizeUploadFolder(uploadFolder)
         : '';
 
     if (!isExtValid(fileExt)) {
