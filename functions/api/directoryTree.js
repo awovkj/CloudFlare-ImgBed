@@ -11,7 +11,8 @@ export async function onRequestGet(context) {
         return new Response('Unauthorized', { status: 401 });
     }
 
-    if (authResult.authType === 'user') {
+    // 非管理端登录（含未来新增的认证类型）都需检查目录建议开关
+    if (authResult.authType !== 'admin') {
         const pageConfig = await fetchPageConfig(env);
         const showDirSetting = pageConfig.config?.find((item) => item.id === 'showDirectorySuggestions');
         const showDirectorySuggestions = showDirSetting?.value ?? showDirSetting?.default ?? true;
@@ -31,7 +32,7 @@ export async function onRequestGet(context) {
         return new Response(JSON.stringify({ tree }), {
             headers: {
                 'Content-Type': 'application/json',
-                'Cache-Control': `public, max-age=${cacheTime}`,
+                'Cache-Control': `private, max-age=${cacheTime}`,
                 'Access-Control-Allow-Origin': '*'
             }
         });

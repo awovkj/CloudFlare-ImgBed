@@ -188,8 +188,8 @@ export async function onRequest(context) {
         const allowedDirStr = publicBrowse.allowedDir || '';
         let allowedDirs = allowedDirStr.split(',').map(d => d.trim()).filter(d => d);
 
-        // 获取请求的目录和搜索参数
-        let dir = url.searchParams.get('dir') || '';
+        // 获取请求的目录和搜索参数（清洗路径穿越/反斜杠）
+        let dir = (url.searchParams.get('dir') || '').replace(/\.\./g, '_').replace(/\\/g, '/').replace(/\/{2,}/g, '/');
         let search = url.searchParams.get('search') || '';
         if (search) {
             search = decodeURIComponent(search).trim().toLowerCase();

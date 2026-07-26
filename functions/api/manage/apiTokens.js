@@ -109,8 +109,8 @@ async function getApiTokens(db) {
     const settings = settingsStr ? JSON.parse(settingsStr) : {}
     const tokens = settings.apiTokens?.tokens || {}
     
-    // 返回时不包含实际token值，只返回基本信息
-    const tokenArray = Object.keys(tokens).map(id => {
+    // 返回时不包含实际token值，只返回基本信息；internal 类型（如 WebDAV 内部 token）不在列表中展示
+    const tokenArray = Object.keys(tokens).filter(id => tokens[id].type !== 'internal').map(id => {
         const token = tokens[id]
         return {
             id,
@@ -199,7 +199,7 @@ export async function createApiToken(db, name, permissions, owner, expiresAt = n
 }
 
 // 删除API Token
-async function deleteApiToken(db, tokenId) {
+export async function deleteApiToken(db, tokenId) {
     return await withSecurityConfigLock(async () => {
         const settingsStr = await db.get('manage@sysConfig@security')
         const settings = settingsStr ? JSON.parse(settingsStr) : {}

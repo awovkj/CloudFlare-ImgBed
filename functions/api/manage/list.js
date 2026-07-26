@@ -198,7 +198,8 @@ export async function onRequest(context) {
     } catch (error) {
         console.error('Error in list-indexed API:', error);
         return new Response(JSON.stringify({
-            error: 'Internal server error'
+            error: 'Internal server error',
+            message: error.message
         }), {
             status: 500,
             headers: { "Content-Type": "application/json", ...corsHeaders }

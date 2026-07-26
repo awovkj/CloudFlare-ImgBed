@@ -240,42 +240,62 @@ export function isTgChannel(imgRecord) {
 
 // 图片可访问性检查
 export async function returnWithCheck(context, imgRecord) {
-    const { request, env, url, securityConfig } = context;
+    const { url, securityConfig } = context;
     const whiteListMode = securityConfig.access.whiteListMode;
+    // ?from=admin 的预览必须通过管理端鉴权；不再信任可伪造的 Referer 头
+    const isAdminPreview = context.fileAccess?.isAdminPreview === true;
+    const adminAuthorized = context.fileAccess?.adminAuthResult?.authorized === true;
 
     const response = new Response('success', { status: 200 });
 
-    // Referer header equal to the dashboard page or upload page (排除公开图库页面的请求)
-    const referer = request.headers.get('Referer');
-    if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
-        //show the image
+    if (isAdminPreview && !adminAuthorized) {
+        return unauthorizedAdminPreviewResponse();
+    }
+
+    const record = imgRecord;
+    if (record.metadata === null) {
+        if (context.fileAccess) {
+            context.fileAccess.cacheControl = isAdminPreview ? FILE_CACHE_CONTROL.PRIVATE : FILE_CACHE_CONTROL.PUBLIC;
+        }
         return response;
     }
 
-    //check the record from kv
-    const record = imgRecord;
-    if (record.metadata === null) {
-    } else {
-        //if the record is not null, redirect to the image
-        if (record.metadata.ListType == "White") {
-            return response;
-        } else if (record.metadata.ListType == "Block") {
-            return await returnBlockImg(url);
-        } else if (record.metadata.Label == "adult") {
-            return await returnBlockImg(url);
+    // 已鉴权的管理端预览：可查看 Block/adult/白名单外文件，但响应仅私有缓存
+    if (isAdminPreview) {
+        if (context.fileAccess) {
+            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
         }
-        //check if the env variables WhiteList_Mode are set
-        if (whiteListMode) {
-            //if the env variables WhiteList_Mode are set, redirect to the image
-            return await returnWhiteListImg(url);
-        } else {
-            //if the env variables WhiteList_Mode are not set, redirect to the image
-            return response;
-        }
+        return response;
     }
 
-    // other cases
+    if (context.fileAccess) {
+        context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PUBLIC;
+    }
+
+    if (record.metadata.ListType == "White") {
+        return response;
+    } else if (record.metadata.ListType == "Block") {
+        return await returnBlockImg(url);
+    } else if (record.metadata.Label == "adult") {
+        return await returnBlockImg(url);
+    }
+
+    if (whiteListMode) {
+        return await returnWhiteListImg(url);
+    }
+
     return response;
+}
+
+function unauthorizedAdminPreviewResponse() {
+    return new Response('Admin authentication required', {
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {
+            'Content-Type': 'text/plain;charset=UTF-8',
+            'Cache-Control': FILE_CACHE_CONTROL.NO_STORE,
+        },
+    });
 }
 
 // 优化：使用 Cache API 缓存静态图片，避免每次都产生回环请求

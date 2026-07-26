@@ -1,6 +1,7 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { hashPassword } from '../../../utils/auth/passwordHash.js';
 import { destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
+import { createApiToken, deleteApiToken } from '../apiTokens.js';
 
 function sanitizeManagementSettings(settings) {
     const sanitized = JSON.parse(JSON.stringify(settings));
@@ -12,6 +13,12 @@ function sanitizeManagementSettings(settings) {
     delete musicPlayer.clearPassword;
     musicPlayer.passwordConfigured = passwordConfigured;
     sanitized.musicPlayer = musicPlayer;
+
+    // WebDAV internal token 不下发到前端
+    if (sanitized.webDAV) {
+        delete sanitized.webDAV.internalToken;
+        delete sanitized.webDAV.internalTokenId;
+    }
 
     return sanitized;
 }
@@ -47,9 +54,36 @@ export async function onRequest(context) {
         const newMusicPlayer = body.musicPlayer || {}
         const oldMusicPlayer = settings.musicPlayer || {}
         const oldPasswordHash = settings.musicPlayer?.passwordHash
+        const oldWebDAV = settings.webDAV || {}
         let musicPasswordChanged = false
 
         Object.assign(settings, body)
+
+        // WebDAV internal token 管理：token 不经前端往返，从旧配置继承并按开关维护生命周期
+        settings.webDAV = {
+            ...(body.webDAV || {}),
+            internalToken: oldWebDAV.internalToken || '',
+            internalTokenId: oldWebDAV.internalTokenId || '',
+        }
+        if (settings.webDAV.enabled && !settings.webDAV.internalToken) {
+            // 启用 WebDAV 且没有 token，创建一个 internal 类型的 API Token
+            const tokenResult = await createApiToken(
+                db,
+                'WebDAV Internal Token',
+                ['list', 'upload', 'delete'],
+                'system',
+                null,   // 不过期
+                false,  // 不自动删除
+                'internal'
+            )
+            settings.webDAV.internalToken = tokenResult.token
+            settings.webDAV.internalTokenId = tokenResult.id
+        } else if (!settings.webDAV.enabled && oldWebDAV.internalTokenId) {
+            // 禁用 WebDAV，删除 internal token
+            await deleteApiToken(db, oldWebDAV.internalTokenId)
+            settings.webDAV.internalToken = ''
+            settings.webDAV.internalTokenId = ''
+        }
         settings.musicPlayer = {
             ...oldMusicPlayer,
             ...newMusicPlayer,
@@ -118,6 +152,8 @@ export async function getOthersConfig(db, env) {
         password: kvWebDAV.password || '',
         uploadChannel: kvWebDAV.uploadChannel || '',
         channelName: kvWebDAV.channelName || '',
+        internalToken: kvWebDAV.internalToken || '',
+        internalTokenId: kvWebDAV.internalTokenId || '',
         fixed: false,
     }
 

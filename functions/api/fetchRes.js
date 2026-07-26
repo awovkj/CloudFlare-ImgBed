@@ -9,8 +9,12 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 function isBlockedHost(hostname) {
     const host = hostname.toLowerCase().replace(/^\[|\]$/g, ''); // 去掉 IPv6 方括号
 
-    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    if (host === 'localhost' || host === 'ip6-localhost' || host === 'ip6-loopback') return true;
+    if (host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return true;
     if (host === '0.0.0.0' || host === '::' || host === '::1') return true;
+
+    // 云元数据服务主机名（GCP 元数据可按域名访问，不只 169.254.169.254）
+    if (host === 'metadata.google.internal' || host === 'metadata.goog') return true;
 
     // IPv4 私有/保留段
     const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -23,11 +27,16 @@ function isBlockedHost(hostname) {
         if (a === 169 && b === 254) return true;            // 169.254.0.0/16 链路本地（含云元数据）
         if (a === 100 && b >= 64 && b <= 127) return true;  // 100.64.0.0/10 CGNAT
         if (a === 0) return true;                           // 0.0.0.0/8
+        if (a >= 224) return true;                          // 组播/保留段
     }
 
     // IPv6 唯一本地/链路本地
     if (host.startsWith('fc') || host.startsWith('fd')) return true; // fc00::/7
     if (host.startsWith('fe80')) return true;                        // 链路本地
+
+    // IPv4-mapped IPv6 (::ffff:a.b.c.d) 递归按 IPv4 规则检查
+    const mapped = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (mapped) return isBlockedHost(mapped[1]);
 
     return false;
 }
