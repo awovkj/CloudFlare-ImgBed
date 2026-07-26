@@ -24,3 +24,10 @@ node_modules
 .omc/
 .claude/
 .worktrees/
+
+# 可再生构建产物：预压缩文件与 source map（部署时由 .assetsignore 排除，仓库也不追踪）
+*.gz
+*.map
+
+# 未被引用的历史截图
+screenshot-home.png

@@ -1,5 +1,5 @@
 import { getDatabase } from '../../utils/databaseAdapter.js';
-import { filterAutoDeleteTokens } from '../../utils/tokenExpiration.js';
+import { filterAutoDeleteTokens } from '../../utils/auth/tokenExpiration.js';
 
 // 安全配置（含 API Token）的写入串行化。
 // KV 无原子 CAS，跨隔离实例的读-改-写竞态需 Durable Objects 才能彻底解决；

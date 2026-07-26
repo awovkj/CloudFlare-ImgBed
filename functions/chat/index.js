@@ -1,5 +1,5 @@
 import { fetchOthersConfig } from '../utils/sysConfig.js';
-import { userAuthCheck, UnauthorizedResponse } from '../utils/userAuth.js';
+import { userAuthCheck, UnauthorizedResponse } from '../utils/auth/userAuth.js';
 
 export async function onRequest(context) {
     const { request, env } = context;

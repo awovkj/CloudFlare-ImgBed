@@ -1,6 +1,6 @@
 import { readIndex } from '../../utils/indexManager.js';
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
-import { userAuthCheck } from '../../utils/userAuth.js';
+import { userAuthCheck } from '../../utils/auth/userAuth.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',

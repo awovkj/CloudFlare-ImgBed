@@ -1,5 +1,5 @@
 import { getDirectoryTree } from '../utils/indexManager';
-import { dualAuthCheck } from '../utils/dualAuth';
+import { dualAuthCheck } from '../utils/auth/dualAuth.js';
 import { fetchPageConfig } from '../utils/sysConfig';
 
 export async function onRequestGet(context) {

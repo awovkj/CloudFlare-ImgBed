@@ -1,5 +1,5 @@
 import { fetchOthersConfig, fetchUploadConfig } from '../../utils/sysConfig.js';
-import { userAuthCheck, UnauthorizedResponse } from '../../utils/userAuth.js';
+import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
 import { CHAT_DIRECTORY, CHAT_DIRECTORY_PREFIX, CHAT_RECORD_TYPE, CHAT_SOURCE_APP, CHAT_TEXT_PREFIX, createChatTextRecordId, isChatTransferRecord, listAllKeysByPrefix } from '../../utils/chat.js';
 import { getDatabase } from '../../utils/databaseAdapter.js';
 import { addFileToIndex, readIndex, batchRemoveFilesFromIndex } from '../../utils/indexManager.js';

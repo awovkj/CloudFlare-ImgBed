@@ -1,4 +1,4 @@
-import { dualAuthCheck } from '../utils/dualAuth.js';
+import { dualAuthCheck } from '../utils/auth/dualAuth.js';
 
 // 代理限制
 const FETCH_TIMEOUT_MS = 10000;              // 上游请求超时
