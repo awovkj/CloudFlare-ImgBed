@@ -47,6 +47,7 @@ import { onRequest as onManageQuotaRequest }   from '../functions/api/manage/quo
 import { onRequest as onManageCheckRequest }   from '../functions/api/manage/check.js';
 import { onRequest as onManageApiTokens }      from '../functions/api/manage/apiTokens.js';
 import { onRequest as onManageDeleteRequest }  from '../functions/api/manage/delete/[[path]].js';
+import { onRequest as onManageDeleteBatch }     from '../functions/api/manage/delete/batch.js';
 import { onRequest as onManageBlockRequest }   from '../functions/api/manage/block/[[path]].js';
 import { onRequest as onManageWhiteRequest }   from '../functions/api/manage/white/[[path]].js';
 import { onRequest as onManageMetadataRequest }from '../functions/api/manage/metadata/[[path]].js';
@@ -357,6 +358,7 @@ const STATIC_ROUTES = new Map([
     ['/api/manage/quota',                  apiManageChain(onManageQuotaRequest)],
     ['/api/manage/check',                  apiManageChain(onManageCheckRequest)],
     ['/api/manage/list',                   apiManageChain(onManageListRequest)],
+    ['/api/manage/delete/batch',           apiManageChain(onManageDeleteBatch)],
     ['/api/manage/apiTokens',              apiManageChain(onManageApiTokens)],
     ['/api/manage/tags/autocomplete',      apiManageChain(onManageTagsAutoRequest)],
     ['/api/manage/tags/batch',             apiManageChain(onManageTagsBatchRequest)],

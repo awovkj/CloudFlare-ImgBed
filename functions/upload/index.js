@@ -111,10 +111,9 @@ async function processFileUpload(context, formdata = null) {
 
     // 获取IP地址
     const uploadIp = getUploadIp(request);
-    // 优化：IP 地理位置查询涉及 2 次外部 HTTP 请求（美团 API），
-    // 但仅用于 metadata 记录，不影响上传逻辑。
+    // IP 地理位置查询走管理端可配置的自定义 API，仅用于 metadata 记录，不影响上传逻辑。
     // 使用 Promise 延迟求值，仅在构建 metadata 时才 await。
-    const ipAddressPromise = getIPAddress(uploadIp);
+    const ipAddressPromise = getIPAddress(context.env, uploadIp, context.securityConfig);
 
     // 获取上传文件夹路径
     let uploadFolder = url.searchParams.get('uploadFolder') || '';

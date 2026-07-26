@@ -58,7 +58,12 @@ const DEFAULT_SECURITY_CONFIG = {
         admin: { adminUsername: "", adminPassword: "" }
     },
     upload: {
-        moderate: { enabled: false, channel: "default", moderateContentApiKey: "", nsfwApiPath: "" }
+        moderate: { enabled: false, channel: "default", moderateContentApiKey: "", nsfwApiPath: "" },
+        ipQuery: {
+            enabled: false,
+            channel: "customApi",
+            customApi: { url: "", params: [{ key: "ip", value: "{ip}" }], responseFields: [] }
+        }
     },
     access: { allowedDomains: "", whiteListMode: false, sessionSecure: false, userSessionMaxAge: 14, adminSessionMaxAge: 14 }
 };
