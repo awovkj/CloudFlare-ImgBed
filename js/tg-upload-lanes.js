@@ -1,11 +1,13 @@
-﻿(function attachTgUploadLaneScheduler(global) {
+(function attachTgUploadLaneScheduler(global) {
   'use strict';
 
   const DEFAULT_LANE = '__tg_default__';
 
   // 每个渠道（车道）允许的并发上传数：>1 即开启多线程上传，不再局限于单线程。
   // 取值需兼顾 Telegram 限流（同一会话并发过高会触发 429，由后端重试退避兜底）。
-  const MAX_CONCURRENT_PER_LANE = 3;
+  // 提升到 5：配合后端更短的退避上限（4s/8s）与 3 次内层重试，可在命中 429 后快速恢复，
+  // 同时更大并发能填满带宽，缓解大文件上传中后段掉速问题。
+  const MAX_CONCURRENT_PER_LANE = 5;
 
   function normalizeName(value) {
     return typeof value === 'string' ? value.trim() : '';

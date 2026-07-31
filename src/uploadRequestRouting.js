@@ -67,15 +67,28 @@ export async function extractUploadId(request) {
  * Legacy chunk requests keep uploadId inside the same multipart body as the
  * binary chunk. Route those directly through the Worker so routing never
  * clones or parses the potentially large body.
+ *
+ * 性能优化：chunk 上传请求（chunked=true 且非 merge）始终在 Worker 处理。
+ * 原先同 uploadId 的 chunk 会路由到同一 DO 实例，而 DO 默认串行处理 fetch，
+ * 导致大文件多分片上传时被串行化，表现为初段快、几秒后掉速。
+ * Worker 无状态天然并发，每个 chunk 请求独立执行，KV 操作互不阻塞。
+ * DO 保留给 init/merge/cleanup 等 uploadId 级别操作（DO 无 CPU 时间限制，适合合并这类长任务）。
  */
 export function shouldRouteUploadToDurableObject(request, uploadId) {
+    const url = new URL(request.url);
+    const isChunked = url.searchParams.get('chunked') === 'true';
+    const isMerge = url.searchParams.get('merge') === 'true';
+
+    // chunk 上传请求（非 merge）：始终在 Worker 并发处理，解除单 DO 串行瓶颈
+    if (isChunked && !isMerge) {
+        return false;
+    }
+
     if (uploadId) {
         return true;
     }
 
-    const url = new URL(request.url);
-    const isChunkRequest = url.searchParams.get('chunked') === 'true';
-    return !isChunkRequest;
+    return !isChunked;
 }
 
 export function resolveUploadDurableObject(namespace, request, uploadId) {

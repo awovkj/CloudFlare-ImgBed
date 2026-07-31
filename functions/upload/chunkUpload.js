@@ -370,11 +370,21 @@ export async function handleChunkUpload(context) {
         // 立即保存分块记录和数据，设置过期时间
         const { usingD1 } = checkDatabaseConfig(env);
         const chunkTtlSeconds = getChunkRecordTtlSeconds(url);
-        await db.put(chunkKey, usingD1 ? '' : chunkData, {
+
+        // 性能优化：chunkData 的 KV 写入与 Telegram 上传无依赖关系，并行执行以隐藏 KV 写入延迟。
+        // chunkData 在内存中已通过 chunk.arrayBuffer() 获得，TG 上传直接使用内存数据，无需等待 KV 落盘。
+        const chunkDataWritePromise = db.put(chunkKey, usingD1 ? '' : chunkData, {
             metadata: initialChunkMetadata,
             expirationTtl: chunkTtlSeconds
         });
-        await updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context);
+
+        // manifest 更新为状态记录（非关键路径）：用 waitUntil 后台执行，不阻塞上传主流程。
+        // 失败时 updateUploadManifestChunk 内部已捕获异常，不影响请求。
+        if (waitUntil) {
+            waitUntil(updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context));
+        } else {
+            updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context).catch(() => {});
+        }
 
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
@@ -386,6 +396,10 @@ export async function handleChunkUpload(context) {
             uploadChannel,
             usingD1 ? chunkData : undefined
         );
+
+        // 确保 chunkData 写入完成：merge 阶段依赖 KV 中的 chunk 数据（纯 KV 模式下）。
+        // 通常 TG 上传耗时远大于 KV 写入，此处 await 几乎不会增加额外等待。
+        await chunkDataWritePromise;
 
         if (!uploadOutcome.success) {
             return createUploadJsonResponse({
@@ -990,7 +1004,7 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
             chunkFileName,
             chunkIndex,
             totalChunks, // 传入正确的totalChunks
-            5
+            3
         );
 
         if (!chunkUploadResult.success) {
@@ -1863,11 +1877,13 @@ function isTelegramRetryableError(error) {
 function calculateTelegramRetryDelayMs(error, attempt) {
     const retryAfterSeconds = Number(error?.retryAfter || 0);
     if (retryAfterSeconds > 0) {
-        return Math.min(retryAfterSeconds * 1000 + 150, 20000);
+        // 尊重 Telegram 的 retry-after，但上限收紧到 8s，避免单次退避过长拖垮整体吞吐
+        return Math.min(retryAfterSeconds * 1000 + 150, 8000);
     }
 
-    const exponentialBackoffMs = Math.min(800 * Math.pow(2, attempt), 10000);
-    const jitterMs = Math.floor(Math.random() * 300);
+    // 指数退避上限 4s + 较大 jitter（0~800ms），防止多个分片同步重试形成共振 429
+    const exponentialBackoffMs = Math.min(800 * Math.pow(2, attempt), 4000);
+    const jitterMs = Math.floor(Math.random() * 800);
     return exponentialBackoffMs + jitterMs;
 }
 
@@ -1880,8 +1896,9 @@ function buildTelegramChunkErrorMessage(error, chunkIndex, attempt, maxRetries) 
     return `Chunk ${chunkIndex + 1} upload attempt ${attempt}/${maxRetries} failed ${statusPrefix}${retryAfterPrefix}${message}`;
 }
 
-async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 5) {
+async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 3) {
     // 第一次上传不等待，只有失败重试时才等待
+    // 内层重试次数收紧到 3：配合更短的退避上限，单分片最长阻塞 ~5s，避免车道被 429 长时间拖住
     let lastError = null;
     
     for (let attempt = 0; attempt < maxRetries; attempt++) {
