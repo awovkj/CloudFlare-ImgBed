@@ -789,8 +789,9 @@ async function uploadFileToWebDAV(context, fullId, metadata, returnLink) {
 
 // 自动切换渠道重试
 // 优化：用调度表消除重复 if/else，减少代码体积（影响冷启动解析时间）
+// 优化：基于 uploadConfig 实际配置的渠道构建候选列表，跳过未配置渠道避免无效调用
 async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink) {
-    const { url } = context;
+    const { url, uploadConfig } = context;
 
     const RETRY_DISPATCHERS = {
         'CloudflareR2': (ctx, id, meta, link) => uploadFileToCloudflareR2(ctx, id, meta, link),
@@ -801,14 +802,27 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
         'Discord':      (ctx, id, meta, link) => uploadFileToDiscord(ctx, id, meta, link),
     };
 
-    // 渠道列表（Discord 因为有 10MB 限制，放在最后尝试）
-    const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord'];
+    // 基于 uploadConfig 构建已配置的渠道集合，未配置的渠道不参与重试
+    const configuredChannels = new Set();
+    if (uploadConfig) {
+        if (uploadConfig.cfr2?.channels?.length > 0) configuredChannels.add('CloudflareR2');
+        if (uploadConfig.telegram?.channels?.length > 0) configuredChannels.add('TelegramNew');
+        if (uploadConfig.s3?.channels?.length > 0) configuredChannels.add('S3');
+        if (uploadConfig.huggingface?.channels?.length > 0) configuredChannels.add('HuggingFace');
+        if (uploadConfig.webdav?.channels?.length > 0) configuredChannels.add('WebDAV');
+        if (uploadConfig.discord?.channels?.length > 0) configuredChannels.add('Discord');
+    }
+
+    // 渠道优先级（Discord 因 10MB 限制放最后）；仅保留已配置的渠道
+    const PREFERRED_ORDER = ['CloudflareR2', 'TelegramNew', 'S3', 'HuggingFace', 'WebDAV', 'Discord'];
+    const channelList = PREFERRED_ORDER.filter(ch => configuredChannels.has(ch));
+
     const errMessages = { [uploadChannel]: 'Error: ' + uploadChannel + err };
 
     // 先用原渠道再试一次（关闭服务端压缩）
     url.searchParams.set('serverCompress', 'false');
     const retryDispatcher = RETRY_DISPATCHERS[uploadChannel];
-    if (retryDispatcher) {
+    if (retryDispatcher && configuredChannels.has(uploadChannel)) {
         const retryRes = await retryDispatcher(context, fullId, metadata, returnLink);
         if (retryRes && retryRes.status === 200) {
             return retryRes;
@@ -818,7 +832,7 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
         }
     }
 
-    // 原渠道重试失败，切换到其他渠道
+    // 原渠道重试失败，切换到其他已配置渠道
     for (const channel of channelList) {
         if (channel === uploadChannel) continue;
         const dispatcher = RETRY_DISPATCHERS[channel];

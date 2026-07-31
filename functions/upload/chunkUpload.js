@@ -657,13 +657,17 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
             let multipartInfoData = null;
             let retryCount = 0;
             const maxRetries = 60;
-            const pollInterval = 500;
+            // 指数退避轮询：200ms 起步，每次 ×1.5，上限 1000ms
+            // 比 fixed 500ms 更快响应初始化完成，同时减少无效请求
+            let pollInterval = 200;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
                     await new Promise(resolve => setTimeout(resolve, pollInterval));
                     retryCount++;
+                    // 指数退避，上限 1000ms
+                    pollInterval = Math.min(pollInterval * 1.5, 1000);
                     if (retryCount % 10 === 0) {
                         console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                     }
@@ -793,13 +797,15 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
             let multipartInfoData = null;
             let retryCount = 0;
             const maxRetries = 60;
-            const pollInterval = 500;
+            // 指数退避轮询：200ms 起步，每次 ×1.5，上限 1000ms
+            let pollInterval = 200;
 
             while (!multipartInfoData && retryCount < maxRetries) {
                 multipartInfoData = await db.get(multipartKey);
                 if (!multipartInfoData) {
                     await new Promise(resolve => setTimeout(resolve, pollInterval));
                     retryCount++;
+                    pollInterval = Math.min(pollInterval * 1.5, 1000);
                     if (retryCount % 10 === 0) {
                         console.log(`S3 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                     }
@@ -1133,9 +1139,8 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
 
         results.push(...batchResults);
 
-        if (i + batchSize < chunksToRetry.length) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-        }
+        // 批次间不再固定 sleep 200ms：maxConcurrency 已通过 Promise.allSettled 控制并发，
+        // 上一批完成后立即处理下一批，减少大量失败块时的总重试耗时
     }
 
     const successCount = results.filter(r => r.success).length;

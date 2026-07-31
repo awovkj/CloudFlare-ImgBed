@@ -49,6 +49,12 @@ const INDEX_CHUNK_SIZE_KV = 5000; // KV 存储分块大小
 const KV_LIST_LIMIT = 1000; // 数据库列出批量大小
 const BATCH_SIZE = 10; // 批量处理大小
 const INDEX_MEMORY_CACHE_TTL_MS = 5000;
+// 单次合并的最大操作数：过大可能导致 Worker CPU 时间超限，过小则递归 fetch 开销大
+const MAX_OPERATION_COUNT = 200;
+// 操作日志 TTL：防止合并失败时操作记录永久残留占用存储
+const OPERATION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 天
+// 合并协作点间隔：每处理 N 条操作让出一次事件循环
+const MERGE_YIELD_INTERVAL = 50;
 
 let indexMemoryCache = {
     value: null,
@@ -403,8 +409,8 @@ export async function mergeOperationsToIndex(context, options = {}) {
                 operationsProcessed++;
                 processedOperationIds.push(operation.id);
 
-                // 增加协作点
-                if (operationsProcessed % 3 === 0) {
+                // 协作点：每 MERGE_YIELD_INTERVAL 条操作让出一次事件循环
+                if (operationsProcessed % MERGE_YIELD_INTERVAL === 0) {
                     await new Promise(resolve => setTimeout(resolve, 0));
                 }
                 
@@ -441,18 +447,30 @@ export async function mergeOperationsToIndex(context, options = {}) {
             await cleanupOperations(context, processedOperationIds);
         }
 
-        // 如果未处理完所有操作，调用 merge-operations API 递归处理
+        // 如果未处理完所有操作，异步触发后续合并（不阻塞当前请求）
         if (!isALLOperations) {
             console.log('There are remaining operations, will process them in subsequent calls.');
 
             try {
-                const headers = new Headers(request.headers);
                 const originUrl = new URL(request.url);
                 const mergeUrl = `${originUrl.protocol}//${originUrl.host}/api/manage/list?action=merge-operations`;
+                const headers = new Headers(request.headers);
 
-                await fetch(mergeUrl, { method: 'GET', headers });
+                // 用 waitUntil 异步触发，不阻塞当前响应
+                if (context.waitUntil) {
+                    context.waitUntil(
+                        fetch(mergeUrl, { method: 'GET', headers }).catch(e =>
+                            console.warn('Failed to trigger subsequent merge:', e.message)
+                        )
+                    );
+                } else {
+                    // 无 waitUntil 时退化为 fire-and-forget
+                    fetch(mergeUrl, { method: 'GET', headers }).catch(e =>
+                        console.warn('Failed to trigger subsequent merge:', e.message)
+                    );
+                }
             } catch (e) {
-                console.warn('Failed to trigger subsequent merge:', e.message);
+                console.warn('Failed to schedule subsequent merge:', e.message);
             }
 
             // 即使还有未处理的操作，当前批次已成功合并并保存，返回 success
@@ -1039,7 +1057,11 @@ async function recordOperation(context, type, data) {
     };
     
     const operationKey = OPERATION_KEY_PREFIX + operationId;
-    await db.put(operationKey, JSON.stringify(operation));
+    // 写入 TTL：操作日志在合并后会被主动删除，但若合并异常导致残留，
+    // TTL 确保其最终被清理，避免无限累积占用存储
+    await db.put(operationKey, JSON.stringify(operation), {
+        expirationTtl: OPERATION_TTL_SECONDS
+    });
 
     noPendingOpsUntil = 0;
 
@@ -1058,12 +1080,29 @@ async function getAllPendingOperations(context, lastOperationId = null) {
     const operations = [];
 
     let cursor = null;
-    const MAX_OPERATION_COUNT = 30; // 单次获取的最大操作数量
+    // 使用模块级常量 MAX_OPERATION_COUNT
     let isALL = true; // 是否获取了所有操作
     let operationCount = 0;
 
     try {
-        // 先收集待处理操作的键名（受 MAX_OPERATION_COUNT 限制）
+        // 快速探测：用 limit:1 检查是否有新操作，避免无操作时全量扫描
+        // 操作键按字典序存储，list 返回的是升序；lastOperationId 之前的都是已处理的
+        const probeResponse = await db.list({
+            prefix: OPERATION_KEY_PREFIX,
+            limit: 1
+        });
+
+        // 若没有任何操作记录，直接返回
+        if (!probeResponse.keys || probeResponse.keys.length === 0) {
+            return { operations: [], isAll: true };
+        }
+
+        // 若唯一一条记录 <= lastOperationId，说明没有新操作
+        if (lastOperationId && probeResponse.keys[0].name <= OPERATION_KEY_PREFIX + lastOperationId) {
+            return { operations: [], isAll: true };
+        }
+
+        // 有新操作，进行完整扫描收集待处理操作的键名（受 MAX_OPERATION_COUNT 限制）
         const pendingKeys = [];
         while (true) {
             const response = await db.list({
