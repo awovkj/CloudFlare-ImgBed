@@ -1648,7 +1648,8 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const db = getDatabase(env);
 
     const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile 下载限制 20MB，预留 4MB 余量)
-    const MAX_CONCURRENT_UPLOADS = 3;
+    // 并发上传数：TG Bot API 对单 bot 有速率限制，5 是兼顾速度与限流的平衡值
+    const MAX_CONCURRENT_UPLOADS = 5;
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
@@ -1838,9 +1839,8 @@ async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, 
 
         try {
             const tgAPI = new TelegramAPI(tgBotToken, tgProxyUrl);
-            const caption = `Part ${chunkIndex + 1}/${totalChunks}`;
-
-            const response = await tgAPI.sendFile(chunkBlob, tgChatId, 'sendDocument', 'document', caption, chunkFileName);
+            // 不传 caption：减少请求体大小和 TG 服务端处理开销，分片信息已通过文件名 .partNNN 体现
+            const response = await tgAPI.sendFile(chunkBlob, tgChatId, 'sendDocument', 'document', '', chunkFileName);
             if (!response.ok) {
                 throw new Error(response.description || 'Telegram API error');
             }

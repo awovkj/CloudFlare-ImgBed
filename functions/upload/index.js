@@ -459,38 +459,46 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
     try {
         const response = await telegramAPI.sendFile(formdata.get('file'), tgChatId, sendFunction.url, sendFunction.type);
         const fileInfo = telegramAPI.getFileInfo(response);
-        const filePath = await telegramAPI.getFilePath(fileInfo.file_id);
         const id = fileInfo.file_id;
         // 更新FileSize
         metadata.FileSize = (fileInfo.file_size / 1024 / 1024).toFixed(2);
 
-        // 将响应返回给客户端
+        // 写入基本 metadata 到数据库（同步，确保文件记录立即可查）
+        metadata.Channel = "TelegramNew";
+        metadata.ChannelName = tgChannel.name;
+        metadata.TgFileId = id;
+        metadata.TgChatId = tgChatId;
+        metadata.TgBotToken = tgBotToken;
+        if (tgProxyUrl) {
+            metadata.TgProxyUrl = tgProxyUrl;
+        }
+        await persistMetadata(db, fullId, metadata);
+
+        // 立即返回响应给客户端，不再等待 getFilePath + moderateContent
         res = createUploadJsonResponse(buildUploadResults(context, returnLink));
 
-
-        // 图像审查（使用代理域名或官方域名）
-        const moderateDomain = tgProxyUrl ? `https://${tgProxyUrl}` : 'https://api.telegram.org';
-        const moderateUrl = `${moderateDomain}/file/bot${tgBotToken}/${filePath}`;
-        metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
-
-        // 更新metadata，写入KV数据库
-        try {
-            metadata.Channel = "TelegramNew";
-            metadata.ChannelName = tgChannel.name;
-
-            metadata.TgFileId = id;
-            metadata.TgChatId = tgChatId;
-            metadata.TgBotToken = tgBotToken;
-            // 保存代理域名配置
-            if (tgProxyUrl) {
-                metadata.TgProxyUrl = tgProxyUrl;
+        // 图像审查异步执行：getFilePath 仅用于给审查模块提供 URL，
+        // 不阻塞上传响应。审查完成后更新 metadata.Label 并重新持久化。
+        waitUntil((async () => {
+            try {
+                const moderateEnabled = context.securityConfig?.upload?.moderate?.enabled;
+                if (!moderateEnabled) {
+                    // 审查未启用，无需调用 getFilePath
+                    return;
+                }
+                const filePath = await telegramAPI.getFilePath(id);
+                if (!filePath) return;
+                const moderateDomain = tgProxyUrl ? `https://${tgProxyUrl}` : 'https://api.telegram.org';
+                const moderateUrl = `${moderateDomain}/file/bot${tgBotToken}/${filePath}`;
+                metadata.Label = await moderateContent(env, moderateUrl, context.securityConfig);
+                // 审查结果写入后重新持久化（更新 Label 字段）
+                await persistMetadata(db, fullId, metadata);
+            } catch (moderateError) {
+                console.error('Async moderate failed:', moderateError.message);
             }
-            await persistMetadata(db, fullId, metadata);
-        } catch (error) {
-            res = createResponse('Error: Failed to write to KV database', { status: 500 });
-        }
+        })());
 
-        // 结束上传
+        // 异步结束上传（CDN 缓存清理 + 索引更新）
         waitUntil(endUpload(context, fullId, metadata));
 
     } catch (error) {
