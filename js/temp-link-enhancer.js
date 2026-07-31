@@ -264,6 +264,14 @@
             '  background:var(--el-bg-color,#fff);color:var(--el-text-color-regular,#606266);',
             '}',
             '.temp-link-modal-btn:hover { border-color:var(--el-color-primary,#409eff);color:var(--el-color-primary,#409eff); }',
+            // 上传成功列表项的临时链接按钮
+            '.upload-temp-link-btn {',
+            '  display:inline-flex;align-items:center;justify-content:center;',
+            '  width:32px;height:32px;border:none;border-radius:8px;cursor:pointer;',
+            '  background:transparent;color:var(--el-color-warning,#e6a23c);',
+            '  transition:background 0.2s ease;font-family:inherit;',
+            '}',
+            '.upload-temp-link-btn:hover { background:var(--el-fill-color-light,#f5f7fa); }',
         ].join('\n');
         document.head.appendChild(style);
     }
@@ -296,6 +304,56 @@
 
         actionsEl.appendChild(btn);
         actionsEl.setAttribute(INJECTED_FLAG, 'true');
+    }
+
+    // 上传成功列表项注入临时链接按钮
+    function injectTempLinkButtonIntoUploadItem(itemEl) {
+        if (!itemEl || itemEl.hasAttribute(INJECTED_FLAG)) return;
+
+        // 仅在文件上传成功后注入：检查是否有 URL 显示区或预览链接
+        var previewEl = itemEl.querySelector('.upload-list-item-preview');
+        var urlAreaEl = itemEl.querySelector('.upload-list-item-url');
+        if (!previewEl) return;
+
+        // 从预览链接的 href 提取 fileId
+        var href = previewEl.getAttribute('href') || '';
+        var fileId = parseFileIdFromUrl(href);
+        if (!fileId) return;
+
+        // 找到操作按钮容器
+        var actionsEl = itemEl.querySelector('.upload-list-item-action');
+        if (!actionsEl) return;
+
+        // 防重复注入
+        if (actionsEl.querySelector('.upload-temp-link-btn')) return;
+
+        var btn = document.createElement('button');
+        btn.className = 'modern-file-action-btn upload-temp-link-btn';
+        btn.title = '生成临时链接';
+        btn.innerHTML = '<span style="font-size:14px;">⏱</span>';
+        btn.style.cssText = 'color:var(--el-color-warning,#e6a23c);';
+
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            // 重新提取 fileId（href 可能在上传完成后才设置）
+            var currentHref = previewEl.getAttribute('href') || '';
+            var currentFileId = parseFileIdFromUrl(currentHref);
+            if (!currentFileId) {
+                showToast('文件尚未上传成功，请稍后重试', 'warning');
+                return;
+            }
+            openTempLinkModal(currentFileId);
+        });
+
+        // 插入到操作容器的第一个按钮之前（复制按钮之前），保持"临时链接 | 复制 | 删除"顺序
+        var firstBtn = actionsEl.querySelector('.modern-file-action-btn');
+        if (firstBtn) {
+            actionsEl.insertBefore(btn, firstBtn);
+        } else {
+            actionsEl.appendChild(btn);
+        }
+        itemEl.setAttribute(INJECTED_FLAG, 'true');
     }
 
     // ==================== 模态框 ====================
@@ -594,6 +652,13 @@
         var dialog = findDetailDialog(document);
         if (dialog) {
             injectTempLinkButton(dialog);
+        }
+        // 扫描上传成功列表项，注入临时链接按钮
+        // 注：未成功上传的项（无 fileId）会被 injectTempLinkButtonIntoUploadItem 内部跳过，
+        // 上传成功后 href 被设置，MutationObserver 触发时即可完成注入
+        var uploadItems = document.querySelectorAll('.upload-list-item');
+        for (var i = 0; i < uploadItems.length; i++) {
+            injectTempLinkButtonIntoUploadItem(uploadItems[i]);
         }
     }
 
