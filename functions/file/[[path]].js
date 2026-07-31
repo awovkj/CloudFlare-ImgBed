@@ -1,8 +1,8 @@
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { fetchSecurityConfig } from "../utils/sysConfig";
-import { TelegramAPI } from "../utils/storage/telegramAPI";
-import { DiscordAPI } from "../utils/storage/discordAPI";
-import { HuggingFaceAPI } from "../utils/storage/huggingfaceAPI";
+import { TelegramAPI } from "../utils/telegramAPI.js";
+import { DiscordAPI } from "../utils/discordAPI.js";
+import { HuggingFaceAPI } from "../utils/huggingfaceAPI.js";
 import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
