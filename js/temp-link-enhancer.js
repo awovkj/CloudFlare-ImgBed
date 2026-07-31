@@ -390,6 +390,45 @@
         });
     }
 
+    function buildTempLinkUrl(link) {
+        return global.location.origin + '/temp/' + link.token;
+    }
+
+    function createTempLinkItem(link) {
+        var item = document.createElement('div');
+        item.className = 'temp-link-item';
+
+        var now = Date.now();
+        var expired = link.expiresAt && now > link.expiresAt;
+        var remaining = expired ? '已过期' : formatRemainingTime(link.expiresAt);
+
+        item.innerHTML =
+            '<div class="temp-link-item-url">' +
+            '  <input class="temp-link-item-url-input" type="text" readonly value="' + escapeHtml(buildTempLinkUrl(link)) + '">' +
+            '  <button class="temp-link-copy-btn">复制</button>' +
+            '  <button class="temp-link-destroy-btn">销毁</button>' +
+            '</div>' +
+            '<div class="temp-link-item-meta">' +
+            '  <span>⏱ 时长: ' + (link.duration || '-') + '</span>' +
+            '  <span>📅 过期: ' + formatExpiresTime(link.expiresAt) + '</span>' +
+            '  <span>' + (expired ? '⚠ 已过期' : '⏳ 剩余: ' + remaining) + '</span>' +
+            '</div>';
+
+        // 复制按钮
+        item.querySelector('.temp-link-copy-btn').addEventListener('click', function () {
+            var input = item.querySelector('.temp-link-item-url-input');
+            input.select();
+            copyToClipboard(input.value);
+        });
+
+        // 销毁按钮
+        item.querySelector('.temp-link-destroy-btn').addEventListener('click', function () {
+            handleDestroyTempLink(link, item);
+        });
+
+        return item;
+    }
+
     function renderTempLinks(links, overlay) {
         var container = overlay.querySelector('#temp-link-list-container');
         if (!links.length) {
@@ -402,45 +441,38 @@
         list.className = 'temp-link-list';
 
         links.forEach(function (link) {
-            var item = document.createElement('div');
-            item.className = 'temp-link-item';
-
-            var now = Date.now();
-            var expired = link.expiresAt && now > link.expiresAt;
-            var remaining = expired ? '已过期' : formatRemainingTime(link.expiresAt);
-
-            item.innerHTML =
-                '<div class="temp-link-item-url">' +
-                '  <input class="temp-link-item-url-input" type="text" readonly value="' + escapeHtml(buildTempLinkUrl(link)) + '">' +
-                '  <button class="temp-link-copy-btn">复制</button>' +
-                '  <button class="temp-link-destroy-btn">销毁</button>' +
-                '</div>' +
-                '<div class="temp-link-item-meta">' +
-                '  <span>⏱ 时长: ' + (link.duration || '-') + '</span>' +
-                '  <span>📅 过期: ' + formatExpiresTime(link.expiresAt) + '</span>' +
-                '  <span>' + (expired ? '⚠ 已过期' : '⏳ 剩余: ' + remaining) + '</span>' +
-                '</div>';
-
-            // 复制按钮
-            item.querySelector('.temp-link-copy-btn').addEventListener('click', function () {
-                var input = item.querySelector('.temp-link-item-url-input');
-                input.select();
-                copyToClipboard(input.value);
-            });
-
-            // 销毁按钮
-            item.querySelector('.temp-link-destroy-btn').addEventListener('click', function () {
-                handleDestroyTempLink(link, item);
-            });
-
-            list.appendChild(item);
+            list.appendChild(createTempLinkItem(link));
         });
 
         container.appendChild(list);
     }
 
-    function buildTempLinkUrl(link) {
-        return global.location.origin + '/temp/' + link.token;
+    // 将新创建的链接直接插入到列表顶部，避免依赖 GET 查询
+    // （KV 为最终一致性，写入后立即 list 可能查不到新 key）
+    function prependTempLink(link, overlay) {
+        if (!link || !link.token) return;
+        var container = overlay.querySelector('#temp-link-list-container');
+        // 清除空状态/加载中提示
+        var empty = container.querySelector('.temp-link-empty');
+        if (empty) empty.remove();
+        var loading = container.querySelector('.temp-link-loading');
+        if (loading) loading.remove();
+
+        // 查找或创建列表容器
+        var list = container.querySelector('.temp-link-list');
+        if (!list) {
+            list = document.createElement('div');
+            list.className = 'temp-link-list';
+            container.appendChild(list);
+        }
+
+        // 去重：若已存在同 token 的项则先移除
+        var existing = list.querySelector('[data-token="' + escapeAttr(link.token) + '"]');
+        if (existing) existing.remove();
+
+        var item = createTempLinkItem(link);
+        item.setAttribute('data-token', link.token);
+        list.insertBefore(item, list.firstChild);
     }
 
     function handleCreateTempLink(fileId, overlay) {
@@ -458,9 +490,10 @@
         }).then(function (res) {
             return res.json();
         }).then(function (data) {
-            if (data && data.success) {
+            if (data && data.success && data.link) {
                 showToast('临时链接已生成', 'success');
-                loadTempLinks(fileId, overlay);
+                // 直接用返回数据更新 UI，不依赖 GET 重新查询
+                prependTempLink(data.link, overlay);
             } else {
                 showToast('生成失败：' + (data && data.message || '未知错误'), 'error');
             }
@@ -537,6 +570,11 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    // 转义用于属性值（data-token="..."），token 仅含十六进制，但仍做防护
+    function escapeAttr(str) {
+        return String(str).replace(/"/g, '&quot;').replace(/&/g, '&amp;');
     }
 
     // ==================== MutationObserver ====================
