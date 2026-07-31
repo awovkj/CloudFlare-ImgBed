@@ -134,6 +134,53 @@ export async function initializeChunkedUpload(context) {
             ...(fileFingerprint !== undefined ? { fileFingerprint } : {})
         };
 
+        // 断点续传：基于 fileFingerprint 查找未过期的已有会话
+        // 客户端中断后重新初始化时，若文件指纹匹配且会话未过期，复用原 uploadId 并返回已完成分片列表
+        if (fileFingerprint) {
+            const fingerprintIndexKey = `upload_fp_${fileFingerprint}`;
+            try {
+                const existingUploadId = await db.get(fingerprintIndexKey);
+                if (existingUploadId) {
+                    const existingSessionData = await db.get(`upload_session_${existingUploadId}`);
+                    if (existingSessionData) {
+                        const existingSession = JSON.parse(existingSessionData);
+                        // 校验会话未过期且参数匹配（防止不同文件撞指纹）
+                        if (Date.now() < existingSession.expiresAt
+                            && existingSession.totalChunks === totalChunks
+                            && existingSession.originalFileName === originalFileName) {
+                            // 复用已有会话，查询已完成分片
+                            const chunkStatuses = await getChunkUploadStatusesWithManifest(env, existingUploadId, totalChunks);
+                            const uploadedChunks = chunkStatuses
+                                .filter(c => c.status === 'completed')
+                                .map(c => c.index);
+                            const failedChunks = chunkStatuses
+                                .filter(c => ['failed', 'timeout', 'retry_failed'].includes(c.status))
+                                .map(c => c.index);
+
+                            return createUploadJsonResponse({
+                                success: true,
+                                uploadId: existingUploadId,
+                                resumed: true,
+                                message: 'Resumed existing upload session',
+                                sessionInfo: {
+                                    uploadId: existingUploadId,
+                                    originalFileName,
+                                    totalChunks,
+                                    uploadChannel: existingSession.uploadChannel,
+                                    channelName: existingSession.channelName
+                                },
+                                uploadedChunks,
+                                failedChunks
+                            });
+                        }
+                    }
+                }
+            } catch (resumeError) {
+                // 断点续传查询失败时降级为创建新会话，不阻塞上传
+                console.warn('Failed to resume upload session:', resumeError.message);
+            }
+        }
+
         // 生成唯一的 uploadId
         const timestamp = Date.now();
         const uploadId = `upload_${crypto.randomUUID()}`;
@@ -190,6 +237,14 @@ export async function initializeChunkedUpload(context) {
         await db.put(sessionKey, JSON.stringify(sessionInfo), {
             expirationTtl: sessionTtlSeconds
         });
+
+        // 写入指纹索引（用于断点续传查找），TTL 与会话一致
+        if (fileFingerprint) {
+            const fingerprintIndexKey = `upload_fp_${fileFingerprint}`;
+            await db.put(fingerprintIndexKey, uploadId, {
+                expirationTtl: sessionTtlSeconds
+            });
+        }
 
         await putUploadManifest(env, uploadId, {
             schemaVersion: 2,

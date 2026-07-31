@@ -580,8 +580,12 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
 
 async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
     const maxWaitMs = options.maxWaitMs || INITIAL_SETTLE_WAIT_MS;
-    const intervalMs = options.intervalMs || SETTLE_INTERVAL_MS;
+    const baseIntervalMs = options.intervalMs || SETTLE_INTERVAL_MS;
     const startedAt = Date.now();
+
+    // 自适应轮询：首次快速检测（baseIntervalMs/2），逐步增长到 baseIntervalMs
+    // 分片通常在客户端并发上传，完成时间接近，快速首次检测能更早发现完成状态
+    let currentInterval = Math.max(baseIntervalMs / 2, 200);
 
     let statuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
     while (Date.now() - startedAt < maxWaitMs) {
@@ -591,7 +595,9 @@ async function waitForChunksToSettle(env, uploadId, totalChunks, options = {}) {
             return statuses;
         }
 
-        await new Promise(resolve => setTimeout(resolve, intervalMs));
+        await new Promise(resolve => setTimeout(resolve, currentInterval));
+        // 逐步增长轮询间隔至上限，减少高频轮询开销
+        currentInterval = Math.min(currentInterval * 1.3, baseIntervalMs);
         statuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
     }
 
