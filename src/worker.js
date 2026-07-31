@@ -21,6 +21,9 @@ import { checkDatabaseConfig } from '../functions/utils/middleware.js';
 // file
 import { onRequest as onFileRequest }           from '../functions/file/[[path]].js';
 
+// temp (公开临时链接访问端点)
+import { onRequest as onTempLinkAccessRequest } from '../functions/temp/[[path]].js';
+
 // api 顶层
 // login.js / huggingface/*.js 只导出 onRequestPost（Pages Functions HTTP 方法约定）
 import { onRequestPost as onLoginPost }         from '../functions/api/login.js';
@@ -56,6 +59,7 @@ import { onRequest as onManageRenameRequest }  from '../functions/api/manage/ren
 import { onRequest as onManageTagsRequest }    from '../functions/api/manage/tags/[[path]].js';
 import { onRequest as onManageTagsAutoRequest }from '../functions/api/manage/tags/autocomplete.js';
 import { onRequest as onManageTagsBatchRequest}from '../functions/api/manage/tags/batch.js';
+import { onRequest as onManageTempLinkRequest } from '../functions/api/manage/temp-link/[[path]].js';
 import { onRequest as onManageSysConfigSecurity } from '../functions/api/manage/sysConfig/security.js';
 import { onRequest as onManageSysConfigUpload }   from '../functions/api/manage/sysConfig/upload.js';
 import { onRequest as onManageSysConfigOthers }   from '../functions/api/manage/sysConfig/others.js';
@@ -343,6 +347,9 @@ function apiManageChain(handler) {
 // /file 路由中间件链
 const fileMiddleware = [checkDatabaseConfig, onFileRequest];
 
+// /temp 路由中间件链（公开临时链接访问端点，无需鉴权）
+const tempAccessMiddleware = [checkDatabaseConfig, onTempLinkAccessRequest];
+
 // /dav 路由中间件链
 const davMiddleware = [checkDatabaseConfig, onDavRequest];
 
@@ -415,6 +422,7 @@ const STATIC_ROUTES = new Map([
 const DYNAMIC_ROUTES = [
     { pattern: /^\/upload(\/.*)?$/,               params: () => ({}),                          middlewares: uploadMiddleware },
     { pattern: /^\/file\/(.+)$/,                  params: (m) => ({ path: m[1] }),              middlewares: fileMiddleware },
+    { pattern: /^\/temp\/(.+)$/,                  params: (m) => ({ path: m[1] }),              middlewares: tempAccessMiddleware },
     { pattern: /^\/random(\/.*)?$/,               params: () => ({}),                          middlewares: randomMiddleware },
     { pattern: /^\/dav(\/.*)?$/,                  params: (m) => ({ path: m[1]?.slice(1) ?? '' }), middlewares: davMiddleware },
     // 动态 manage 路由（含 path 参数）
@@ -425,6 +433,7 @@ const DYNAMIC_ROUTES = [
     { pattern: /^\/api\/manage\/move\/(.+)$/,     params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageMoveRequest) },
     { pattern: /^\/api\/manage\/rename\/(.+)$/,   params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageRenameRequest) },
     { pattern: /^\/api\/manage\/tags\/(.+)$/,     params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageTagsRequest) },
+    { pattern: /^\/api\/manage\/temp-link\/(.+)$/, params: (m) => ({ path: m[1] }), middlewares: apiManageChain(onManageTempLinkRequest) },
 ];
 
 // ── Worker 主入口 ─────────────────────────────────────────────────────────────

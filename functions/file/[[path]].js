@@ -1,4 +1,4 @@
-﻿import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { fetchSecurityConfig } from "../utils/sysConfig";
 import { TelegramAPI } from "../utils/storage/telegramAPI";
 import { DiscordAPI } from "../utils/storage/discordAPI";
@@ -55,9 +55,13 @@ export async function onRequest(context) {  // Contents of context object
         db.getWithMetadata(fileId),
     ]);
     context.securityConfig = securityConfig;
-    context.fileAccess = fileAccess;
+    // 若上游已设置 fileAccess（如 /temp/{token} 转发），保留之；否则使用本次构建的结果
+    if (!context.fileAccess) {
+        context.fileAccess = fileAccess;
+    }
 
-    if (!isDomainAllowed(context)) {
+    // 临时链接访问跳过域名白名单检查（链接本身即是访问凭据）
+    if (!context.skipDomainCheck && !isDomainAllowed(context)) {
         return await returnBlockImg(url);
     }
 

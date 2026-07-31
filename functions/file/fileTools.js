@@ -245,6 +245,8 @@ export async function returnWithCheck(context, imgRecord) {
     // ?from=admin 的预览必须通过管理端鉴权；不再信任可伪造的 Referer 头
     const isAdminPreview = context.fileAccess?.isAdminPreview === true;
     const adminAuthorized = context.fileAccess?.adminAuthResult?.authorized === true;
+    // 临时链接访问：通过 /temp/{token} 转发而来，绕过 block/white/白名单模式检查
+    const isTempLinkAccess = context.fileAccess?.isTempLinkAccess === true;
 
     const response = new Response('success', { status: 200 });
 
@@ -255,7 +257,7 @@ export async function returnWithCheck(context, imgRecord) {
     const record = imgRecord;
     if (record.metadata === null) {
         if (context.fileAccess) {
-            context.fileAccess.cacheControl = isAdminPreview ? FILE_CACHE_CONTROL.PRIVATE : FILE_CACHE_CONTROL.PUBLIC;
+            context.fileAccess.cacheControl = (isAdminPreview || isTempLinkAccess) ? FILE_CACHE_CONTROL.PUBLIC : FILE_CACHE_CONTROL.PUBLIC;
         }
         return response;
     }
@@ -264,6 +266,14 @@ export async function returnWithCheck(context, imgRecord) {
     if (isAdminPreview) {
         if (context.fileAccess) {
             context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
+        }
+        return response;
+    }
+
+    // 临时链接访问：绕过 block/white/白名单模式检查，使用公开缓存
+    if (isTempLinkAccess) {
+        if (context.fileAccess) {
+            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PUBLIC;
         }
         return response;
     }
