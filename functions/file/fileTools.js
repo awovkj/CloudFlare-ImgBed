@@ -240,7 +240,7 @@ export function isTgChannel(imgRecord) {
 
 // 图片可访问性检查
 export async function returnWithCheck(context, imgRecord) {
-    const { url, securityConfig } = context;
+    const { url, securityConfig, request } = context;
     const whiteListMode = securityConfig.access.whiteListMode;
     // ?from=admin 的预览必须通过管理端鉴权；不再信任可伪造的 Referer 头
     const isAdminPreview = context.fileAccess?.isAdminPreview === true;
@@ -251,6 +251,16 @@ export async function returnWithCheck(context, imgRecord) {
     const response = new Response('success', { status: 200 });
 
     if (isAdminPreview && !adminAuthorized) {
+        // 兜底：会话鉴权未通过时（如 cookie 未随 <img> 请求发送、会话过期、
+        // 或 authenticate 内部 fetchSecurityConfig 抛错被吞掉），
+        // 回退到同源 Referer 校验，保证后台预览可用，同时排除公开图库页面。
+        const referer = request?.headers.get('Referer');
+        if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
+            if (context.fileAccess) {
+                context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
+            }
+            return response;
+        }
         return unauthorizedAdminPreviewResponse();
     }
 

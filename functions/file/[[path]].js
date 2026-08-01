@@ -201,12 +201,18 @@ async function buildFileAccessContext(context) {
     };
 
     if (fileAccess.isAdminPreview) {
-        fileAccess.adminAuthResult = await authenticate({
-            env,
-            request,
-            requiredPermission: 'manage',
-            authScope: AUTH_SCOPE.ADMIN,
-        });
+        try {
+            fileAccess.adminAuthResult = await authenticate({
+                env,
+                request,
+                requiredPermission: 'manage',
+                authScope: AUTH_SCOPE.ADMIN,
+            });
+        } catch (e) {
+            // 鉴权异常（如安全配置加载失败）不应阻断文件请求；
+            // 标记为未授权，交由 returnWithCheck 的同源 Referer 兜底处理。
+            console.error('Admin preview auth failed:', e.message);
+        }
     }
 
     return fileAccess;
