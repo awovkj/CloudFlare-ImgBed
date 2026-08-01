@@ -3,8 +3,10 @@
 ## Goal
 
 Run only the large-file merge phase in the ordinary Worker instead of the
-Upload Durable Object (DO). Keep the existing DO path for initialization,
-chunk requests that carry a routable ID, cleanup, and ordinary uploads.
+Upload Durable Object (DO). Keep the existing routing behavior for all
+non-merge uploads, including initialization, cleanup, ordinary uploads, and
+chunk requests (which may already fall back to the Worker when their ID exists
+only inside a legacy multipart body).
 
 The existing merge protocol remains unchanged: a merge may return
 `409 MERGE_IN_PROGRESS` or `409 CHUNKS_INCOMPLETE`, schedule background work
@@ -49,26 +51,34 @@ operation, persists metadata, and cleans up chunk state.
 
 ## Proposed Routing
 
-Change only `shouldRouteUploadToDurableObject` in
-`src/uploadRequestRouting.js`:
+Change `src/uploadRequestRouting.js` and the local fallback bookkeeping in
+`src/worker.js`:
 
-1. Parse the request URL.
+1. Parse the request URL in `shouldRouteUploadToDurableObject`.
 2. If both `chunked=true` and `merge=true`, return `false` immediately.
 3. Otherwise retain the current upload-ID and legacy-chunk rules.
+4. Before any direct Worker fallback, extract the query/header route ID with
+   `extractRouteUploadId(request)` and store it in `context.data.routeUploadId`.
+   A query/header mismatch must return the existing `400` response, including
+   when the DO binding is disabled or unavailable.
 
 The merge check must occur before the `if (uploadId)` branch. This is required
 because the compatibility extractor may obtain an ID from the small multipart
 body before the route decision is made.
 
-No changes are needed in `src/worker.js`: a null DO stub already invokes the
-existing `onUploadRequest(context)` fallback. The DO class and Wrangler
-bindings remain intact for all other request types.
+The existing null-DO branch still invokes `onUploadRequest(context)`, but the
+route ID must be copied into the shared context first. This preserves
+`handleChunkMerge`'s body-vs-route ID check when a multipart body cannot be
+safely cloned (missing, invalid, or oversized `Content-Length`). The DO class
+and Wrangler bindings remain intact for all other request types.
 
 ## Request and State Flow
 
-1. The Worker validates the HTTP method and performs the existing upload ID
-   extraction. Safe small merge forms may be cloned for ID consistency checks;
-   the original request body remains available to the upload handler.
+1. The Worker validates the HTTP method, extracts the query/header route ID,
+   and stores it in the shared context. A mismatch is rejected before any
+   body is consumed. Safe small merge forms may then be cloned for additional
+   body-ID consistency checks; the original request body remains available to
+   the upload handler.
 2. The route helper returns no DO stub for the merge request.
 3. `onUploadRequest` parses the original form body and calls
    `handleChunkMerge`.
@@ -80,9 +90,10 @@ bindings remain intact for all other request types.
    existing terminal success/failure status. Successful completion performs
    the existing provider merge, metadata persistence, and cleanup.
 
-Query/header/body upload-ID mismatch validation remains enabled. It protects
-callers that provide multiple IDs even though a valid merge is ultimately
-handled by the Worker.
+Query/header/body upload-ID mismatch validation remains enabled, including
+when `Content-Length` is missing, invalid, or above the safe clone limit. The
+route ID is placed in the local context so `handleChunkMerge` can reject a
+body ID that differs from it without sending the request to the DO.
 
 ## Error Handling and Compatibility
 
@@ -116,6 +127,9 @@ Update `test/upload-durable-object-routing.test.js` with focused assertions:
 - A merge compatibility form whose body contains an upload ID also bypasses
   the DO after extraction, while the original body remains unused by the
   routing helper.
+- A merge form with an unsafe `Content-Length` and a body ID different from
+  its query/header ID still returns the existing `400` mismatch response when
+  handled locally.
 - Initialization, ordinary uploads, and existing routable chunk requests
   retain their current DO behavior.
 - Existing mismatch, unsafe-body, method-guard, and DO-dispatch tests remain
@@ -129,6 +143,8 @@ regressions introduced by this change.
 
 - Every `chunked=true&merge=true` request reaches the ordinary Worker handler
   without a call to `env.UPLOAD_DO`.
+- Local handling retains the existing query/header/body upload-ID mismatch
+  protection for both safe and unsafe multipart bodies.
 - Non-merge upload behavior is unchanged.
 - Existing `409`/`waitUntil`/polling behavior and response formats remain
   compatible.
