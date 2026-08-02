@@ -173,6 +173,10 @@ describe('chunk merge 409 recovery', () => {
     const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
     assert.doesNotMatch(source, /finalizeMergeInBackground\(/);
     assert.doesNotMatch(source, /MERGE_BACKGROUND_MAX_ATTEMPTS/);
+    assert.match(source, /retryFailedChunks\(/);
+    assert.match(source, /maxRetries:\s*1/);
+    assert.match(source, /retryTimeout:\s*MERGE_RETRY_TIMEOUT_MS/);
+    assert.match(source, /failedChunks\.slice\(0, MERGE_RETRY_BATCH_SIZE\)/);
   });
 
   it('requires current ownership before publishing success or deleting chunks', () => {

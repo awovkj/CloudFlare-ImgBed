@@ -1,6 +1,6 @@
 /* ========== 分块合并处理 ========== */
 import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink, sanitizeUploadFolder } from './uploadTools';
-import { getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload';
+import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
@@ -24,6 +24,8 @@ const INITIAL_SETTLE_WAIT_MS = 30000;
 const SETTLE_INTERVAL_MS = 500;
 const FINAL_PENDING_GRACE_MS = 5000;
 const MERGE_PENDING_RETRY_AFTER_MS = 1000;
+const MERGE_RETRY_TIMEOUT_MS = 12000;
+const MERGE_RETRY_BATCH_SIZE = 2;
 
 function summarizeChunkStatuses(chunkStatuses) {
     return chunkStatuses.reduce((acc, chunk) => {
@@ -556,13 +558,30 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         // 单次请求不做长时间重试。由客户端下一次 POST 重新检查，
         // 保证每个请求的等待预算低于前端超时。
         if (failedChunks.length > 0) {
-            return {
-                success: false,
-                code: 'CHUNKS_INCOMPLETE',
-                error: `Waiting to retry ${failedChunks.length} failed chunks on the next merge request`,
-                retryAfterMs: MERGE_PENDING_RETRY_AFTER_MS,
-                statusSummary: summarizeChunkStatuses(chunkStatuses)
-            };
+            const retryBatch = failedChunks.slice(0, MERGE_RETRY_BATCH_SIZE);
+            console.log(`Retrying ${retryBatch.length}/${failedChunks.length} failed chunks within the current request budget`);
+            await retryFailedChunks(context, retryBatch, uploadChannel, {
+                maxRetries: 1,
+                retryTimeout: MERGE_RETRY_TIMEOUT_MS,
+                maxConcurrency: MERGE_RETRY_BATCH_SIZE,
+                batchSize: MERGE_RETRY_BATCH_SIZE
+            });
+
+            chunkStatuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);
+            completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
+            processingChunks = chunkStatuses.filter(isChunkStillProcessing);
+            failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
+            terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
+
+            if (completedChunks.length !== totalChunks && terminalFailedChunks.length === 0) {
+                return {
+                    success: false,
+                    code: processingChunks.length > 0 ? 'MERGE_IN_PROGRESS' : 'CHUNKS_INCOMPLETE',
+                    error: `Waiting for remaining chunks after a bounded retry. Status: ${JSON.stringify(summarizeChunkStatuses(chunkStatuses))}`,
+                    retryAfterMs: MERGE_PENDING_RETRY_AFTER_MS,
+                    statusSummary: summarizeChunkStatuses(chunkStatuses)
+                };
+            }
         }
 
         // 最终检查是否所有分块都完成
