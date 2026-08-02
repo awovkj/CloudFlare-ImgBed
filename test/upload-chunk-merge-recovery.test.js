@@ -169,6 +169,27 @@ describe('chunk merge 409 recovery', () => {
     assert.match(source, /buildWaitingForChunksPatch\([\s\S]*mergeError: error\.message/);
   });
 
+  it('keeps retries client-driven instead of relying on a long waitUntil loop', () => {
+    const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
+    assert.doesNotMatch(source, /finalizeMergeInBackground\(/);
+    assert.doesNotMatch(source, /MERGE_BACKGROUND_MAX_ATTEMPTS/);
+  });
+
+  it('requires current ownership before publishing success or deleting chunks', () => {
+    const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
+    const successFunction = source.indexOf('async function persistMergeSuccess(');
+    const ownerCheck = source.indexOf('verifyMergeOwnership(', successFunction);
+    const sessionCommit = source.indexOf("status: 'merge_success'", ownerCheck);
+    const commitVerification = source.indexOf("committedSession?.status !== 'merge_success'", sessionCommit);
+    const receiptWrite = source.indexOf('persistMergeSuccessReceipt(', commitVerification);
+    const cleanup = source.indexOf('cleanupChunkData(', receiptWrite);
+    assert.ok(ownerCheck >= 0);
+    assert.ok(sessionCommit > ownerCheck);
+    assert.ok(commitVerification > sessionCommit);
+    assert.ok(receiptWrite > commitVerification);
+    assert.ok(cleanup > receiptWrite);
+  });
+
   it('persists a success receipt before cleanup and keeps the session for idempotent polling', () => {
     const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
     const receiptWrite = source.indexOf('persistMergeSuccessReceipt(');

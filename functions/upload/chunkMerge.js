@@ -1,6 +1,6 @@
 /* ========== 分块合并处理 ========== */
 import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink, sanitizeUploadFolder } from './uploadTools';
-import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload';
+import { getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
@@ -21,13 +21,9 @@ import {
 } from './mergeSuccessReceipt.js';
 
 const INITIAL_SETTLE_WAIT_MS = 30000;
-const RETRY_SETTLE_WAIT_MS = 45000;
-const CHAT_INITIAL_SETTLE_WAIT_MS = 120000;
-const CHAT_RETRY_SETTLE_WAIT_MS = 180000;
 const SETTLE_INTERVAL_MS = 500;
 const FINAL_PENDING_GRACE_MS = 5000;
 const MERGE_PENDING_RETRY_AFTER_MS = 1000;
-const MERGE_BACKGROUND_MAX_ATTEMPTS = 5;
 
 function summarizeChunkStatuses(chunkStatuses) {
     return chunkStatuses.reduce((acc, chunk) => {
@@ -73,6 +69,13 @@ async function claimMergeLease(env, uploadId, leasePatch, options = {}) {
         if (options.required) throw error;
         return false;
     }
+}
+
+async function verifyMergeOwnership(env, uploadId, mergeJobId) {
+    const sessionInfo = await getUploadSessionInfo(env, uploadId);
+    return sessionInfo?.status === 'merging'
+        && sessionInfo?.mergeJobId === mergeJobId
+        && classifyMergeSession(sessionInfo, Date.now()).kind === 'active';
 }
 
 async function getMergeSuccessReceipt(env, uploadId) {
@@ -164,9 +167,13 @@ function startMergeHeartbeat(env, uploadId, mergeJobId) {
 async function persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, rawMergeResult) {
     const { env } = context;
 
-    // The receipt is the monotonic source of truth. If this write fails, do not
-    // delete chunks or claim success because the client could not recover it.
-    await persistMergeSuccessReceipt(env, uploadId, rawMergeResult, mergeJobId);
+    if (!await verifyMergeOwnership(env, uploadId, mergeJobId)) {
+        const existingReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
+        if (existingReceipt?.mergeResult) {
+            return enrichMergeResultWithPublicUrl(context, existingReceipt.mergeResult);
+        }
+        throw new Error('Merge ownership was lost before success could be committed');
+    }
 
     const sessionPersisted = await updateUploadSessionStatus(env, uploadId, {
         status: 'merge_success',
@@ -180,17 +187,27 @@ async function persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, r
     });
 
     if (!sessionPersisted) {
-        console.warn(`Merge success receipt persisted for ${uploadId}, but session status was not updated`);
+        const existingReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
+        if (existingReceipt?.mergeResult) {
+            return enrichMergeResultWithPublicUrl(context, existingReceipt.mergeResult);
+        }
+        throw new Error('Merge ownership was lost while committing success');
     }
 
+    const committedSession = await getUploadSessionInfo(env, uploadId);
+    if (committedSession?.status !== 'merge_success'
+        || committedSession?.mergeJobId !== mergeJobId
+        || !committedSession?.mergeResult) {
+        throw new Error('Merge success commit could not be verified');
+    }
+
+    // Publish the canonical result only after the owner-scoped session commit
+    // has been re-read successfully. Never clean up an unverified commit.
+    await persistMergeSuccessReceipt(env, uploadId, committedSession.mergeResult, mergeJobId);
+
     await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
-    return enrichMergeResultWithPublicUrl(context, rawMergeResult);
+    return enrichMergeResultWithPublicUrl(context, committedSession.mergeResult);
 }
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 
 async function enrichMergeResultWithPublicUrl(context, mergeResult) {
     if (!Array.isArray(mergeResult) || mergeResult.length === 0 || !mergeResult[0]?.src) {
@@ -373,7 +390,7 @@ export async function handleChunkMerge(context) {
 
 // 开始合并处理
 async function startMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel, mergeJobId) {
-    const { env, waitUntil } = context;
+    const { env } = context;
     const stopHeartbeat = startMergeHeartbeat(env, uploadId, mergeJobId);
 
     try {
@@ -398,8 +415,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             totalChunks,
             originalFileName,
             originalFileType,
-            uploadChannel,
-            { background: false }
+            uploadChannel
         );
 
         if (result.success) {
@@ -424,16 +440,18 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
                 required: true
             });
 
-            if (transitioned) {
-                waitUntil(finalizeMergeInBackground(context, {
+            if (!transitioned) {
+                const existingReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
+                if (existingReceipt?.mergeResult) {
+                    return createMergeSuccessResponse(context, existingReceipt.mergeResult);
+                }
+                return createPendingMergeResponse(
                     uploadId,
-                    totalChunks,
-                    originalFileName,
-                    originalFileType,
-                    uploadChannel,
-                    mergeJobId,
-                    initialRetryAfterMs: retryAfterMs
-                }));
+                    'MERGE_IN_PROGRESS',
+                    'Merge ownership changed before retry state was saved',
+                    retryAfterMs,
+                    result.statusSummary || {}
+                );
             }
 
             return createPendingMergeResponse(
@@ -477,165 +495,8 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
     }
 }
 
-async function finalizeMergeInBackground(context, params) {
-    const {
-        uploadId,
-        totalChunks,
-        originalFileName,
-        originalFileType,
-        uploadChannel,
-        mergeJobId,
-        initialRetryAfterMs
-    } = params;
-    const { env } = context;
-
-    let retryAfterMs = initialRetryAfterMs || MERGE_PENDING_RETRY_AFTER_MS;
-
-    for (let attempt = 1; attempt <= MERGE_BACKGROUND_MAX_ATTEMPTS; attempt++) {
-        try {
-            const currentSession = await getUploadSessionInfo(env, uploadId);
-            if (!currentSession) {
-                return;
-            }
-
-            if (currentSession.status !== 'waiting_chunks' || currentSession.mergeJobId !== mergeJobId) {
-                return;
-            }
-
-            await sleep(retryAfterMs);
-
-            const beforeClaim = await getUploadSessionInfo(env, uploadId);
-            if (!beforeClaim || beforeClaim.status !== 'waiting_chunks' || beforeClaim.mergeJobId !== mergeJobId) {
-                return;
-            }
-
-            const claimed = await claimMergeLease(
-                env,
-                uploadId,
-                buildMergeLeasePatch(mergeJobId, Date.now(), { mergeBackgroundAttempt: attempt }),
-                {
-                    expectedJobId: mergeJobId,
-                    allowedStatuses: ['waiting_chunks'],
-                    required: true
-                }
-            );
-            if (!claimed) return;
-
-            const stopHeartbeat = startMergeHeartbeat(env, uploadId, mergeJobId);
-            let result;
-            try {
-                result = await handleChannelBasedMerge(
-                    context,
-                    uploadId,
-                    totalChunks,
-                    originalFileName,
-                    originalFileType,
-                    uploadChannel,
-                    { background: true }
-                );
-            } finally {
-                await stopHeartbeat();
-            }
-
-            const latestSession = await getUploadSessionInfo(env, uploadId);
-            if (!latestSession || latestSession.status !== 'merging' || latestSession.mergeJobId !== mergeJobId) {
-                return;
-            }
-
-            if (result.success) {
-                await persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, result.result);
-                return;
-            }
-
-            if (result.code === 'MERGE_IN_PROGRESS' || result.code === 'CHUNKS_INCOMPLETE') {
-                retryAfterMs = result.retryAfterMs || MERGE_PENDING_RETRY_AFTER_MS;
-
-                await updateUploadSessionStatus(env, uploadId, buildWaitingForChunksPatch(mergeJobId, Date.now(), retryAfterMs, {
-                    mergeLastPendingAt: Date.now(),
-                    mergeLastStatusSummary: result.statusSummary || {},
-                    mergeBackgroundAttempt: attempt
-                }), {
-                    expectedJobId: mergeJobId,
-                    allowedStatuses: ['merging'],
-                    required: true
-                });
-
-                continue;
-            }
-
-            throw new Error(result.error || 'Background merge failed');
-        } catch (error) {
-            const successReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
-            if (successReceipt?.mergeResult) {
-                return;
-            }
-            const latestSession = await getUploadSessionInfo(env, uploadId);
-            if (!latestSession
-                || !['waiting_chunks', 'merging'].includes(latestSession.status)
-                || latestSession.mergeJobId !== mergeJobId) {
-                return;
-            }
-
-            const finalAttempt = attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS;
-            if (isPotentiallyCommittedMergeError(error)) {
-                await preservePotentialMergeSuccess(env, uploadId, mergeJobId, error, {
-                    mergeBackgroundAttempt: attempt
-                });
-                retryAfterMs = MERGE_PENDING_RETRY_AFTER_MS;
-                continue;
-            }
-            const retryPatch = buildWaitingForChunksPatch(
-                mergeJobId,
-                Date.now(),
-                MERGE_PENDING_RETRY_AFTER_MS,
-                {
-                    mergeBackgroundError: error.message,
-                    mergeBackgroundErrorAt: Date.now(),
-                    mergeBackgroundAttempt: attempt
-                }
-            );
-            await updateUploadSessionStatus(env, uploadId, finalAttempt ? {
-                ...retryPatch,
-                status: 'merge_failed',
-                mergeLeaseUntil: 0,
-                mergeProtectedUntil: 0,
-                mergeFailedAt: Date.now(),
-                mergeError: error.message
-            } : {
-                ...retryPatch,
-                mergeFailedAt: undefined,
-                mergeError: undefined
-            }, {
-                expectedJobId: mergeJobId,
-                allowedStatuses: ['waiting_chunks', 'merging']
-            });
-            if (finalAttempt) {
-                return;
-            }
-            retryAfterMs = MERGE_PENDING_RETRY_AFTER_MS;
-            continue;
-        }
-    }
-
-    const successReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
-    if (successReceipt?.mergeResult) return;
-    await updateUploadSessionStatus(env, uploadId, {
-        status: 'merge_failed',
-        mergeBackgroundError: `Background merge exceeded max attempts (${MERGE_BACKGROUND_MAX_ATTEMPTS})`,
-        mergeBackgroundErrorAt: Date.now(),
-        mergeFailedAt: Date.now(),
-        mergeError: `Background merge exceeded max attempts (${MERGE_BACKGROUND_MAX_ATTEMPTS})`,
-        mergeBackgroundAttempt: MERGE_BACKGROUND_MAX_ATTEMPTS,
-        mergeLeaseUntil: 0,
-        mergeProtectedUntil: 0
-    }, {
-        expectedJobId: mergeJobId,
-        allowedStatuses: ['waiting_chunks', 'merging']
-    });
-}
-
 // 基于渠道的合并处理
-async function handleChannelBasedMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel, options = {}) {
+async function handleChannelBasedMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel) {
     const { request, env, url } = context;
 
     try {
@@ -663,13 +524,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             applyChatTransferMetadata(metadata, 'file');
         }
 
-        const initialSettleWaitMs = options.background
-            ? (isChatUpload ? CHAT_INITIAL_SETTLE_WAIT_MS : INITIAL_SETTLE_WAIT_MS)
-            : INITIAL_SETTLE_WAIT_MS;
-        const retrySettleWaitMs = options.background
-            ? (isChatUpload ? CHAT_RETRY_SETTLE_WAIT_MS : RETRY_SETTLE_WAIT_MS)
-            : 0;
-
+        const initialSettleWaitMs = INITIAL_SETTLE_WAIT_MS;
         let chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
             maxWaitMs: initialSettleWaitMs,
             intervalMs: SETTLE_INTERVAL_MS
@@ -697,30 +552,16 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
-        // 如果有失败的分块，尝试重试
-        if (failedChunks.length > 0 && !options.background) {
+        // 单次请求不做长时间重试。由客户端下一次 POST 重新检查，
+        // 保证每个请求的等待预算低于前端超时。
+        if (failedChunks.length > 0) {
             return {
                 success: false,
                 code: 'CHUNKS_INCOMPLETE',
-                error: `Waiting to retry ${failedChunks.length} failed chunks in the background`,
+                error: `Waiting to retry ${failedChunks.length} failed chunks on the next merge request`,
                 retryAfterMs: MERGE_PENDING_RETRY_AFTER_MS,
                 statusSummary: summarizeChunkStatuses(chunkStatuses)
             };
-        }
-
-        if (failedChunks.length > 0) {
-            console.log(`Retrying ${failedChunks.length} failed chunks...`);
-            // 同步重试（await）
-            await retryFailedChunks(context, failedChunks, uploadChannel);
-
-            chunkStatuses = await waitForChunksToSettle(env, uploadId, totalChunks, {
-                maxWaitMs: retrySettleWaitMs,
-                intervalMs: SETTLE_INTERVAL_MS
-            });
-            completedChunks = chunkStatuses.filter(chunk => chunk.status === 'completed');
-            processingChunks = chunkStatuses.filter(isChunkStillProcessing);
-            failedChunks = chunkStatuses.filter(isChunkRetryableFailure);
-            terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
         // 最终检查是否所有分块都完成
