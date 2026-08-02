@@ -69,11 +69,17 @@ export async function extractUploadId(request) {
  * clones or parses the potentially large body.
  */
 export function shouldRouteUploadToDurableObject(request, uploadId) {
+    const url = new URL(request.url);
+    const isChunkMergeRequest = url.searchParams.get('chunked') === 'true'
+        && url.searchParams.get('merge') === 'true';
+    if (isChunkMergeRequest) {
+        return false;
+    }
+
     if (uploadId) {
         return true;
     }
 
-    const url = new URL(request.url);
     const isChunkRequest = url.searchParams.get('chunked') === 'true';
     return !isChunkRequest;
 }

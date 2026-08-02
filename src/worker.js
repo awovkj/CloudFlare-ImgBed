@@ -9,6 +9,7 @@ import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkS
 import {
     createRouteUploadIdMismatchResponse,
     dispatchUploadToDurableObject,
+    extractRouteUploadId,
     extractUploadId,
     getUploadRequestMethodRejection,
     isRouteUploadIdMismatchError,
@@ -297,6 +298,16 @@ async function forwardToUploadDO(context) {
     const methodRejection = getUploadRequestMethodRejection(request);
     if (methodRejection) {
         return methodRejection;
+    }
+
+    try {
+        context.data ??= {};
+        context.data.routeUploadId = extractRouteUploadId(request);
+    } catch (error) {
+        if (isRouteUploadIdMismatchError(error)) {
+            return createRouteUploadIdMismatchResponse(error);
+        }
+        throw error;
     }
 
     // fallback：绑定不存在 或 手动禁用
