@@ -163,6 +163,12 @@ describe('chunk merge 409 recovery', () => {
     assert.equal(puts[0].options.expirationTtl, 3600);
   });
 
+  it('does not turn a missing success receipt into a terminal merge failure', () => {
+    const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
+    assert.match(source, /isPotentiallyCommittedMergeError\(/);
+    assert.match(source, /buildWaitingForChunksPatch\([\s\S]*mergeError: error\.message/);
+  });
+
   it('persists a success receipt before cleanup and keeps the session for idempotent polling', () => {
     const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
     const receiptWrite = source.indexOf('persistMergeSuccessReceipt(');

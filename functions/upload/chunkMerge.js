@@ -101,6 +101,28 @@ function createPendingMergeResponse(uploadId, code, message, retryAfterMs, statu
     });
 }
 
+function isPotentiallyCommittedMergeError(error) {
+    return /merge failed:.*(multipart|already|complete|upload id|not found)/i.test(error?.message || '');
+}
+
+async function preservePotentialMergeSuccess(env, uploadId, mergeJobId, error, options = {}) {
+    await updateUploadSessionStatus(env, uploadId, buildWaitingForChunksPatch(
+        mergeJobId,
+        Date.now(),
+        MERGE_PENDING_RETRY_AFTER_MS,
+        {
+            mergeBackgroundError: error.message,
+            mergeBackgroundErrorAt: Date.now(),
+            mergeError: error.message,
+            mergeNeedsReconciliation: true,
+            ...options
+        }
+    ), {
+        expectedJobId: mergeJobId,
+        allowedStatuses: ['merging', 'waiting_chunks']
+    });
+}
+
 function startMergeHeartbeat(env, uploadId, mergeJobId) {
     let stopped = false;
     let timer = null;
@@ -431,6 +453,15 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
         if (successReceipt?.mergeResult) {
             return createMergeSuccessResponse(context, successReceipt.mergeResult);
         }
+        if (isPotentiallyCommittedMergeError(error)) {
+            await preservePotentialMergeSuccess(env, uploadId, mergeJobId, error);
+            return createPendingMergeResponse(
+                uploadId,
+                'MERGE_IN_PROGRESS',
+                'Merge completion is being reconciled',
+                MERGE_PENDING_RETRY_AFTER_MS
+            );
+        }
         await updateUploadSessionStatus(env, uploadId, {
             status: 'merge_failed',
             mergeFailedAt: Date.now(),
@@ -546,6 +577,13 @@ async function finalizeMergeInBackground(context, params) {
             }
 
             const finalAttempt = attempt >= MERGE_BACKGROUND_MAX_ATTEMPTS;
+            if (isPotentiallyCommittedMergeError(error)) {
+                await preservePotentialMergeSuccess(env, uploadId, mergeJobId, error, {
+                    mergeBackgroundAttempt: attempt
+                });
+                retryAfterMs = MERGE_PENDING_RETRY_AFTER_MS;
+                continue;
+            }
             const retryPatch = buildWaitingForChunksPatch(
                 mergeJobId,
                 Date.now(),
