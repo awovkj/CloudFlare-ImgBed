@@ -9,6 +9,7 @@ import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
+import { isCleanupProtectedByMerge } from './chunkMergeState.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
@@ -146,6 +147,7 @@ export async function initializeChunkedUpload(context) {
                         const existingSession = JSON.parse(existingSessionData);
                         // 校验会话未过期且参数匹配（防止不同文件撞指纹）
                         if (Date.now() < existingSession.expiresAt
+                            && !['merge_success', 'merge_failed'].includes(existingSession.status)
                             && existingSession.totalChunks === totalChunks
                             && existingSession.originalFileName === originalFileName) {
                             // 复用已有会话，查询已完成分片
@@ -1574,11 +1576,8 @@ async function isCleanupBlockedByActiveMerge(env, uploadId) {
         }
 
         const sessionInfo = JSON.parse(sessionData);
-        const isMerging = sessionInfo.status === 'merging' || sessionInfo.status === 'waiting_chunks';
-        const isProtectionWindowActive = sessionInfo.mergeProtectedUntil && Date.now() < sessionInfo.mergeProtectedUntil;
-
         return {
-            blocked: isMerging && isProtectionWindowActive,
+            blocked: isCleanupProtectedByMerge(sessionInfo, Date.now()),
             sessionInfo
         };
     } catch (error) {
