@@ -274,6 +274,7 @@ export async function handleChunkMerge(context) {
         }
 
         const sessionInfo = JSON.parse(sessionData);
+        const sessionRevision = Number(sessionInfo.revision || 0);
         const now = Date.now();
 
         // 如果后台合并已经成功，直接返回保存的结果（供前端轮询拿到结果）
@@ -362,7 +363,7 @@ export async function handleChunkMerge(context) {
             mergeStartedAt: Date.now(),
             mergeLastStatusSummary: initialStatusSummary
         }), {
-            expectedRevision: sessionInfo.revision,
+            expectedRevision: sessionRevision,
             required: true
         });
 
