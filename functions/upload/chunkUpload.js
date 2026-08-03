@@ -77,6 +77,16 @@ export async function updateUploadManifestChunk(env, uploadId, chunkIndex, patch
 
         const key = String(chunkIndex);
         manifest.chunks = manifest.chunks || {};
+        const existingChunk = manifest.chunks[key];
+        // 防止 waitUntil 延迟写入的 'uploading' 状态覆盖已写入的 'completed' 终态。
+        // 'completed' 是终态，不应被回退为 'uploading'/'retrying' 等中间态。
+        if (existingChunk
+            && existingChunk.status === 'completed'
+            && patch.status
+            && patch.status !== 'completed') {
+            console.warn(`Skipping manifest update for chunk ${chunkIndex}: cannot regress 'completed' to '${patch.status}'`);
+            return manifest;
+        }
         manifest.chunks[key] = {
             ...(manifest.chunks[key] || {}),
             ...patch,
@@ -380,13 +390,10 @@ export async function handleChunkUpload(context) {
             expirationTtl: chunkTtlSeconds
         });
 
-        // manifest 更新为状态记录（非关键路径）：用 waitUntil 后台执行，不阻塞上传主流程。
-        // 失败时 updateUploadManifestChunk 内部已捕获异常，不影响请求。
-        if (waitUntil) {
-            waitUntil(updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context));
-        } else {
-            updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context).catch(() => {});
-        }
+        // manifest 'uploading' 状态更新：与 TG 上传并行执行，但在返回前 await 完成。
+        // 不能用 waitUntil 后台执行——否则延迟写入会覆盖后续 'completed' manifest 条目，
+        // 导致 merge 阶段看到过时的 'uploading' 状态而返回 409。
+        const manifestUploadWritePromise = updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context);
 
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
@@ -399,9 +406,10 @@ export async function handleChunkUpload(context) {
             usingD1 ? chunkData : undefined
         );
 
-        // 确保 chunkData 写入完成：merge 阶段依赖 KV 中的 chunk 数据（纯 KV 模式下）。
+        // 确保 chunkData 和 manifest 写入完成：merge 阶段依赖 KV 中的 chunk 数据（纯 KV 模式下）。
         // 通常 TG 上传耗时远大于 KV 写入，此处 await 几乎不会增加额外等待。
         await chunkDataWritePromise;
+        await manifestUploadWritePromise;
 
         if (!uploadOutcome.success) {
             return createUploadJsonResponse({
@@ -1539,9 +1547,13 @@ export async function getChunkUploadStatusesWithManifest(env, uploadId, totalChu
         }
 
         const manifestStatus = manifestChunk.status || recordStatus.status;
+        // chunk record 是按分片独立写入的（无并发覆盖问题），比 manifest 更可靠。
+        // 当 record 已是 'completed'（终态）时，不应被 manifest 中过时的非 'completed'
+        // 状态覆盖——后者可能因 waitUntil 延迟写入或 manifest 并发读写丢失而被回退为 'uploading'。
+        const recordCompleted = recordStatus.status === 'completed';
         const shouldPreferManifest = manifestStatus === 'completed'
             || ['missing', 'error', 'unknown'].includes(recordStatus.status)
-            || Number(manifestChunk.updatedAt || 0) >= Number(recordStatus.uploadTime || recordStatus.uploadStartTime || 0);
+            || (!recordCompleted && Number(manifestChunk.updatedAt || 0) >= Number(recordStatus.uploadTime || recordStatus.uploadStartTime || 0));
 
         if (!shouldPreferManifest) {
             return recordStatus;
