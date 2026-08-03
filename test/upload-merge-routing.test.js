@@ -22,7 +22,7 @@ function createNamespace() {
 }
 
 describe('merge upload routing', () => {
-  it('keeps every chunk merge request in the Worker regardless of uploadId source', async () => {
+  it('routes chunk merge requests to the Durable Object when uploadId is available', async () => {
     const queryRequest = new Request(
       'https://example.com/upload?chunked=true&merge=true&uploadId=query-id',
       { method: 'POST' },
@@ -39,13 +39,23 @@ describe('merge upload routing', () => {
       { method: 'POST', headers: { 'Content-Length': '256' }, body },
     );
 
-    for (const request of [queryRequest, headerRequest, bodyRequest]) {
+    const cases = [
+      [queryRequest, 'query-id'],
+      [headerRequest, 'header-id'],
+      [bodyRequest, 'body-id'],
+    ];
+
+    for (const [request, expectedId] of cases) {
       const uploadId = await extractUploadId(request);
       const namespace = createNamespace();
 
-      assert.equal(shouldRouteUploadToDurableObject(request, uploadId), false);
-      assert.equal(resolveUploadDurableObject(namespace, request, uploadId), null);
-      assert.deepEqual(namespace.calls, []);
+      assert.equal(uploadId, expectedId);
+      assert.equal(shouldRouteUploadToDurableObject(request, uploadId), true);
+      assert.deepEqual(resolveUploadDurableObject(namespace, request, uploadId), { id: `named:${expectedId}` });
+      assert.deepEqual(namespace.calls, [
+        ['idFromName', expectedId],
+        ['get', `named:${expectedId}`],
+      ]);
     }
   });
 

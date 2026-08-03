@@ -67,19 +67,16 @@ export async function extractUploadId(request) {
  * Legacy chunk requests keep uploadId inside the same multipart body as the
  * binary chunk. Route those directly through the Worker so routing never
  * clones or parses the potentially large body.
+ *
+ * 合并请求（chunked=true&merge=true）走 DO：DO 没有子请求/CPU 时间限制，
+ * 可以安全地批量读取分块状态并执行长时间合并，避免 Worker 子请求超限导致的 503。
  */
 export function shouldRouteUploadToDurableObject(request, uploadId) {
-    const url = new URL(request.url);
-    const isChunkMergeRequest = url.searchParams.get('chunked') === 'true'
-        && url.searchParams.get('merge') === 'true';
-    if (isChunkMergeRequest) {
-        return false;
-    }
-
     if (uploadId) {
         return true;
     }
 
+    const url = new URL(request.url);
     const isChunkRequest = url.searchParams.get('chunked') === 'true';
     return !isChunkRequest;
 }
