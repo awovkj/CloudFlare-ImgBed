@@ -1472,7 +1472,13 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
                 if (chunkRecord && chunkRecord.metadata) {
                     let status = chunkRecord.metadata.status || 'unknown';
 
-                    if (status === 'uploading' && chunkRecord.metadata.timeoutThreshold && currentTime > chunkRecord.metadata.timeoutThreshold) {
+                    // 如果 chunk 已有 uploadResult（上传到 TG/R2/S3 成功的产物），
+                    // 无论 status 字段是什么，都视为 'completed'。
+                    // 这修复了 KV 最终一致性导致 status 回退为 'uploading'，
+                    // 进而被超时检查标记为 'timeout' → 终态失败 → 合并 500 的问题。
+                    if (chunkRecord.metadata.uploadResult && chunkRecord.metadata.uploadResult.success) {
+                        status = 'completed';
+                    } else if (status === 'uploading' && chunkRecord.metadata.timeoutThreshold && currentTime > chunkRecord.metadata.timeoutThreshold) {
                         status = 'timeout';
 
                         const timeoutMetadata = {
@@ -1547,6 +1553,25 @@ export async function getChunkUploadStatusesWithManifest(env, uploadId, totalChu
         const manifestChunk = manifestChunks[String(recordStatus.index)];
         if (!manifestChunk) {
             return recordStatus;
+        }
+
+        // 如果 record 或 manifest 中任一已有 uploadResult.success，
+        // 说明分块已成功上传到存储端，直接视为 'completed'。
+        // 这修复了 KV 最终一致性导致 status 回退的问题。
+        const recordHasSuccess = Boolean(recordStatus.uploadResult && recordStatus.uploadResult.success);
+        const manifestHasSuccess = Boolean(manifestChunk.uploadResult && manifestChunk.uploadResult.success);
+        if (recordHasSuccess || manifestHasSuccess) {
+            return {
+                ...recordStatus,
+                ...manifestChunk,
+                key: recordStatus.key,
+                index: recordStatus.index,
+                status: 'completed',
+                uploadResult: recordStatus.uploadResult || manifestChunk.uploadResult,
+                error: null,
+                hasData: false,
+                isTimeout: false
+            };
         }
 
         const manifestStatus = manifestChunk.status || recordStatus.status;
