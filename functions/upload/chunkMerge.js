@@ -20,12 +20,12 @@ import {
     persistMergeSuccessReceipt as writeMergeSuccessReceipt
 } from './mergeSuccessReceipt.js';
 
-const INITIAL_SETTLE_WAIT_MS = 30000;
+const INITIAL_SETTLE_WAIT_MS = 15000;
 const SETTLE_INTERVAL_MS = 500;
 const FINAL_PENDING_GRACE_MS = 5000;
 const MERGE_PENDING_RETRY_AFTER_MS = 1000;
-const MERGE_RETRY_TIMEOUT_MS = 12000;
-const MERGE_RETRY_BATCH_SIZE = 2;
+const MERGE_RETRY_TIMEOUT_MS = 15000;
+const MERGE_RETRY_CONCURRENCY = 3;
 
 function summarizeChunkStatuses(chunkStatuses) {
     return chunkStatuses.reduce((acc, chunk) => {
@@ -555,16 +555,16 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
-        // 单次请求不做长时间重试。由客户端下一次 POST 重新检查，
-        // 保证每个请求的等待预算低于前端超时。
+        // 合并运行在 DO 中（无子请求限制），可以一次性重试所有失败分块。
+        // 之前仅重试 2 个/次，12 个分块需要 6 次合并请求（每次间隔 10s grace），总计 60s+。
+        // 前端在等待期间持续轮询 409，造成 660 次无意义请求。
         if (failedChunks.length > 0) {
-            const retryBatch = failedChunks.slice(0, MERGE_RETRY_BATCH_SIZE);
-            console.log(`Retrying ${retryBatch.length}/${failedChunks.length} failed chunks within the current request budget`);
-            await retryFailedChunks(context, retryBatch, uploadChannel, {
+            console.log(`Retrying all ${failedChunks.length} failed chunks (concurrency=${MERGE_RETRY_CONCURRENCY})`);
+            await retryFailedChunks(context, failedChunks, uploadChannel, {
                 maxRetries: 1,
                 retryTimeout: MERGE_RETRY_TIMEOUT_MS,
-                maxConcurrency: MERGE_RETRY_BATCH_SIZE,
-                batchSize: MERGE_RETRY_BATCH_SIZE
+                maxConcurrency: MERGE_RETRY_CONCURRENCY,
+                batchSize: failedChunks.length
             });
 
             chunkStatuses = await getChunkUploadStatusesWithManifest(env, uploadId, totalChunks);

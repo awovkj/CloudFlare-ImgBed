@@ -383,22 +383,23 @@ export async function handleChunkUpload(context) {
         const { usingD1 } = checkDatabaseConfig(env);
         const chunkTtlSeconds = getChunkRecordTtlSeconds(url);
 
-        // 性能优化：chunkData 的 KV 写入与 Telegram 上传无依赖关系，并行执行以隐藏 KV 写入延迟。
-        // chunkData 在内存中已通过 chunk.arrayBuffer() 获得，TG 上传直接使用内存数据，无需等待 KV 落盘。
-        const chunkDataWritePromise = db.put(chunkKey, usingD1 ? '' : chunkData, {
+        // 先写入 chunkData 到 KV，确保后续 uploadChunkToStorage 读取 metadata 时能拿到。
+        // 之前并行执行导致 KV 最终一致性问题：uploadChunkToStorage 读取时写入可能尚未可见，
+        // 返回 "Chunk data not found"，catch 块也无法读取 metadata 更新状态，
+        // 分块卡在 'uploading' → merge 持续返回 MERGE_IN_PROGRESS/CHUNKS_INCOMPLETE → 660 次轮询。
+        await db.put(chunkKey, usingD1 ? '' : chunkData, {
             metadata: initialChunkMetadata,
             expirationTtl: chunkTtlSeconds
         });
 
         // manifest 更新为状态记录（非关键路径）：用 waitUntil 后台执行，不阻塞上传主流程。
-        // 失败时 updateUploadManifestChunk 内部已捕获异常，不影响请求。
-        // 修复2中的防回退守卫确保延迟写入不会覆盖已写入的 'completed' 状态。
         if (waitUntil) {
             waitUntil(updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context));
         } else {
             updateUploadManifestChunk(env, uploadId, chunkIndex, initialChunkMetadata, context).catch(() => {});
         }
 
+        // 始终使用内存中的 chunkData，避免 KV 读取的一致性问题。
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
             chunkIndex,
@@ -407,12 +408,8 @@ export async function handleChunkUpload(context) {
             originalFileName,
             originalFileType,
             uploadChannel,
-            usingD1 ? chunkData : undefined
+            chunkData
         );
-
-        // 确保 chunkData 写入完成：merge 阶段依赖 KV 中的 chunk 数据（纯 KV 模式下）。
-        // 通常 TG 上传耗时远大于 KV 写入，此处 await 几乎不会增加额外等待。
-        await chunkDataWritePromise;
 
         if (!uploadOutcome.success) {
             return createUploadJsonResponse({
