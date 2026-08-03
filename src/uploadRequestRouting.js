@@ -36,6 +36,10 @@ export function extractRouteUploadId(request) {
  * Modern clients should send uploadId in the URL or X-Upload-Id header.
  * Merge requests retain a FormData compatibility path because their bodies
  * contain only small metadata fields and no file payload.
+ *
+ * 合并请求 body 仅含 uploadId/totalChunks 等小字段（无文件数据），
+ * 即使浏览器使用 chunked 编码（无 Content-Length header）也应解析 body
+ * 提取 uploadId，否则合并请求无法路由到 DO，回退 Worker 会因子请求超限返回 503/500。
  */
 export async function extractUploadId(request) {
     const url = new URL(request.url);
@@ -43,16 +47,19 @@ export async function extractUploadId(request) {
 
     const isMergeRequest = url.searchParams.get('merge') === 'true';
     const contentType = request.headers.get('content-type') || '';
-    const contentLengthHeader = request.headers.get('content-length');
-    const contentLength = Number(contentLengthHeader);
-    const hasSafeMergeFormDataLength = contentLengthHeader !== null
-        && Number.isInteger(contentLength)
-        && contentLength > 0
-        && contentLength <= MAX_MERGE_FORM_DATA_BYTES;
     if (request.method !== 'POST'
         || !isMergeRequest
-        || !contentType.toLowerCase().includes('multipart/form-data')
-        || !hasSafeMergeFormDataLength) {
+        || !contentType.toLowerCase().includes('multipart/form-data')) {
+        return routeUploadId;
+    }
+
+    // 安全守卫：仅当 Content-Length 明确超过上限时才跳过解析。
+    // Content-Length 缺失（chunked 编码）或未超限时，合并请求 body 始终可以安全解析。
+    const contentLengthHeader = request.headers.get('content-length');
+    const contentLength = Number(contentLengthHeader);
+    if (contentLengthHeader !== null
+        && Number.isInteger(contentLength)
+        && contentLength > MAX_MERGE_FORM_DATA_BYTES) {
         return routeUploadId;
     }
 
