@@ -400,6 +400,8 @@ export async function handleChunkUpload(context) {
         }
 
         // 始终使用内存中的 chunkData，避免 KV 读取的一致性问题。
+        // 同时传入 initialChunkMetadata，让下游失败/超时路径直接用内存快照写回状态，
+        // 不必再读 KV（KV 最终一致性下刚写入的记录可能读不到）。
         const uploadOutcome = await uploadChunkToStorageWithTimeout(
             context,
             chunkIndex,
@@ -408,7 +410,8 @@ export async function handleChunkUpload(context) {
             originalFileName,
             originalFileType,
             uploadChannel,
-            chunkData
+            chunkData,
+            initialChunkMetadata
         );
 
         if (!uploadOutcome.success) {
@@ -477,75 +480,88 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
 /* ======= 单个分块上传到不同渠道的存储端 ======= */
 
 // 带超时保护的异步上传分块到存储端
-async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData) {
+// initialChunkMetadata 由 handleChunkUpload 传入，是刚写入 KV 的最新 metadata 内存快照，
+// 用于失败/超时时直接写回状态，避免再读 KV 因最终一致性读不到记录而导致 chunk 卡在 'uploading'。
+async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData, initialChunkMetadata = null) {
     const { env } = context;
     const db = getDatabase(env);
     const chunkKey = `chunk_${uploadId}_${chunkIndex.toString().padStart(3, '0')}`;
 
+    let timer = null;
+    const cleanupTimer = () => {
+        if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    };
+
     try {
-        // 设置超时 Promise
+        const uploadPromise = uploadChunkToStorage(
+            context, chunkIndex, totalChunks, uploadId,
+            originalFileName, originalFileType, uploadChannel,
+            chunkData, initialChunkMetadata
+        );
+        // race 未消费 uploadPromise 的 rejection 时，避免 unhandled rejection
+        uploadPromise.catch(() => {});
+
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
+            timer = setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
         });
 
-        // 执行实际上传
-        const uploadPromise = uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData);
-
-        // 竞速执行
-        const uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+        let uploadResult;
+        try {
+            uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+        } finally {
+            cleanupTimer();
+        }
 
         if (!uploadResult || !uploadResult.success) {
             throw new Error(uploadResult?.error || 'Chunk upload failed');
         }
 
-        return {
-            success: true
-        };
+        return { success: true };
 
     } catch (error) {
+        cleanupTimer();
         console.error(`Chunk ${chunkIndex} upload failed or timed out:`, error);
 
-        // 超时或失败时，更新状态为超时/失败
+        // 失败时优先用内存中的 chunkData 和已知 metadata 写回，
+        // 不再读 KV：KV 最终一致性下刚写入的记录可能读不到，
+        // 会导致无法更新为 timeout/failed，chunk 卡在 'uploading' → merge 报错。
         try {
-            const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
-            if (chunkRecord && chunkRecord.metadata) {
-                const isTimeout = error.message === 'Upload timeout';
-                const errorMetadata = {
-                    ...chunkRecord.metadata,
-                    status: isTimeout ? 'timeout' : 'failed',
-                    error: error.message,
-                    failedTime: Date.now(),
-                    isTimeout: isTimeout
-                };
+            const isTimeout = error.message === 'Upload timeout';
+            const baseMetadata = initialChunkMetadata || {};
+            const errorMetadata = {
+                ...baseMetadata,
+                status: isTimeout ? 'timeout' : 'failed',
+                error: error.message,
+                failedTime: Date.now(),
+                isTimeout: isTimeout
+            };
 
-                // 保留原始数据以便重试（D1模式下不保存二进制数据，避免SQLITE_TOOBIG）
-                const { usingD1 } = checkDatabaseConfig(env);
-                const fallbackChunkValue = usingD1 ? '' : ((chunkRecord.value && chunkRecord.value.byteLength > 0)
-                    ? chunkRecord.value
-                    : (chunkData !== undefined ? chunkData : ''));
+            const { usingD1 } = checkDatabaseConfig(env);
+            const fallbackChunkValue = usingD1 ? '' : (chunkData || '');
 
-                await db.put(chunkKey, fallbackChunkValue, {
-                    metadata: errorMetadata,
-                    expirationTtl: getChunkRecordTtlSeconds(context)
-                });
-                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
-                    ...errorMetadata,
-                    hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
-                }, context);
-            }
+            await db.put(chunkKey, fallbackChunkValue, {
+                metadata: errorMetadata,
+                expirationTtl: getChunkRecordTtlSeconds(context)
+            });
+            await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                ...errorMetadata,
+                hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
+            }, context);
         } catch (metaError) {
             console.error('Failed to save timeout/error metadata:', metaError);
         }
 
-        return {
-            success: false,
-            error: error.message
-        };
+        return { success: false, error: error.message };
     }
 }
 
 // 异步上传分块到存储端，失败自动重试
-async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData) {
+// initialChunkMetadata 由 handleChunkUpload 传入，避免 chunkData 已在内存时还要读 KV 获取 metadata，
+// 既省一次 I/O，又规避 KV 最终一致性导致 metadata 读不到的问题。
+async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType, uploadChannel, chunkData, initialChunkMetadata = null) {
     const { env } = context;
     const db = getDatabase(env);
 
@@ -553,14 +569,21 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
     const MAX_RETRIES = 3;
 
+    // chunkMetadata 提到 try 外声明，确保 catch 块也能访问（异常路径写回状态时复用）
+    let chunkMetadata = null;
+
     try {
-        let chunkMetadata;
 
         if (chunkData !== undefined) {
-            const chunkRecord = await db.getWithMetadata(chunkKey);
-            chunkMetadata = (chunkRecord && chunkRecord.metadata) ? chunkRecord.metadata : {};
+            // chunkData 已在内存中：优先用传入的 metadata，缺失时才降级读 KV。
+            // handleChunkUpload 路径会传入 initialChunkMetadata，避免读 KV 的一致性问题。
+            chunkMetadata = initialChunkMetadata
+                || (await (async () => {
+                    const chunkRecord = await db.getWithMetadata(chunkKey);
+                    return (chunkRecord && chunkRecord.metadata) ? chunkRecord.metadata : {};
+                })());
         } else {
-            // 从数据库分块数据和metadata
+            // retryFailedChunks 路径：chunkData 未传入，从 KV 读分块数据和 metadata
             const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
             if (!chunkRecord || !chunkRecord.value) {
                 console.error(`Chunk ${chunkIndex} data not found in database`);
@@ -571,7 +594,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
             }
 
             chunkData = chunkRecord.value;
-            chunkMetadata = chunkRecord.metadata;
+            chunkMetadata = chunkRecord.metadata || {};
         }
 
         for (let retry = 0; retry < MAX_RETRIES; retry++) {
@@ -663,31 +686,27 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
     } catch (error) {
         console.error(`Error uploading chunk ${chunkIndex}:`, error);
 
-        // 发生异常时，确保保留原始数据并标记为失败
+        // 发生异常时，优先用内存中的 chunkData 和已知 metadata 写回，不依赖 KV 读取。
+        // 读 KV 在最终一致性下可能拿不到刚写入的记录，会导致状态无法更新、chunk 卡住。
         try {
-            const chunkRecord = await db.getWithMetadata(chunkKey, { type: 'arrayBuffer' });
-            if (chunkRecord && chunkRecord.metadata) {
-                const errorMetadata = {
-                    ...chunkRecord.metadata,
-                    status: 'failed',
-                    error: error.message,
-                    failedTime: Date.now()
-                };
+            const errorMetadata = {
+                ...(initialChunkMetadata || chunkMetadata || {}),
+                status: 'failed',
+                error: error.message,
+                failedTime: Date.now(),
+                retryCount: 0
+            };
 
-                // D1模式下不保存二进制数据，避免SQLITE_TOOBIG
-                const { usingD1 } = checkDatabaseConfig(env);
-                const fallbackChunkValue = usingD1 ? '' : ((chunkRecord.value && chunkRecord.value.byteLength > 0)
-                    ? chunkRecord.value
-                    : (chunkData !== undefined ? chunkData : ''));
+            const { usingD1 } = checkDatabaseConfig(env);
+            const fallbackChunkValue = usingD1 ? '' : (chunkData || '');
 
-                await db.put(chunkKey, fallbackChunkValue, {
-                    metadata: errorMetadata,
-                    expirationTtl: getChunkRecordTtlSeconds(context)                });
-                await updateUploadManifestChunk(env, uploadId, chunkIndex, {
-                    ...errorMetadata,
-                    hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
-                }, context);
-            }
+            await db.put(chunkKey, fallbackChunkValue, {
+                metadata: errorMetadata,
+                expirationTtl: getChunkRecordTtlSeconds(context)                });
+            await updateUploadManifestChunk(env, uploadId, chunkIndex, {
+                ...errorMetadata,
+                hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
+            }, context);
         } catch (metaError) {
             console.error('Failed to save error metadata:', metaError);
         }
@@ -1309,15 +1328,23 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                 }
                 return null;
             })();
+            // 防止 race 未消费 retryPromise 的 rejection 导致 unhandled rejection
+            retryPromise.catch(() => {});
 
+            let retryTimer = null;
             const timeoutPromise = new Promise((resolve) => {
-                setTimeout(() => resolve({
+                retryTimer = setTimeout(() => resolve({
                     success: false,
                     error: 'Retry timeout'
                 }), retryTimeout);
             });
 
-            const uploadResult = await Promise.race([retryPromise, timeoutPromise]);
+            let uploadResult;
+            try {
+                uploadResult = await Promise.race([retryPromise, timeoutPromise]);
+            } finally {
+                if (retryTimer !== null) clearTimeout(retryTimer);
+            }
 
             if (uploadResult && uploadResult.success) {
                 // 更新状态为成功
@@ -1354,27 +1381,29 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
         retryCount++;
     }
 
-    // 所有重试耗尽，更新最终失败状态
+    // 所有重试耗尽，更新最终失败状态。
+    // 直接用内存中的 chunkData 和 chunkRecord.metadata 写回，不再读 KV：
+    // retry 循环没有修改过这两者，KV 最终一致性下重读可能拿到空值/旧值。
     try {
-        const finalRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
-        if (finalRecord) {
-            const failedRetryMetadata = {
-                ...finalRecord.metadata,
-                status: 'retry_failed',
-                retryCount: retryCount,
-                error: lastError,
-                failedTime: Date.now()
-            };
+        const failedRetryMetadata = {
+            ...(chunkRecord.metadata || {}),
+            status: 'retry_failed',
+            retryCount: retryCount,
+            error: lastError,
+            failedTime: Date.now()
+        };
 
-            await db.put(chunk.key, finalRecord.value || '', {
-                metadata: failedRetryMetadata,
-                expirationTtl: getChunkRecordTtlSeconds(context)
-            });
-            await updateUploadManifestChunk(env, uploadId, chunk.index, {
-                ...failedRetryMetadata,
-                hasData: Boolean(finalRecord.value && finalRecord.value.byteLength > 0)
-            }, context);
-        }
+        const { usingD1: failUsingD1 } = checkDatabaseConfig(env);
+        const fallbackValue = failUsingD1 ? '' : (chunkData || '');
+
+        await db.put(chunk.key, fallbackValue, {
+            metadata: failedRetryMetadata,
+            expirationTtl: getChunkRecordTtlSeconds(context)
+        });
+        await updateUploadManifestChunk(env, uploadId, chunk.index, {
+            ...failedRetryMetadata,
+            hasData: Boolean(fallbackValue && fallbackValue.byteLength > 0)
+        }, context);
     } catch (metaError) {
         console.error(`Failed to update retry error metadata for chunk ${chunk.index}:`, metaError);
     }
