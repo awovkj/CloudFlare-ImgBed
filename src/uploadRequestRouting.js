@@ -8,6 +8,16 @@ export class RouteUploadIdMismatchError extends Error {
 
 export const MAX_MERGE_FORM_DATA_BYTES = 64 * 1024;
 
+export function createSerialExecutor() {
+    let tail = Promise.resolve();
+
+    return task => {
+        const result = tail.then(task);
+        tail = result.catch(() => {});
+        return result;
+    };
+}
+
 export function isRouteUploadIdMismatchError(error) {
     return error?.code === 'ROUTE_UPLOAD_ID_MISMATCH';
 }

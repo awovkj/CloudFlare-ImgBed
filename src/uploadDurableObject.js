@@ -6,6 +6,7 @@
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
 import {
     buildUploadDurableObjectRouteData,
+    createSerialExecutor,
     createRouteUploadIdMismatchResponse,
     getUploadRequestMethodRejection,
     isRouteUploadIdMismatchError,
@@ -16,9 +17,14 @@ export class UploadDurableObject {
         this.state = state;
         this.env = env;
         this.ctx = state;
+        this.runSerial = createSerialExecutor();
     }
 
-    async fetch(request) {
+    fetch(request) {
+        return this.runSerial(() => this._handleRequest(request));
+    }
+
+    async _handleRequest(request) {
         // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
         const methodRejection = getUploadRequestMethodRejection(request);
         if (methodRejection) {

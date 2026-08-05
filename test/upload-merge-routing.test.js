@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  createSerialExecutor,
   extractUploadId,
   resolveUploadDurableObject,
   shouldRouteUploadToDurableObject,
@@ -22,6 +23,36 @@ function createNamespace() {
 }
 
 describe('merge upload routing', () => {
+  it('serializes overlapping merge work for one durable object instance', async () => {
+    const runSerial = createSerialExecutor();
+    const order = [];
+    let releaseFirst;
+    const firstGate = new Promise(resolve => {
+      releaseFirst = resolve;
+    });
+
+    const first = runSerial(async () => {
+      order.push('first:start');
+      await firstGate;
+      order.push('first:end');
+    });
+    const second = runSerial(async () => {
+      order.push('second:start');
+      order.push('second:end');
+    });
+
+    await Promise.resolve();
+    assert.deepEqual(order, ['first:start']);
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, [
+      'first:start',
+      'first:end',
+      'second:start',
+      'second:end',
+    ]);
+  });
+
   it('routes chunk merge requests to the Durable Object when uploadId is available', async () => {
     const queryRequest = new Request(
       'https://example.com/upload?chunked=true&merge=true&uploadId=query-id',
@@ -86,5 +117,13 @@ describe('merge upload routing', () => {
     assert.ok(localFallback > routeExtraction, 'route uploadId must be propagated before local fallback');
     assert.match(source, /context\.data\.routeUploadId\s*=\s*extractRouteUploadId\(request\)/);
     assert.match(source, /isRouteUploadIdMismatchError\(error\)[\s\S]*createRouteUploadIdMismatchResponse\(error\)/);
+  });
+
+  it('runs upload durable object requests through the serial executor', () => {
+    const source = fs.readFileSync('src/uploadDurableObject.js', 'utf8');
+
+    assert.match(source, /createSerialExecutor/);
+    assert.match(source, /this\.runSerial/);
+    assert.match(source, /return this\.runSerial\(\(\) => this\._handleRequest\(request\)\)/);
   });
 });

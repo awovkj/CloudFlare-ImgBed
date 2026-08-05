@@ -8,7 +8,11 @@ import {
   classifyMergeSession,
   isCleanupProtectedByMerge,
 } from '../functions/upload/chunkMergeState.js';
-import { claimUploadMerge, updateUploadSession } from '../functions/upload/mergeSessionStore.js';
+import {
+  claimUploadMerge,
+  createUploadSessionCoordinator,
+  updateUploadSession,
+} from '../functions/upload/mergeSessionStore.js';
 import {
   getMergeSuccessReceipt,
   persistMergeSuccessReceipt,
@@ -140,6 +144,54 @@ describe('chunk merge 409 recovery', () => {
     assert.equal(staleOwnerUpdated, false);
   });
 
+  it('keeps merge transitions on the committed snapshot when KV immediately returns stale data', async () => {
+    const initialSession = {
+      status: 'initialized',
+      revision: 0,
+      expiresAt: now + 60_000,
+    };
+    let persistedSession = initialSession;
+    const db = {
+      async get() {
+        return JSON.stringify(initialSession);
+      },
+      async put(_key, value) {
+        persistedSession = JSON.parse(value);
+      },
+    };
+    const coordinator = createUploadSessionCoordinator(
+      db,
+      'upload-1',
+      initialSession,
+      () => now,
+    );
+
+    assert.equal(await coordinator.claim(
+      buildMergeLeasePatch('job-1', now),
+      { expectedRevision: 0 },
+    ), true);
+    assert.equal(await coordinator.update({
+      status: 'merge_success',
+      mergeResult: [{ src: '/file/success.bin' }],
+      mergeLeaseUntil: 0,
+    }, {
+      expectedJobId: 'job-1',
+      allowedStatuses: ['merging'],
+    }), true);
+
+    assert.equal(coordinator.getCurrentSession().status, 'merge_success');
+    assert.equal(persistedSession.status, 'merge_success');
+  });
+
+  it('uses one session coordinator throughout the merge request', () => {
+    const source = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
+
+    assert.match(source, /createUploadSessionCoordinator/);
+    assert.match(source, /context\.mergeSessionCoordinator/);
+    assert.match(source, /getCurrentSession\(\)/);
+    assert.doesNotMatch(source, /committedSession\s*=\s*await getUploadSessionInfo\(env/);
+  });
+
   it('round-trips a merge success receipt independently of the upload session', async () => {
     const values = new Map();
     const puts = [];
@@ -176,7 +228,8 @@ describe('chunk merge 409 recovery', () => {
     assert.match(source, /retryFailedChunks\(/);
     assert.match(source, /maxRetries:\s*1/);
     assert.match(source, /retryTimeout:\s*MERGE_RETRY_TIMEOUT_MS/);
-    assert.match(source, /failedChunks\.slice\(0, MERGE_RETRY_BATCH_SIZE\)/);
+    assert.match(source, /maxConcurrency:\s*MERGE_RETRY_CONCURRENCY/);
+    assert.match(source, /batchSize:\s*failedChunks\.length/);
   });
 
   it('requires current ownership before publishing success or deleting chunks', () => {

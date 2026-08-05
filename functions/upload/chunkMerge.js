@@ -14,7 +14,12 @@ import {
     buildWaitingForChunksPatch,
     classifyMergeSession
 } from './chunkMergeState.js';
-import { claimUploadMerge, readUploadSession, updateUploadSession } from './mergeSessionStore.js';
+import {
+    claimUploadMerge,
+    createUploadSessionCoordinator,
+    readUploadSession,
+    updateUploadSession
+} from './mergeSessionStore.js';
 import {
     getMergeSuccessReceipt as readMergeSuccessReceipt,
     persistMergeSuccessReceipt as writeMergeSuccessReceipt
@@ -47,9 +52,12 @@ function isChunkTerminalFailure(chunk) {
         || (['failed', 'timeout', 'retry_timeout'].includes(chunk.status) && !chunk.hasData);
 }
 
-async function updateUploadSessionStatus(env, uploadId, patch = {}, options = {}) {
+async function updateUploadSessionStatus(context, uploadId, patch = {}, options = {}) {
     try {
-        return await updateUploadSession(getDatabase(env), uploadId, patch, options);
+        if (context.mergeSessionCoordinator) {
+            return await context.mergeSessionCoordinator.update(patch, options);
+        }
+        return await updateUploadSession(getDatabase(context.env), uploadId, patch, options);
     } catch (error) {
         console.warn(`Failed to update upload session status for ${uploadId}:`, error);
         if (options.required) {
@@ -59,13 +67,19 @@ async function updateUploadSessionStatus(env, uploadId, patch = {}, options = {}
     }
 }
 
-async function getUploadSessionInfo(env, uploadId) {
-    return readUploadSession(getDatabase(env), uploadId);
+async function getUploadSessionInfo(context, uploadId) {
+    if (context.mergeSessionCoordinator) {
+        return context.mergeSessionCoordinator.getCurrentSession();
+    }
+    return readUploadSession(getDatabase(context.env), uploadId);
 }
 
-async function claimMergeLease(env, uploadId, leasePatch, options = {}) {
+async function claimMergeLease(context, uploadId, leasePatch, options = {}) {
     try {
-        return await claimUploadMerge(getDatabase(env), uploadId, leasePatch, options);
+        if (context.mergeSessionCoordinator) {
+            return await context.mergeSessionCoordinator.claim(leasePatch, options);
+        }
+        return await claimUploadMerge(getDatabase(context.env), uploadId, leasePatch, options);
     } catch (error) {
         console.warn(`Failed to claim merge lease for ${uploadId}:`, error);
         if (options.required) throw error;
@@ -73,8 +87,8 @@ async function claimMergeLease(env, uploadId, leasePatch, options = {}) {
     }
 }
 
-async function verifyMergeOwnership(env, uploadId, mergeJobId) {
-    const sessionInfo = await getUploadSessionInfo(env, uploadId);
+async function verifyMergeOwnership(context, uploadId, mergeJobId) {
+    const sessionInfo = await getUploadSessionInfo(context, uploadId);
     return sessionInfo?.status === 'merging'
         && sessionInfo?.mergeJobId === mergeJobId
         && classifyMergeSession(sessionInfo, Date.now()).kind === 'active';
@@ -110,8 +124,8 @@ function isPotentiallyCommittedMergeError(error) {
     return /merge failed:.*(multipart|already|complete|upload id|not found)/i.test(error?.message || '');
 }
 
-async function preservePotentialMergeSuccess(env, uploadId, mergeJobId, error, options = {}) {
-    await updateUploadSessionStatus(env, uploadId, buildWaitingForChunksPatch(
+async function preservePotentialMergeSuccess(context, uploadId, mergeJobId, error, options = {}) {
+    await updateUploadSessionStatus(context, uploadId, buildWaitingForChunksPatch(
         mergeJobId,
         Date.now(),
         MERGE_PENDING_RETRY_AFTER_MS,
@@ -128,7 +142,7 @@ async function preservePotentialMergeSuccess(env, uploadId, mergeJobId, error, o
     });
 }
 
-function startMergeHeartbeat(env, uploadId, mergeJobId) {
+function startMergeHeartbeat(context, uploadId, mergeJobId) {
     let stopped = false;
     let timer = null;
     let inFlight = Promise.resolve();
@@ -136,7 +150,7 @@ function startMergeHeartbeat(env, uploadId, mergeJobId) {
     const heartbeat = () => {
         if (stopped) return;
         inFlight = updateUploadSessionStatus(
-            env,
+            context,
             uploadId,
             buildMergeLeasePatch(mergeJobId, Date.now()),
             {
@@ -169,7 +183,7 @@ function startMergeHeartbeat(env, uploadId, mergeJobId) {
 async function persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, rawMergeResult) {
     const { env } = context;
 
-    if (!await verifyMergeOwnership(env, uploadId, mergeJobId)) {
+    if (!await verifyMergeOwnership(context, uploadId, mergeJobId)) {
         const existingReceipt = await getMergeSuccessReceipt(env, uploadId).catch(() => null);
         if (existingReceipt?.mergeResult) {
             return enrichMergeResultWithPublicUrl(context, existingReceipt.mergeResult);
@@ -177,7 +191,7 @@ async function persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, r
         throw new Error('Merge ownership was lost before success could be committed');
     }
 
-    const sessionPersisted = await updateUploadSessionStatus(env, uploadId, {
+    const sessionPersisted = await updateUploadSessionStatus(context, uploadId, {
         status: 'merge_success',
         mergeCompletedAt: Date.now(),
         mergeResult: rawMergeResult,
@@ -196,15 +210,16 @@ async function persistMergeSuccess(context, uploadId, totalChunks, mergeJobId, r
         throw new Error('Merge ownership was lost while committing success');
     }
 
-    const committedSession = await getUploadSessionInfo(env, uploadId);
+    const committedSession = context.mergeSessionCoordinator?.getCurrentSession()
+        || await getUploadSessionInfo(context, uploadId);
     if (committedSession?.status !== 'merge_success'
         || committedSession?.mergeJobId !== mergeJobId
         || !committedSession?.mergeResult) {
         throw new Error('Merge success commit could not be verified');
     }
 
-    // Publish the canonical result only after the owner-scoped session commit
-    // has been re-read successfully. Never clean up an unverified commit.
+    // The request-scoped coordinator is the read-after-write source of truth.
+    // Workers KV is eventually consistent and cannot safely verify this write.
     await persistMergeSuccessReceipt(env, uploadId, committedSession.mergeResult, mergeJobId);
 
     await cleanupChunkData(env, uploadId, totalChunks, { ignoreMergeProtection: true });
@@ -276,6 +291,11 @@ export async function handleChunkMerge(context) {
         }
 
         const sessionInfo = JSON.parse(sessionData);
+        context.mergeSessionCoordinator = createUploadSessionCoordinator(
+            db,
+            uploadId,
+            sessionInfo
+        );
         const sessionRevision = Number(sessionInfo.revision || 0);
         const now = Date.now();
 
@@ -361,7 +381,7 @@ export async function handleChunkMerge(context) {
         console.log(`Initial chunk status summary: ${JSON.stringify(initialStatusSummary)}`);
 
         const mergeJobId = createMergeJobId();
-        const claimed = await claimMergeLease(env, uploadId, buildMergeLeasePatch(mergeJobId, Date.now(), {
+        const claimed = await claimMergeLease(context, uploadId, buildMergeLeasePatch(mergeJobId, Date.now(), {
             mergeStartedAt: Date.now(),
             mergeLastStatusSummary: initialStatusSummary
         }), {
@@ -383,18 +403,28 @@ export async function handleChunkMerge(context) {
         return await startMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel, mergeJobId);
 
     } catch (error) {
+        console.error('[handleChunkMerge] error:', error?.stack || error?.message || error);
         const successReceipt = uploadId ? await getMergeSuccessReceipt(env, uploadId).catch(() => null) : null;
         if (successReceipt?.mergeResult) {
             return createMergeSuccessResponse(context, successReceipt.mergeResult);
         }
-        return createResponse(`Error: Failed to merge chunks - ${error.message}`, { status: 500 });
+        return createResponse(JSON.stringify({
+            success: false,
+            code: 'MERGE_FAILED',
+            message: `Failed to merge chunks - ${error?.message || String(error)}`,
+            uploadId,
+            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 }
 
 // 开始合并处理
 async function startMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel, mergeJobId) {
     const { env } = context;
-    const stopHeartbeat = startMergeHeartbeat(env, uploadId, mergeJobId);
+    const stopHeartbeat = startMergeHeartbeat(context, uploadId, mergeJobId);
 
     try {
         // 合并任务状态输出
@@ -437,7 +467,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
                 mergeLastPendingAt: Date.now(),
                 mergeLastStatusSummary: result.statusSummary || {}
             });
-            const transitioned = await updateUploadSessionStatus(env, uploadId, waitingPatch, {
+            const transitioned = await updateUploadSessionStatus(context, uploadId, waitingPatch, {
                 expectedJobId: mergeJobId,
                 allowedStatuses: ['merging'],
                 required: true
@@ -475,7 +505,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             return createMergeSuccessResponse(context, successReceipt.mergeResult);
         }
         if (isPotentiallyCommittedMergeError(error)) {
-            await preservePotentialMergeSuccess(env, uploadId, mergeJobId, error);
+            await preservePotentialMergeSuccess(context, uploadId, mergeJobId, error);
             return createPendingMergeResponse(
                 uploadId,
                 'MERGE_IN_PROGRESS',
@@ -483,7 +513,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
                 MERGE_PENDING_RETRY_AFTER_MS
             );
         }
-        await updateUploadSessionStatus(env, uploadId, {
+        await updateUploadSessionStatus(context, uploadId, {
             status: 'merge_failed',
             mergeFailedAt: Date.now(),
             mergeError: error.message,
@@ -494,7 +524,17 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             allowedStatuses: ['merging', 'waiting_chunks']
         });
 
-        return createResponse(`Error: Failed to merge chunks - ${error.message}`, { status: 500 });
+        console.error('[startMerge] error:', error?.stack || error?.message || error);
+        return createResponse(JSON.stringify({
+            success: false,
+            code: 'MERGE_FAILED',
+            message: `Failed to merge chunks - ${error?.message || String(error)}`,
+            uploadId,
+            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 }
 
@@ -638,9 +678,11 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         return result;
 
     } catch (error) {
+        console.error('[handleChannelBasedMerge] error:', error?.stack || error?.message || error);
         return {
             success: false,
-            error: error.message
+            error: error?.message || String(error),
+            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
         };
     }
 }

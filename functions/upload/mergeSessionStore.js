@@ -8,34 +8,65 @@ export async function readUploadSession(db, uploadId) {
     return sessionData ? JSON.parse(sessionData) : null;
 }
 
-export async function updateUploadSession(db, uploadId, patch = {}, options = {}, now = Date.now) {
-    const sessionKey = `upload_session_${uploadId}`;
-    const sessionInfo = await readUploadSession(db, uploadId);
+function buildUpdatedUploadSession(sessionInfo, patch = {}, options = {}, now = Date.now) {
     if (!sessionInfo || !canApplyMergeSessionPatch(sessionInfo, patch, options)) {
-        return false;
+        return null;
     }
 
-    const updatedSessionInfo = {
+    return {
         ...sessionInfo,
         ...patch,
         lastUpdatedAt: now(),
         revision: Number(sessionInfo.revision || 0) + 1
     };
+}
 
-    await db.put(sessionKey, JSON.stringify(updatedSessionInfo), {
+async function persistUploadSession(db, uploadId, sessionInfo) {
+    const sessionKey = `upload_session_${uploadId}`;
+    await db.put(sessionKey, JSON.stringify(sessionInfo), {
         expirationTtl: 3600
     });
-    return true;
+}
+
+export function createUploadSessionCoordinator(db, uploadId, initialSession, now = Date.now) {
+    let currentSession = initialSession;
+
+    const update = async (patch = {}, options = {}) => {
+        const updatedSession = buildUpdatedUploadSession(currentSession, patch, options, now);
+        if (!updatedSession) {
+            return false;
+        }
+
+        await persistUploadSession(db, uploadId, updatedSession);
+        currentSession = updatedSession;
+        return true;
+    };
+
+    const claim = async (leasePatch, options = {}) => {
+        if (!await update(leasePatch, options)) {
+            return false;
+        }
+
+        return currentSession?.status === 'merging'
+            && currentSession?.mergeJobId === leasePatch.mergeJobId
+            && classifyMergeSession(currentSession, now()).kind === 'active';
+    };
+
+    return {
+        getCurrentSession: () => currentSession,
+        update,
+        claim
+    };
+}
+
+export async function updateUploadSession(db, uploadId, patch = {}, options = {}, now = Date.now) {
+    const sessionInfo = await readUploadSession(db, uploadId);
+    const coordinator = createUploadSessionCoordinator(db, uploadId, sessionInfo, now);
+    return coordinator.update(patch, options);
 }
 
 export async function claimUploadMerge(db, uploadId, leasePatch, options = {}, now = Date.now) {
-    const updated = await updateUploadSession(db, uploadId, leasePatch, options, now);
-    if (!updated) return false;
-
-    // KV has no compare-and-swap. Re-read the claim so a concurrent request
-    // that overwrote it is detected before provider merge work starts.
-    const claimedSession = await readUploadSession(db, uploadId);
-    return claimedSession?.status === 'merging'
-        && claimedSession?.mergeJobId === leasePatch.mergeJobId
-        && classifyMergeSession(claimedSession, now()).kind === 'active';
+    const sessionInfo = await readUploadSession(db, uploadId);
+    const coordinator = createUploadSessionCoordinator(db, uploadId, sessionInfo, now);
+    return coordinator.claim(leasePatch, options);
 }
