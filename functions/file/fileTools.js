@@ -250,30 +250,37 @@ export async function returnWithCheck(context, imgRecord) {
 
     const response = new Response('success', { status: 200 });
 
-    if (isAdminPreview && !adminAuthorized) {
-        // 兜底：会话鉴权未通过时（如 cookie 未随 <img> 请求发送、会话过期、
-        // 或 authenticate 内部 fetchSecurityConfig 抛错被吞掉），
-        // 回退到同源 Referer 校验，保证后台预览可用，同时排除公开图库页面。
-        const referer = request?.headers.get('Referer');
-        if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
-            if (context.fileAccess) {
-                context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
+    // 判断管理端预览权限是否有效（需通过会话鉴权或同源 Referer 兜底）。
+    // 鉴权失败时降级为普通访问，而非返回 401 —— 避免 IDM 等下载工具拦截带
+    // ?from=admin 的链接时，因不携带 Cookie/Referer 触发账号密码弹窗。
+    // from=admin 是可伪造的 URL 参数，真正的鉴权始终依赖会话 Cookie，
+    // 降级后普通文件正常下载，受限文件返回拦截图片（管理员可通过浏览器直接下载）。
+    let adminPreviewEffective = false;
+    if (isAdminPreview) {
+        if (adminAuthorized) {
+            adminPreviewEffective = true;
+        } else {
+            // 兜底：会话鉴权未通过时（如 cookie 未随 <img> 请求发送、会话过期、
+            // 或 authenticate 内部 fetchSecurityConfig 抛错被吞掉），
+            // 回退到同源 Referer 校验，保证后台预览可用，同时排除公开图库页面。
+            const referer = request?.headers.get('Referer');
+            if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
+                adminPreviewEffective = true;
             }
-            return response;
+            // 鉴权失败且 Referer 不通过：降级为普通访问，继续走后续 block/white 检查
         }
-        return unauthorizedAdminPreviewResponse();
     }
 
     const record = imgRecord;
     if (record.metadata === null) {
         if (context.fileAccess) {
-            context.fileAccess.cacheControl = (isAdminPreview || isTempLinkAccess) ? FILE_CACHE_CONTROL.PUBLIC : FILE_CACHE_CONTROL.PUBLIC;
+            context.fileAccess.cacheControl = (adminPreviewEffective || isTempLinkAccess) ? FILE_CACHE_CONTROL.PUBLIC : FILE_CACHE_CONTROL.PUBLIC;
         }
         return response;
     }
 
     // 已鉴权的管理端预览：可查看 Block/adult/白名单外文件，但响应仅私有缓存
-    if (isAdminPreview) {
+    if (adminPreviewEffective) {
         if (context.fileAccess) {
             context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
         }
@@ -305,17 +312,6 @@ export async function returnWithCheck(context, imgRecord) {
     }
 
     return response;
-}
-
-function unauthorizedAdminPreviewResponse() {
-    return new Response('Admin authentication required', {
-        status: 401,
-        statusText: 'Unauthorized',
-        headers: {
-            'Content-Type': 'text/plain;charset=UTF-8',
-            'Cache-Control': FILE_CACHE_CONTROL.NO_STORE,
-        },
-    });
 }
 
 // 优化：使用 Cache API 缓存静态图片，避免每次都产生回环请求
