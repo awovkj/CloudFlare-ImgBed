@@ -17,9 +17,12 @@ const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 3600;
 const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
 
-function getChunkRecordTtlSeconds(contextOrUrl) {
+export function getChunkRecordTtlSeconds(contextOrUrl) {
     const url = contextOrUrl?.url || contextOrUrl;
-    return isChatRequestFromUrl(url) ? CHAT_UPLOAD_SESSION_TTL_SECONDS : DEFAULT_UPLOAD_SESSION_TTL_SECONDS;
+    const hasSearchParams = url && typeof url.searchParams?.get === 'function';
+    return hasSearchParams && isChatRequestFromUrl(url)
+        ? CHAT_UPLOAD_SESSION_TTL_SECONDS
+        : DEFAULT_UPLOAD_SESSION_TTL_SECONDS;
 }
 
 function getUploadManifestKey(uploadId) {
@@ -204,7 +207,15 @@ export async function initializeChunkedUpload(context) {
         // 获取上传渠道
         const uploadChannel = url.searchParams.get('uploadChannel') || 'telegram';
         // 获取指定的渠道名称
-        const channelName = url.searchParams.get('channelName') || '';
+        let channelName = url.searchParams.get('channelName') || '';
+
+        // A Telegram file_id belongs to the bot that uploaded it. Pin an automatic
+        // channel choice to the upload session so every chunk of one file uses the
+        // same bot, while different uploadIds can still be load-balanced.
+        if (uploadChannel === 'telegram' && !channelName) {
+            const selectedTelegramChannel = selectTelegramChunkChannel(context, uploadId, 0);
+            channelName = selectedTelegramChannel?.name || '';
+        }
 
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
             return createUploadJsonResponse(uploadError(
@@ -347,7 +358,7 @@ export async function handleChunkUpload(context) {
         // 获取上传渠道
         const uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
         // 获取指定的渠道名称
-        const channelName = url.searchParams.get('channelName') || sessionInfo.channelName || '';
+        const channelName = sessionInfo.channelName || url.searchParams.get('channelName') || '';
 
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
             return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
@@ -504,15 +515,22 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
         // race 未消费 uploadPromise 的 rejection 时，避免 unhandled rejection
         uploadPromise.catch(() => {});
 
-        const timeoutPromise = new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
-        });
-
         let uploadResult;
-        try {
-            uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
-        } finally {
-            cleanupTimer();
+        if (uploadChannel === 'telegram') {
+            // Telegram sendDocument has no idempotency key. If a local timeout
+            // wins this race, Telegram may still accept the file while we lose
+            // its file_id and later upload a duplicate. Wait for it to settle.
+            uploadResult = await uploadPromise;
+        } else {
+            const timeoutPromise = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
+            });
+
+            try {
+                uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+            } finally {
+                cleanupTimer();
+            }
         }
 
         if (!uploadResult || !uploadResult.success) {
@@ -567,7 +585,9 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
     const chunkKey = `chunk_${uploadId}_${chunkIndex.toString().padStart(3, '0')}`;
 
-    const MAX_RETRIES = 3;
+    // Telegram already has API-aware retries in uploadChunkToTelegramWithRetry.
+    // Avoid multiplying one chunk into 3 x 3 sendDocument requests.
+    const maxStorageRetries = uploadChannel === 'telegram' ? 1 : 3;
 
     // chunkMetadata 提到 try 外声明，确保 catch 块也能访问（异常路径写回状态时复用）
     let chunkMetadata = null;
@@ -597,10 +617,10 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
             chunkMetadata = chunkRecord.metadata || {};
         }
 
-        for (let retry = 0; retry < MAX_RETRIES; retry++) {
+        for (let retry = 0; retry < maxStorageRetries; retry++) {
             if (retry > 0) {
                 const delay = Math.min(300 * Math.pow(2, retry - 1), 2000);
-                console.log(`Chunk ${chunkIndex} retry ${retry}/${MAX_RETRIES}, waiting ${delay}ms...`);
+                console.log(`Chunk ${chunkIndex} retry ${retry}/${maxStorageRetries}, waiting ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
 
@@ -647,7 +667,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     success: true,
                     uploadResult
                 };
-            } else if (retry === MAX_RETRIES - 1) {
+            } else if (retry === maxStorageRetries - 1) {
                 // 最后一次上传失败，标记为失败状态并保留原始数据以便重试
                 const failedMetadata = {
                     ...chunkMetadata,
@@ -667,7 +687,7 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                     hasData: !failPathUsingD1 && Boolean(chunkData && chunkData.byteLength > 0)
                 }, context);
 
-                console.warn(`Chunk ${chunkIndex} upload failed after ${MAX_RETRIES} attempts: ${failedMetadata.error}`);
+                console.warn(`Chunk ${chunkIndex} upload failed after ${maxStorageRetries} attempts: ${failedMetadata.error}`);
 
                 return {
                     success: false,
@@ -983,9 +1003,9 @@ async function uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, to
 }
 
 // 上传单个分块到Telegram
-function selectTelegramChunkChannel(context, uploadId, chunkIndex, fallbackChannel = null) {
-    const { uploadConfig, specifiedChannelName } = context;
-    const tgSettings = uploadConfig.telegram;
+export function selectTelegramChunkChannel(context, uploadId, chunkIndex, fallbackChannel = null) {
+    const { uploadConfig = {}, specifiedChannelName } = context || {};
+    const tgSettings = uploadConfig.telegram || {};
     const tgChannels = tgSettings.channels || [];
 
     if (tgChannels.length === 0) {
@@ -1000,8 +1020,9 @@ function selectTelegramChunkChannel(context, uploadId, chunkIndex, fallbackChann
         return fallbackChannel || tgChannels[0];
     }
 
-    const channelSelectionKey = `${uploadId}:${chunkIndex}`;
-    return selectConsistentChannel(tgChannels, channelSelectionKey, true);
+    // Do not include chunkIndex: all chunks in one upload must stay on one bot.
+    // uploadId still spreads separate files across the configured bot pool.
+    return selectConsistentChannel(tgChannels, String(uploadId || ''), true);
 }
 
 async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
@@ -1044,11 +1065,19 @@ async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, total
         }
 
         const chunkInfo = chunkUploadResult.fileInfo;
+        const uploadedSize = Number(chunkInfo?.file_size);
+
+        if (!chunkInfo?.file_id || !Number.isFinite(uploadedSize) || uploadedSize <= 0) {
+            return {
+                success: false,
+                error: 'Telegram returned invalid chunk file info'
+            };
+        }
 
         return {
             success: true,
             fileId: chunkInfo.file_id,
-            size: chunkInfo.file_size,
+            size: uploadedSize,
             fileName: chunkFileName,
             uploadTime: Date.now(),
             tgChannel: tgChannel.name,
@@ -1331,19 +1360,25 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
             // 防止 race 未消费 retryPromise 的 rejection 导致 unhandled rejection
             retryPromise.catch(() => {});
 
-            let retryTimer = null;
-            const timeoutPromise = new Promise((resolve) => {
-                retryTimer = setTimeout(() => resolve({
-                    success: false,
-                    error: 'Retry timeout'
-                }), retryTimeout);
-            });
-
             let uploadResult;
-            try {
-                uploadResult = await Promise.race([retryPromise, timeoutPromise]);
-            } finally {
-                if (retryTimer !== null) clearTimeout(retryTimer);
+            if (uploadChannel === 'telegram') {
+                // Do not detach an in-flight sendDocument request and discard a
+                // file_id that may arrive after the local retry timeout.
+                uploadResult = await retryPromise;
+            } else {
+                let retryTimer = null;
+                const timeoutPromise = new Promise((resolve) => {
+                    retryTimer = setTimeout(() => resolve({
+                        success: false,
+                        error: 'Retry timeout'
+                    }), retryTimeout);
+                });
+
+                try {
+                    uploadResult = await Promise.race([retryPromise, timeoutPromise]);
+                } finally {
+                    if (retryTimer !== null) clearTimeout(retryTimer);
+                }
             }
 
             if (uploadResult && uploadResult.success) {
@@ -1782,8 +1817,8 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const db = getDatabase(env);
 
     const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile 下载限制 20MB，预留 4MB 余量)
-    // 并发上传数：TG Bot API 对单 bot 有速率限制，5 是兼顾速度与限流的平衡值
-    const MAX_CONCURRENT_UPLOADS = 5;
+    // 同一文件固定使用一个 bot；限制单 bot 并发，避免放大 429。
+    const MAX_CONCURRENT_UPLOADS = 3;
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
@@ -1939,11 +1974,11 @@ function isTelegramRetryableError(error) {
     return retryableKeywords.some(keyword => message.includes(keyword));
 }
 
-function calculateTelegramRetryDelayMs(error, attempt) {
+export function calculateTelegramRetryDelayMs(error, attempt) {
     const retryAfterSeconds = Number(error?.retryAfter || 0);
     if (retryAfterSeconds > 0) {
-        // 尊重 Telegram 的 retry-after，但上限收紧到 8s，避免单次退避过长拖垮整体吞吐
-        return Math.min(retryAfterSeconds * 1000 + 150, 8000);
+        // Telegram requires callers to wait the full retry_after interval.
+        return retryAfterSeconds * 1000 + 150;
     }
 
     // 指数退避上限 4s + 较大 jitter（0~800ms），防止多个分片同步重试形成共振 429
@@ -1963,7 +1998,7 @@ function buildTelegramChunkErrorMessage(error, chunkIndex, attempt, maxRetries) 
 
 async function uploadChunkToTelegramWithRetry(tgBotToken, tgChatId, tgProxyUrl, chunkBlob, chunkFileName, chunkIndex, totalChunks, maxRetries = 3) {
     // 第一次上传不等待，只有失败重试时才等待
-    // 内层重试次数收紧到 3：配合更短的退避上限，单分片最长阻塞 ~5s，避免车道被 429 长时间拖住
+    // Telegram 429 必须完整等待 retry_after；本函数是 Telegram 唯一的上传重试层。
     let lastError = null;
     
     for (let attempt = 0; attempt < maxRetries; attempt++) {

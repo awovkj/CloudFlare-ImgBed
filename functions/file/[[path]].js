@@ -236,8 +236,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     const metadata = imgRecord.metadata;
     const db = getDatabase(env);
     const tgCredentials = await resolveTelegramCredentials(db, env, metadata);
-    const TgBotToken = tgCredentials.botToken;
-    const TgProxyUrl = tgCredentials.proxyUrl || '';
+    const fallbackTgBotToken = tgCredentials.botToken;
+    const fallbackTgProxyUrl = tgCredentials.proxyUrl || '';
 
     // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?
     let chunks = [];
@@ -334,7 +334,14 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
                         }
 
                         // 鑾峰彇鍒嗙墖鏁版嵁锛堟敮鎸佷唬鐞嗗煙鍚嶏級
-                        const chunkData = await fetchTelegramChunkWithRetry(TgBotToken, chunk, TgProxyUrl, 3);
+                        // Compatibility for historical uploads whose chunks were
+                        // spread across multiple bots. Telegram file_ids are
+                        // bot-scoped, so each chunk must use its original token.
+                        const chunkBotToken = chunk.tgBotToken || fallbackTgBotToken;
+                        const chunkProxyUrl = typeof chunk.tgProxyUrl === 'string'
+                            ? chunk.tgProxyUrl
+                            : fallbackTgProxyUrl;
+                        const chunkData = await fetchTelegramChunkWithRetry(chunkBotToken, chunk, chunkProxyUrl, 3);
                         if (!chunkData) {
                             throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
                         }

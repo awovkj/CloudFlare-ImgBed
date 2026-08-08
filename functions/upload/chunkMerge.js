@@ -369,8 +369,8 @@ export async function handleChunkMerge(context) {
             return createResponse('Error: WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.', { status: 400 });
         }
 
-        // 获取指定的渠道名称（优先URL参数，其次会话信息）
-        const channelName = url.searchParams.get('channelName') || sessionInfo.channelName || '';
+        // 获取指定的渠道名称（优先会话信息，防止同一上传切换渠道）
+        const channelName = sessionInfo.channelName || url.searchParams.get('channelName') || '';
         context.specifiedChannelName = channelName;
 
         // 检查分块上传状态
@@ -900,8 +900,16 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
             throw new Error('No completed Telegram chunks provided');
         }
 
+        const invalidChunk = sortedChunks.find(chunk => {
+            const size = Number(chunk?.uploadResult?.size);
+            return !chunk?.uploadResult?.fileId || !Number.isFinite(size) || size <= 0;
+        });
+        if (invalidChunk) {
+            throw new Error(`Invalid Telegram upload result for chunk ${invalidChunk.index}`);
+        }
+
         // 计算总大小
-        const totalSize = sortedChunks.reduce((sum, chunk) => sum + chunk.uploadResult.size, 0);
+        const totalSize = sortedChunks.reduce((sum, chunk) => sum + Number(chunk.uploadResult.size), 0);
 
         const fallbackChannel = (() => {
             if (specifiedChannelName) {
