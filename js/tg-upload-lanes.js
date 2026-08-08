@@ -3,11 +3,10 @@
 
   const DEFAULT_LANE = '__tg_default__';
 
-  // 每个渠道（车道）允许的并发上传数：>1 即开启多线程上传，不再局限于单线程。
-  // 取值需兼顾 Telegram 限流（同一会话并发过高会触发 429，由后端重试退避兜底）。
-  // 提升到 5：配合后端更短的退避上限（4s/8s）与 3 次内层重试，可在命中 429 后快速恢复，
-  // 同时更大并发能填满带宽，缓解大文件上传中后段掉速问题。
-  const MAX_CONCURRENT_PER_LANE = 5;
+  // 多文件上传严格串行：不论有多少个 Telegram 渠道，同一时刻只放行一个文件。
+  // 这里限制的是文件级调度，单个大文件内部的分片上传仍按原有逻辑执行。
+  const MAX_CONCURRENT_UPLOADS = 1;
+  const MAX_CONCURRENT_PER_LANE = MAX_CONCURRENT_UPLOADS;
 
   function normalizeName(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -32,9 +31,17 @@
 
   function acquireAvailableLane(activeChannels, selectedChannelName, channels) {
     const active = activeChannels || {};
+    const activeUploadCount = Object.values(active).reduce((total, count) => {
+      const normalizedCount = Number(count);
+      return total + (Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 0);
+    }, 0);
+
+    // 其他渠道空闲时也不放行新文件，确保全局只有一个文件正在上传。
+    if (activeUploadCount >= MAX_CONCURRENT_UPLOADS) return '';
+
     const laneNames = getLaneNames(selectedChannelName, channels);
     const candidates = laneNames.length ? laneNames : [DEFAULT_LANE];
-    // 选择当前并发最低的车道：多渠道间负载均衡，同时每个渠道最多并发 MAX_CONCURRENT_PER_LANE 个上传。
+    // 选择可用车道；全局串行检查已保证本次最多只会放行一个文件。
     let bestLane = '';
     let lowestCount = MAX_CONCURRENT_PER_LANE;
     for (const laneName of candidates) {
@@ -72,6 +79,7 @@
 
   global.TgUploadLaneScheduler = {
     DEFAULT_LANE,
+    MAX_CONCURRENT_UPLOADS,
     MAX_CONCURRENT_PER_LANE,
     normalizeName,
     getLaneNames,
