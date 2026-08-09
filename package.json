@@ -7,6 +7,7 @@
     "test": "mocha",
     "start": "npm run pages:dev",
     "patch:music-admin-password": "node scripts/patch-music-admin-password.mjs",
+    "patch:tg-upload-performance": "node scripts/patch-tg-upload-performance.mjs",
     "build:frontend-dist": "npm run patch:music-admin-password && node scripts/build-frontend-dist.mjs",
     "pages:dev": "npm run build:frontend-dist && npx wrangler pages dev ./ --kv \"img_url\" --r2 \"img_r2\" --ip 0.0.0.0 --port 8080 --persist-to ./data",
     "generate:worker-routes": "node deploy/worker/generate-routes.js",

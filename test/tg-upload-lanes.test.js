@@ -10,19 +10,21 @@ function loadScheduler() {
 }
 
 describe('Telegram upload lane scheduler', () => {
-  it('allows only one active file across all channels', () => {
+  it('allows one active file per channel and two across independent channels', () => {
     const scheduler = loadScheduler();
     const activeChannels = {};
     const channels = [{ name: 'primary' }, { name: 'backup' }];
 
     const firstLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
+    const secondLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
     const waitingLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
 
-    assert.equal(scheduler.MAX_CONCURRENT_UPLOADS, 1);
-    assert.equal(scheduler.MAX_CONCURRENT_PER_LANE, scheduler.MAX_CONCURRENT_UPLOADS);
+    assert.equal(scheduler.MAX_CONCURRENT_UPLOADS, 2);
+    assert.equal(scheduler.MAX_CONCURRENT_PER_LANE, 1);
     assert.equal(firstLane, 'primary');
+    assert.equal(secondLane, 'backup');
     assert.equal(waitingLane, '');
-    assert.deepEqual({ ...activeChannels }, { primary: 1 });
+    assert.deepEqual({ ...activeChannels }, { primary: 1, backup: 1 });
   });
 
   it('starts the next file only after the active file releases its lane', () => {
@@ -53,5 +55,15 @@ describe('Telegram upload lane scheduler', () => {
       scheduler.acquireAvailableLane(activeChannels, '', []),
       scheduler.DEFAULT_LANE
     );
+  });
+
+  it('does not stack two files on an explicitly selected bot', () => {
+    const scheduler = loadScheduler();
+    const activeChannels = {};
+    const channels = [{ name: 'primary' }, { name: 'backup' }];
+
+    assert.equal(scheduler.acquireAvailableLane(activeChannels, 'primary', channels), 'primary');
+    assert.equal(scheduler.acquireAvailableLane(activeChannels, 'primary', channels), '');
+    assert.deepEqual({ ...activeChannels }, { primary: 1 });
   });
 });

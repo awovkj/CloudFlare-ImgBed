@@ -16,6 +16,15 @@ const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
 const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 3600;
 const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
+export const TELEGRAM_LARGE_FILE_CONCURRENCY = 4;
+
+// Telegram 大文件分片会直接发送到 Telegram。成功后只需要保存 file_id，
+// 原始分片数据仅在发送失败时才用于合并阶段的补偿重试。
+// 因此 Telegram 不必在每个成功分片上先做一次 16~18 MiB 的 KV 写入，
+// 这项写入在高延迟/低带宽 KV 绑定下会与 Telegram 上传争用时间和吞吐。
+export function shouldPersistChunkDataBeforeUpload(uploadChannel) {
+    return String(uploadChannel || '').toLowerCase() !== 'telegram';
+}
 
 export function getChunkRecordTtlSeconds(contextOrUrl) {
     const url = contextOrUrl?.url || contextOrUrl;
@@ -390,15 +399,17 @@ export async function handleChunkUpload(context) {
             timeoutThreshold: uploadStartTime + CHUNK_UPLOAD_TIMEOUT_MS + CHUNK_STATUS_TIMEOUT_GRACE_MS
         };
 
-        // 立即保存分块记录和数据，设置过期时间
+        // 立即保存分块记录，设置过期时间。
+        // Telegram 成功路径只需要 file_id；失败路径由
+        // uploadChunkToStorageWithTimeout 使用内存中的 chunkData 回写，
+        // 因而跳过成功分片的巨型 KV value 写入。
         const { usingD1 } = checkDatabaseConfig(env);
         const chunkTtlSeconds = getChunkRecordTtlSeconds(url);
 
-        // 先写入 chunkData 到 KV，确保后续 uploadChunkToStorage 读取 metadata 时能拿到。
-        // 之前并行执行导致 KV 最终一致性问题：uploadChunkToStorage 读取时写入可能尚未可见，
-        // 返回 "Chunk data not found"，catch 块也无法读取 metadata 更新状态，
-        // 分块卡在 'uploading' → merge 持续返回 MERGE_IN_PROGRESS/CHUNKS_INCOMPLETE → 660 次轮询。
-        await db.put(chunkKey, usingD1 ? '' : chunkData, {
+        const initialChunkValue = usingD1 || !shouldPersistChunkDataBeforeUpload(uploadChannel)
+            ? ''
+            : chunkData;
+        await db.put(chunkKey, initialChunkValue, {
             metadata: initialChunkMetadata,
             expirationTtl: chunkTtlSeconds
         });
@@ -1818,7 +1829,6 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
 
     const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile 下载限制 20MB，预留 4MB 余量)
     // 同一文件固定使用一个 bot；限制单 bot 并发，避免放大 429。
-    const MAX_CONCURRENT_UPLOADS = 3;
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
@@ -1828,7 +1838,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     try {
         let nextChunkIndex = 0;
         let uploadFailure = null;
-        const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, totalChunks);
+        const workerCount = Math.min(TELEGRAM_LARGE_FILE_CONCURRENCY, totalChunks);
 
         const uploadChunkWorker = async () => {
             while (true) {

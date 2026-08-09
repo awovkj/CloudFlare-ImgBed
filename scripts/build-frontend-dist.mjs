@@ -11,11 +11,19 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset, pruneDeployArtifacts } from './asset-ignore.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const dest = path.resolve(root, 'frontend-dist');
+
+// The checked-in frontend bundle is a generated artifact. Apply the small,
+// idempotent Telegram tuning before copying it so every build carries the
+// same concurrency/retry settings, including builds started without npm.
+execFileSync(process.execPath, [path.join(__dirname, 'patch-tg-upload-performance.mjs')], {
+    stdio: 'inherit'
+});
 
 const ignored = addCommonAssetIgnores(loadAssetIgnore(root));
 
