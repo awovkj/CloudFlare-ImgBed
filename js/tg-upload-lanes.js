@@ -3,10 +3,10 @@
 
   const DEFAULT_LANE = '__tg_default__';
 
-  // 全局最多同时上传两个 Telegram 文件；同一个 bot（车道）仍只运行一个文件。
-  // 这样不会把并发叠加到同一个 bot 上触发 429，同时允许配置了多个 bot 时
-  // 充分利用独立的网络连接。单个大文件内部的分片并发由上传组件单独控制。
-  const MAX_CONCURRENT_UPLOADS = 2;
+  // Telegram 文件级严格串行：无论配置了多少个 bot（车道），同一时刻
+  // 只允许一个文件上传，避免多个大文件各自开启分片并发后造成拥塞。
+  // 单个活动文件内部的分片并发仍由上传组件单独控制。
+  const MAX_CONCURRENT_UPLOADS = 1;
   const MAX_CONCURRENT_PER_LANE = 1;
 
   function normalizeName(value) {
@@ -37,12 +37,13 @@
       return total + (Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 0);
     }, 0);
 
-    // 达到全局上限时等待；每个车道仍由下面的 per-lane 限制独立保护。
+    // 任意 Telegram 文件正在上传时，其余文件统一等待；即使目标 bot 不同，
+    // 也不能绕过文件级全局串行限制。
     if (activeUploadCount >= MAX_CONCURRENT_UPLOADS) return '';
 
     const laneNames = getLaneNames(selectedChannelName, channels);
     const candidates = laneNames.length ? laneNames : [DEFAULT_LANE];
-    // 选择当前负载最低且未达到车道上限的车道。
+    // 没有活动文件时选择一个可用车道。
     let bestLane = '';
     let lowestCount = MAX_CONCURRENT_PER_LANE;
     for (const laneName of candidates) {

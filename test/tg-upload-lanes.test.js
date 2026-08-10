@@ -10,21 +10,30 @@ function loadScheduler() {
 }
 
 describe('Telegram upload lane scheduler', () => {
-  it('allows one active file per channel and two across independent channels', () => {
+  it('allows only one active file across all configured channels', () => {
     const scheduler = loadScheduler();
     const activeChannels = {};
     const channels = [{ name: 'primary' }, { name: 'backup' }];
 
     const firstLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
     const secondLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
-    const waitingLane = scheduler.acquireAvailableLane(activeChannels, '', channels);
 
-    assert.equal(scheduler.MAX_CONCURRENT_UPLOADS, 2);
+    assert.equal(scheduler.MAX_CONCURRENT_UPLOADS, 1);
     assert.equal(scheduler.MAX_CONCURRENT_PER_LANE, 1);
     assert.equal(firstLane, 'primary');
-    assert.equal(secondLane, 'backup');
-    assert.equal(waitingLane, '');
-    assert.deepEqual({ ...activeChannels }, { primary: 1, backup: 1 });
+    assert.equal(secondLane, '');
+    assert.deepEqual({ ...activeChannels }, { primary: 1 });
+  });
+
+  it('does not bypass the global limit when the next file selects another bot', () => {
+    const scheduler = loadScheduler();
+    const activeChannels = {};
+    const channels = [{ name: 'primary' }, { name: 'backup' }];
+
+    assert.equal(scheduler.acquireAvailableLane(activeChannels, '', channels), 'primary');
+    // A free, independent bot must still wait while any Telegram file is active.
+    assert.equal(scheduler.acquireAvailableLane(activeChannels, 'backup', channels), '');
+    assert.deepEqual({ ...activeChannels }, { primary: 1 });
   });
 
   it('starts the next file only after the active file releases its lane', () => {

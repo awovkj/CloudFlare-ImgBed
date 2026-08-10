@@ -43,16 +43,71 @@ let changedFiles = 0;
 for (const uploadBundlePath of uploadBundlePaths) {
     let bundle = fs.readFileSync(uploadBundlePath, 'utf8');
 
-    const patchedBundle = replaceExactlyOnce(
-        replaceExactlyOnce(
-            bundle,
-            'const f=("discord"===o||"telegram"===o)?3:6,',
-            'const f="telegram"===o?4:"discord"===o?3:6,',
-            'Telegram chunk concurrency'
-        ),
+    let patchedBundle = replaceExactlyOnce(
+        bundle,
+        'const f=("discord"===o||"telegram"===o)?3:6,',
+        'const f="telegram"===o?4:"discord"===o?3:6,',
+        'Telegram chunk concurrency'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
         'let b=0;const v=5;while(b<v)',
         'let b=0;const v="telegram"===o?3:5;while(b<v)',
         'Telegram request retry count'
+    );
+
+    // Removing an active Telegram file used to release its lane before the
+    // aborted requests had actually left their catch/finally path. The queue
+    // could then start the next file while old chunks were still in flight,
+    // breaking the global one-file invariant. Capture lane ownership when an
+    // upload starts, and only release it from the upload's finalizer.
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'onTelegramUploadComplete(e){const t=this.fileList.find(t=>t.uid===e),o=window.TgUploadLaneScheduler;o&&t&&t.tgUploadLane&&o.releaseLane(this.tgActiveChannels,t.tgUploadLane),t&&(delete t.tgUploadLane,delete t.channelName),',
+        'onTelegramUploadComplete(e,t){const o=this.fileList.find(t=>t.uid===e),s=window.TgUploadLaneScheduler,l=t||(o&&o.tgUploadLane);s&&l&&s.releaseLane(this.tgActiveChannels,l),o&&(delete o.tgUploadLane,delete o.channelName),',
+        'Telegram lane finalizer ownership'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'async uploadSingleFile(e){const t=this.fileList.find(t=>t.uid===e.file.uid);if(!t)return;const o=t.serverCompress,',
+        'async uploadSingleFile(e){const t=this.fileList.find(t=>t.uid===e.file.uid);if(!t)return;const __tgLane=t.tgUploadLane,o=t.serverCompress,',
+        'Telegram single-file lane capture'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        '"telegram"===s?this.onTelegramUploadComplete(e.file.uid):this.onUploadComplete()',
+        '"telegram"===s?this.onTelegramUploadComplete(e.file.uid,__tgLane):this.onUploadComplete()',
+        'Telegram single-file lane release'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'async uploadFileInChunks(e){const t=this.fileList.find(t=>t.uid===e.file.uid);if(!t)return;const o=t.uploadChannel||this.uploadChannel,',
+        'async uploadFileInChunks(e){const t=this.fileList.find(t=>t.uid===e.file.uid);if(!t)return;const __tgLane=t.tgUploadLane,o=t.uploadChannel||this.uploadChannel,',
+        'Telegram chunked lane capture'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        '&initChunked=true",method:"post",data:t,withAuthCode:!0});if(!p.data.success)',
+        '&initChunked=true",method:"post",data:t,withAuthCode:!0,signal:s.signal});if(!p.data.success)',
+        'Telegram chunk initialization cancellation'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        '"telegram"===o?this.onTelegramUploadComplete(e.file.uid):this.onUploadComplete()',
+        '"telegram"===o?this.onTelegramUploadComplete(e.file.uid,__tgLane):this.onUploadComplete()',
+        'Telegram chunked lane release'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'handleRemove(e){const t=this.fileList.find(t=>t.uid===e.uid),o=window.TgUploadLaneScheduler;o&&t&&t.tgUploadLane&&o.releaseLane(this.tgActiveChannels,t.tgUploadLane),o&&(this.tgUploadQueue=o.removeQueuedFile(this.tgUploadQueue,e.uid)),',
+        'handleRemove(e){const t=this.fileList.find(t=>t.uid===e.uid),o=window.TgUploadLaneScheduler;o&&(this.tgUploadQueue=o.removeQueuedFile(this.tgUploadQueue,e.uid)),',
+        'Telegram removal lane release'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'clearFileList(){this.fileList.length>0?(this.abortControllers.forEach((e,t)=>{e.abort()}),this.abortControllers.clear(),this.uploadQueue=[],this.tgUploadQueue=[],this.tgActiveChannels={},this.fileList=[],',
+        'clearFileList(){this.fileList.length>0?(this.abortControllers.forEach((e,t)=>{e.abort()}),this.abortControllers.clear(),this.uploadQueue=[],this.tgUploadQueue=[],this.fileList=[],',
+        'Telegram clear-all lane release'
     );
 
     if (patchedBundle !== bundle) {
