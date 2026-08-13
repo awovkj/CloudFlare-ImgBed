@@ -281,7 +281,7 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
     waitUntil(endUpload(context, fullId, metadata));
 
     // 成功上传，将文件ID返回给客户端
-    return createUploadJsonResponse(buildUploadResults(context, returnLink));
+    return createUploadJsonResponse(await buildUploadResults(context, returnLink));
 }
 
 
@@ -382,7 +382,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
         // 结束上传
         waitUntil(endUpload(context, fullId, metadata));
 
-        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+        return createUploadJsonResponse(await buildUploadResults(context, returnLink));
     } catch (error) {
         return createResponse(`Error: Failed to upload to S3 - ${error.message}`, { status: 500 });
     }
@@ -475,7 +475,7 @@ async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName
         await persistMetadata(db, fullId, metadata);
 
         // 立即返回响应给客户端，不再等待 getFilePath + moderateContent
-        res = createUploadJsonResponse(buildUploadResults(context, returnLink));
+        res = createUploadJsonResponse(await buildUploadResults(context, returnLink));
 
         // 图像审查异步执行：getFilePath 仅用于给审查模块提供 URL，
         // 不阻塞上传响应。审查完成后更新 metadata.Label 并重新持久化。
@@ -545,7 +545,7 @@ async function uploadFileToExternal(context, fullId, metadata, returnLink) {
     waitUntil(endUpload(context, fullId, metadata));
 
     // 返回结果
-    return createUploadJsonResponse(buildUploadResults(context, returnLink));
+    return createUploadJsonResponse(await buildUploadResults(context, returnLink));
 }
 
 
@@ -623,7 +623,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
         waitUntil(endUpload(context, fullId, metadata));
 
         // 返回成功响应
-        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+        return createUploadJsonResponse(await buildUploadResults(context, returnLink));
 
     } catch (error) {
         console.error('Discord upload error:', error.message);
@@ -721,7 +721,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         waitUntil(endUpload(context, fullId, metadata));
 
         // 返回成功响应
-        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+        return createUploadJsonResponse(await buildUploadResults(context, returnLink));
 
     } catch (error) {
         console.error('HuggingFace upload error:', error.message);
@@ -787,7 +787,7 @@ async function uploadFileToWebDAV(context, fullId, metadata, returnLink) {
 
         waitUntil(endUpload(context, fullId, metadata));
 
-        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+        return createUploadJsonResponse(await buildUploadResults(context, returnLink));
     } catch (error) {
         console.error('WebDAV upload error:', error.message);
         return createResponse(`Error: WebDAV upload failed - ${error.message}`, { status: 500 });

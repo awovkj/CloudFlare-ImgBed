@@ -5,6 +5,7 @@ import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
 import { buildUploadResult } from './uploadShared.js';
+import { issueTempLinkReceipt, extractFileIdFromLink } from './tempLinkReceipt.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
@@ -237,7 +238,16 @@ async function enrichMergeResultWithPublicUrl(context, mergeResult) {
     const urlPrefixConfig = pageConfig.config?.find((configItem) => configItem.id === 'urlPrefix');
     const urlPrefix = urlPrefixConfig?.value || '';
     context.publicUrl = urlPrefix ? `${urlPrefix.replace(/\/+$/, '')}/${fileName}` : '';
-    return [buildUploadResult(context, src)];
+    const result = buildUploadResult(context, src);
+    // 分块上传同样签发临时链接凭证，使刚上传完成的文件无需登录即可生成临时链接
+    const fileId = extractFileIdFromLink(src);
+    if (fileId) {
+        const receipt = await issueTempLinkReceipt(context, fileId);
+        if (receipt) {
+            result.tempLinkReceipt = receipt;
+        }
+    }
+    return [result];
 }
 
 async function createMergeSuccessResponse(context, rawMergeResult) {

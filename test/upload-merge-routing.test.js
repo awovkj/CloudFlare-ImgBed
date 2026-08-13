@@ -119,11 +119,28 @@ describe('merge upload routing', () => {
     assert.match(source, /isRouteUploadIdMismatchError\(error\)[\s\S]*createRouteUploadIdMismatchResponse\(error\)/);
   });
 
-  it('runs upload durable object requests through the serial executor', () => {
+  it('routes non-merge durable object requests through the serial executor', () => {
     const source = fs.readFileSync('src/uploadDurableObject.js', 'utf8');
 
     assert.match(source, /createSerialExecutor/);
     assert.match(source, /this\.runSerial/);
+    // 非 merge 请求（cleanup 等）仍走 runSerial
     assert.match(source, /return this\.runSerial\(\(\) => this\._handleRequest\(request\)\)/);
+  });
+
+  it('bypasses runSerial for merge requests to avoid blocking polling and cleanup', () => {
+    const source = fs.readFileSync('src/uploadDurableObject.js', 'utf8');
+
+    // 合并请求通过 activeMergePromise 内存锁控制并发，不走 runSerial
+    assert.match(source, /activeMergePromise/);
+    assert.match(source, /_handleMergeRequest/);
+    // 合并期间轮询请求立即返回 409，不触碰 KV
+    assert.match(source, /MERGE_IN_PROGRESS/);
+    assert.match(source, /createMergeInProgressResponse/);
+    // merge=true 检测在 runSerial 之前
+    const mergeCheck = source.indexOf("get('merge') === 'true'");
+    const runSerialCall = source.indexOf('return this.runSerial');
+    assert.ok(mergeCheck >= 0, 'merge request detection must exist');
+    assert.ok(runSerialCall > mergeCheck, 'merge check must come before the runSerial fallback');
   });
 });

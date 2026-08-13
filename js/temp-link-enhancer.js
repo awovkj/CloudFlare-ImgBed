@@ -22,6 +22,8 @@
 
     // 拦截到的 Authorization 头（来自 fetchWithAuth）
     var cachedAuthHeader = null;
+    // 上传凭证：fileId -> receipt token。刚上传完成的文件凭此可免登录生成临时链接
+    var receiptByFileId = {};
     // 保存原始 fetch 引用，避免递归调用
     var originalFetch = global.fetch.bind(global);
 
@@ -30,10 +32,13 @@
     function patchFetch() {
         if (global.fetch.__tempLinkPatched) return;
         global.fetch = function (input, init) {
+            var fetchUrl = '';
             try {
-                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                fetchUrl = typeof input === 'string' ? input : (input && input.url) || '';
+            } catch (e) { /* ignore */ }
+            try {
                 var headers = (init && init.headers) || (input && input.headers) || null;
-                if (url.indexOf('/api/manage/') !== -1 && headers) {
+                if (fetchUrl.indexOf('/api/manage/') !== -1 && headers) {
                     var auth = null;
                     if (headers instanceof Headers) {
                         auth = headers.get('Authorization');
@@ -43,9 +48,47 @@
                     if (auth) cachedAuthHeader = auth;
                 }
             } catch (e) { /* ignore */ }
-            return originalFetch.apply(this, arguments);
+            var promise = originalFetch.apply(this, arguments);
+            // 捕获上传响应中的临时链接凭证
+            try {
+                if (isUploadUrl(fetchUrl)) {
+                    promise.then(captureUploadReceiptFromResponse).catch(function () { /* ignore */ });
+                }
+            } catch (e) { /* ignore */ }
+            return promise;
         };
         global.fetch.__tempLinkPatched = true;
+    }
+
+    function isUploadUrl(url) {
+        if (!url) return false;
+        try {
+            var u = new URL(url, global.location.origin);
+            return u.pathname === '/upload' || u.pathname.indexOf('/upload/') === 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function captureUploadReceiptFromResponse(res) {
+        if (!res || !res.ok) return;
+        try {
+            var ct = res.headers.get('Content-Type') || '';
+            if (ct.indexOf('application/json') === -1) return;
+            // clone 后再读取，避免消费原始 body 影响业务代码
+            res.clone().json().then(captureUploadReceipts).catch(function () { /* ignore */ });
+        } catch (e) { /* ignore */ }
+    }
+
+    function captureUploadReceipts(data) {
+        if (!Array.isArray(data)) return;
+        for (var i = 0; i < data.length; i++) {
+            var item = data[i] || {};
+            if (item.tempLinkReceipt && item.src) {
+                var fid = parseFileIdFromUrl(item.src);
+                if (fid) receiptByFileId[fid] = item.tempLinkReceipt;
+            }
+        }
     }
 
     function authedFetch(url, options) {
@@ -55,7 +98,24 @@
         if (cachedAuthHeader) {
             options.headers['Authorization'] = cachedAuthHeader;
         }
+        // 附加上传凭证，使刚上传完成的文件无需管理员登录即可生成/查看临时链接
+        var fid = parseFileIdFromApiUrl(url);
+        if (fid && receiptByFileId[fid]) {
+            options.headers['X-Upload-Receipt'] = receiptByFileId[fid];
+        }
         return originalFetch(url, options);
+    }
+
+    // 从 /api/manage/temp-link/{fileId} 中提取 fileId
+    function parseFileIdFromApiUrl(url) {
+        try {
+            var u = new URL(url, global.location.origin);
+            var match = u.pathname.match(/^\/api\/manage\/temp-link\/(.+)$/);
+            if (match) {
+                return decodeURIComponent(match[1]).split(',').join('/');
+            }
+        } catch (e) { /* ignore */ }
+        return null;
     }
 
     // ==================== 工具函数 ====================

@@ -1956,7 +1956,7 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
         // 异步结束上传
         waitUntil(endUpload(context, fullId, metadata));
 
-        return createUploadJsonResponse(buildUploadResults(context, returnLink));
+        return createUploadJsonResponse(await buildUploadResults(context, returnLink));
 
     } catch (error) {
         return createResponse(`Telegram Channel Error: Large file upload failed - ${error.message}`, { status: 500 });

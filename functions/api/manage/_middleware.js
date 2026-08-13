@@ -5,6 +5,7 @@ import { getDatabase } from "../../utils/databaseAdapter.js";
 import { validateSession } from '../../utils/auth/sessionManager.js';
 import { verifyPassword } from '../../utils/auth/passwordHash.js';
 import { createJsonResponse, createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
+import { verifyTempLinkReceipt } from "../../upload/tempLinkReceipt.js";
 
 let securityConfig = {}
 let basicUser = ""
@@ -116,6 +117,33 @@ function extractRequiredPermission(pathname) {
   return 'admin';
 }
 
+/**
+ * 临时链接端点的上传凭证放行
+ * 仅当请求路径为 /api/manage/temp-link/{fileId} 且携带有效的 X-Upload-Receipt 头
+ * （凭证与 fileId 匹配、未过期）时返回 true，绕过管理员鉴权。
+ *
+ * 这使得刚上传完成的文件可以在不登录管理员的情况下生成临时链接——凭证仅在上传成功时
+ * 签发给上传者，绑定 fileId 且短 TTL，无法跨文件或长期滥用。
+ */
+async function tryTempLinkReceiptAccess(context, pathname) {
+  if (!pathname.startsWith('/api/manage/temp-link/')) return false;
+
+  const receipt = context.request.headers.get('X-Upload-Receipt');
+  if (!receipt) return false;
+
+  const pathPart = pathname.slice('/api/manage/temp-link/'.length);
+  if (!pathPart) return false;
+
+  let fileId;
+  try {
+    fileId = decodeURIComponent(pathPart).split(',').join('/');
+  } catch (e) {
+    return false;
+  }
+
+  return await verifyTempLinkReceipt(context.env, receipt, fileId);
+}
+
 // CORS 跨域响应头
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -136,6 +164,13 @@ async function authentication(context) {
 
   const pathname = new URL(context.request.url).pathname;
   if (pathname === '/api/manage/sysConfig/showStats') {
+    return context.next();
+  }
+
+  // 临时链接端点：允许凭"上传凭证"访问，使刚上传完成的文件无需管理员登录即可生成临时链接。
+  // 仅对 /api/manage/temp-link/{fileId} 生效，且凭证必须与路径中的 fileId 匹配。
+  if (await tryTempLinkReceiptAccess(context, pathname)) {
+    context.data.auth = { authType: 'user', method: 'upload-receipt' };
     return context.next();
   }
 
