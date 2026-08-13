@@ -39,6 +39,41 @@ function cleanDisplayName(name) {
         .trim() || name;                 // 如果清理后为空则保留原名
 }
 
+/**
+ * 常见音频文件扩展名集合（小写，无点）
+ * 浏览器对部分格式（flac/ape/wma/wav/aiff 等）不返回 audio/* MIME 类型，
+ * 上传时会被存为 application/octet-stream 或空字符串，仅靠 MIME 过滤会漏掉这些文件。
+ * 此集合用于在 MIME 检测之外，按扩展名兜底识别音频文件。
+ */
+const AUDIO_EXTENSIONS = new Set([
+    'mp3', 'flac', 'ape', 'wav', 'wma', 'ogg', 'oga', 'opus',
+    'm4a', 'm4b', 'm4p', 'm4r', 'aac', 'aiff', 'aif', 'aifc',
+    'alac', 'amr', 'au', 'snd', 'mid', 'midi', 'kar', 'rmi',
+    'mp2', 'mp1', 'mpa', 'mpc', 'mpp', 'mp+', 'wv', 'dsf', 'dff',
+    'ac3', 'ec3', 'eac3', 'truehd', 'tta', 'ofr', 'ofs', 'spx',
+    '3gp', '3g2', 'gsm', 'vox', 'weba'
+]);
+
+function getFileExtension(fileName) {
+    if (!fileName) return '';
+    const lastDot = fileName.lastIndexOf('.');
+    if (lastDot === -1 || lastDot === fileName.length - 1) return '';
+    return fileName.slice(lastDot + 1).toLowerCase();
+}
+
+/**
+ * 判断文件是否为音频：
+ * 1) FileType 以 audio/ 开头（标准识别）
+ * 2) 否则按文件扩展名匹配 AUDIO_EXTENSIONS（兜底识别，处理上传时未带 MIME 的音频）
+ */
+function isAudioFile(file) {
+    const mimeType = file?.metadata?.FileType || '';
+    if (mimeType.startsWith('audio/')) return true;
+    const fileName = file?.metadata?.FileName || file?.id || '';
+    const ext = getFileExtension(fileName);
+    return ext !== '' && AUDIO_EXTENSIONS.has(ext);
+}
+
 export async function onRequest(context) {
     const { request, env } = context;
 
@@ -83,17 +118,21 @@ export async function onRequest(context) {
         const page = Math.max(1, parseInt(url.searchParams.get('page')) || 1);
         const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get('pageSize')) || 50));
 
-        // 只读取音频文件（使用 fileType 过滤减少返回数据量）
-        const audioResult = await readIndex(context, {
+        // 单次 readIndex 读取目录下的全部非视频文件（audio + image + other）：
+        // - audio/* 直接作为音频返回
+        // - other 中扩展名命中 AUDIO_EXTENSIONS 的也视为音频（兜底未带正确 MIME 的上传）
+        // - image + 文本类（.lrc/.txt 通常落入 other）用于封面/歌词匹配
+        // 用一次扫描同时支撑主列表与配套资源匹配，避免原先的两次全索引扫描。
+        const combinedResult = await readIndex(context, {
             directory: musicDir,
             start: 0,
             count: -1,
             includeSubdirFiles: true,
             accessStatus: 'normal',
-            fileType: 'audio',
+            fileType: ['audio', 'image', 'other'],
         });
 
-        if (!audioResult.success) {
+        if (!combinedResult.success) {
             return new Response(JSON.stringify({
                 error: 'Failed to load index',
                 message: 'Index loading failed, please try again later'
@@ -103,7 +142,25 @@ export async function onRequest(context) {
             });
         }
 
-        const allAudioFiles = audioResult.files || [];
+        const combinedFiles = combinedResult.files || [];
+
+        // 拆分：音频文件进 allAudioFiles（按 isAudioFile 二次确认），
+        // 非音频文件入 companionMap 用于歌词/封面匹配
+        const seenAudioIds = new Set();
+        const allAudioFiles = [];
+        const companionMap = new Map();
+        for (const file of combinedFiles) {
+            if (!file || !file.id) continue;
+            if (isAudioFile(file)) {
+                if (!seenAudioIds.has(file.id)) {
+                    seenAudioIds.add(file.id);
+                    allAudioFiles.push(file);
+                }
+            } else {
+                companionMap.set(file.id.toLowerCase(), file);
+            }
+        }
+
         const totalCount = allAudioFiles.length;
         const totalPages = Math.ceil(totalCount / pageSize) || 1;
         const startIdx = (page - 1) * pageSize;
@@ -134,28 +191,12 @@ export async function onRequest(context) {
             }
         }
 
-        // 读取非音频文件（歌词、封面等）用于匹配，失败时静默跳过
-        let fileMap = new Map();
-        try {
-            const companionResult = await readIndex(context, {
-                directory: musicDir,
-                start: 0,
-                count: -1,
-                includeSubdirFiles: true,
-                accessStatus: 'normal',
-                fileType: ['image', 'other'],
-            });
-            if (companionResult.success && companionResult.files) {
-                for (const file of companionResult.files) {
-                    const key = file.id.toLowerCase();
-                    if (neededLookups.has(key)) {
-                        fileMap.set(key, file);
-                    }
-                }
+        // 从 companionMap 中按需挑出歌词/封面文件
+        const fileMap = new Map();
+        for (const key of neededLookups) {
+            if (companionMap.has(key)) {
+                fileMap.set(key, companionMap.get(key));
             }
-        } catch (e) {
-            // 封面/歌词匹配失败不影响主列表
-            console.warn('Failed to load companion files for cover/lyrics matching:', e.message);
         }
 
         // 构建音乐文件列表
