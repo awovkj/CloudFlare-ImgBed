@@ -10,9 +10,91 @@
  * @returns {ReadableStream} 包装后的固定长度流
  */
 export function createFixedLengthBody(body, contentLength) {
+    if (!body || !Number.isSafeInteger(contentLength) || contentLength < 0) {
+        return body;
+    }
+
     const { readable, writable } = new FixedLengthStream(contentLength);
     body.pipeTo(writable).catch(() => {});
     return readable;
+}
+
+/**
+ * Resolve the exact byte length represented by a response.
+ * Content-Range takes precedence because metadata sizes describe the whole file,
+ * while a 206 response only contains the requested segment.
+ */
+export function resolveResponseLength(headers, fallbackSize = null) {
+    const contentRange = headers.get('Content-Range');
+    const rangeMatch = contentRange?.match(/^bytes\s+(\d+)-(\d+)\/(?:\d+|\*)$/i);
+    if (rangeMatch) {
+        const start = Number(rangeMatch[1]);
+        const end = Number(rangeMatch[2]);
+        if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start) {
+            return end - start + 1;
+        }
+    }
+
+    const headerValue = headers.get('Content-Length');
+    if (headerValue !== null && headerValue.trim() !== '') {
+        const headerLength = Number(headerValue);
+        if (Number.isSafeInteger(headerLength) && headerLength >= 0) {
+            return headerLength;
+        }
+    }
+
+    if (fallbackSize !== null && fallbackSize !== undefined && fallbackSize !== '') {
+        const fallbackLength = Number(fallbackSize);
+        if (Number.isSafeInteger(fallbackLength) && fallbackLength >= 0) {
+            return fallbackLength;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Parse one RFC 9110 byte range. Multi-range requests are intentionally
+ * rejected because the file endpoint does not produce multipart/byteranges.
+ */
+export function parseSingleRange(rangeHeader, totalSize) {
+    if (!rangeHeader || !Number.isSafeInteger(totalSize) || totalSize <= 0) {
+        return null;
+    }
+
+    const match = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/i);
+    if (!match || (!match[1] && !match[2])) {
+        return null;
+    }
+
+    let start;
+    let end;
+
+    if (!match[1]) {
+        const suffixLength = Number(match[2]);
+        if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+            return null;
+        }
+        start = Math.max(totalSize - suffixLength, 0);
+        end = totalSize - 1;
+    } else {
+        start = Number(match[1]);
+        end = match[2] ? Number(match[2]) : totalSize - 1;
+
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+            return null;
+        }
+        if (start >= totalSize || start > end) {
+            return null;
+        }
+        end = Math.min(end, totalSize - 1);
+    }
+
+    return {
+        start,
+        end,
+        length: end - start + 1,
+    };
 }
 
 export function decodeFilePathParam(path) {
@@ -178,8 +260,8 @@ export function handleHeadRequest(headers, etag = null) {
     if (etag) {
         headers.set('ETag', etag);
     }
-    // 确保关键头部存在
-    if (!headers.has('Content-Length')) headers.set('Content-Length', '0');
+    // Do not invent a zero length for legacy records whose size is unknown.
+    // A false zero makes download managers treat a non-empty file as empty.
     if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream');
 
     return new Response(null, {

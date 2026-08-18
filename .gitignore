@@ -10,6 +10,7 @@ test/*
 !test/music-admin-password-ui.test.js
 !test/tg-upload-lanes.test.js
 !test/tg-upload-cancel-lane.test.js
+!test/file-download-idm.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/

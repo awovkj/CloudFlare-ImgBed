@@ -6,7 +6,8 @@ import { HuggingFaceAPI } from "../utils/huggingfaceAPI.js";
 import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
-    returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL
+    returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL,
+    createFixedLengthBody, resolveResponseLength, parseSingleRange
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
@@ -179,7 +180,16 @@ export async function onRequest(context) {  // Contents of context object
         const headers = new Headers(response.headers);
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
-        const newRes = new Response(response.body, {
+        if (response.status === 304) {
+            return new Response(null, { status: 304, headers });
+        }
+
+        const fallbackSize = response.status === 206
+            ? null
+            : getMetadataFileSize(imgRecord.metadata);
+        const body = prepareFileBody(headers, response.body, fallbackSize);
+
+        const newRes = new Response(body, {
             status: response.status,
             statusText: response.statusText,
             headers,
@@ -228,6 +238,54 @@ function getChunkedFileCacheControl(context) {
         : FILE_CACHE_CONTROL.PRIVATE;
 }
 
+function getMetadataFileSize(metadata) {
+    // FileSize is a rounded MB display string and must never be treated as bytes.
+    const candidates = [metadata?.FileSizeBytes];
+    for (const candidate of candidates) {
+        if (candidate === null || candidate === undefined || candidate === '') continue;
+        const size = Number(candidate);
+        if (Number.isSafeInteger(size) && size >= 0) return size;
+    }
+    return null;
+}
+
+/**
+ * Normalize an upstream/object response so Workers can keep its exact length.
+ * A manually supplied Content-Length is not enough for arbitrary streams in
+ * Workers; FixedLengthStream also makes premature/overlong bodies observable.
+ */
+function prepareFileBody(headers, body, fallbackSize = null) {
+    const contentLength = resolveResponseLength(headers, fallbackSize);
+    if (contentLength === null) return body;
+
+    headers.set('Content-Length', contentLength.toString());
+    return body ? createFixedLengthBody(body, contentLength) : body;
+}
+
+function rangeNotSatisfiable(totalSize) {
+    const headers = new Headers({
+        'Accept-Ranges': 'bytes',
+        'Content-Range': `bytes */${totalSize}`,
+        'Content-Length': '0',
+    });
+    return new Response(null, { status: 416, headers });
+}
+
+function normalizeChunkList(chunks) {
+    let totalSize = 0;
+    const normalizedChunks = [];
+
+    for (const chunk of chunks) {
+        const size = Number(chunk?.size);
+        if (!Number.isSafeInteger(size) || size <= 0) return null;
+        totalSize += size;
+        if (!Number.isSafeInteger(totalSize)) return null;
+        normalizedChunks.push({ ...chunk, size });
+    }
+
+    return { chunks: normalizedChunks, totalSize };
+}
+
 
 // 澶勭悊 Telegram 娓犻亾鍒嗙墖鏂囦欢璇诲彇
 async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fileType) {
@@ -244,7 +302,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     try {
         if (imgRecord.value) {
             chunks = JSON.parse(imgRecord.value);
-            // 纭繚鍒嗙墖鎸夌储寮曟帓搴?            chunks.sort((a, b) => a.index - b.index);
+            chunks.sort((a, b) => a.index - b.index);
         }
     } catch (parseError) {
         console.error('Failed to parse chunks data:', parseError);
@@ -261,8 +319,12 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
     }
 
-    // 璁＄畻鏂囦欢鎬诲ぇ灏?
-    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
+    const normalized = normalizeChunkList(chunks);
+    if (!normalized || normalized.totalSize <= 0) {
+        return new Response('Error: Invalid chunk sizes', { status: 500 });
+    }
+    chunks = normalized.chunks;
+    const totalSize = normalized.totalSize;
 
     // 鏋勫缓鍝嶅簲澶?
     const headers = new Headers();
@@ -293,17 +355,11 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     let isRangeRequest = false;
 
     if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 楠岃瘉鑼冨洿鏈夋晥鎬?
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
-        }
+        const parsedRange = parseSingleRange(range, totalSize);
+        if (!parsedRange) return rangeNotSatisfiable(totalSize);
+        rangeStart = parsedRange.start;
+        rangeEnd = parsedRange.end;
+        isRangeRequest = true;
     }
 
     // 澶勭悊HEAD璇锋眰
@@ -372,14 +428,14 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         if (isRangeRequest) {
             setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
 
-            return new Response(stream, {
+            return new Response(prepareFileBody(headers, stream), {
                 status: 206, // Partial Content
                 headers,
             });
         } else {
             headers.set('Cache-Control', getChunkedFileCacheControl(context)); // CDN 涓嶇紦瀛樺畬鏁存枃浠讹紝閬垮厤 CDN 涓嶆敮鎸?Range 璇锋眰
 
-            return new Response(stream, {
+            return new Response(prepareFileBody(headers, stream, totalSize), {
                 status: 200,
                 headers,
             });
@@ -406,9 +462,10 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
             const chunkData = await response.arrayBuffer();
             const actualSize = chunkData.byteLength;
 
-            // 濡傛灉鏈夋湡鏈涘ぇ灏忎笖涓嶅尮閰嶏紝鎶涘嚭閿欒
-            if (chunk.size && actualSize !== chunk.size) {
-                console.warn(`Chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
+            // A short/overlong upstream response must not be appended to the
+            // reconstructed file. Retry it; otherwise archives are corrupted.
+            if (actualSize !== chunk.size) {
+                throw new Error(`size mismatch: expected ${chunk.size}, got ${actualSize}`);
             }
 
             return new Uint8Array(chunkData);
@@ -444,7 +501,7 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     try {
         if (imgRecord.value) {
             chunks = JSON.parse(imgRecord.value);
-            // 纭繚鍒嗙墖鎸夌储寮曟帓搴?            chunks.sort((a, b) => a.index - b.index);
+            chunks.sort((a, b) => a.index - b.index);
         }
     } catch (parseError) {
         console.error('Failed to parse Discord chunks data:', parseError);
@@ -461,8 +518,12 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
     }
 
-    // 璁＄畻鏂囦欢鎬诲ぇ灏?
-    const totalSize = chunks.reduce((total, chunk) => total + (chunk.size || 0), 0);
+    const normalized = normalizeChunkList(chunks);
+    if (!normalized || normalized.totalSize <= 0) {
+        return new Response('Error: Invalid chunk sizes', { status: 500 });
+    }
+    chunks = normalized.chunks;
+    const totalSize = normalized.totalSize;
 
     // 鏋勫缓鍝嶅簲澶?
     const headers = new Headers();
@@ -493,17 +554,11 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     let isRangeRequest = false;
 
     if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 楠岃瘉鑼冨洿鏈夋晥鎬?
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
-        }
+        const parsedRange = parseSingleRange(range, totalSize);
+        if (!parsedRange) return rangeNotSatisfiable(totalSize);
+        rangeStart = parsedRange.start;
+        rangeEnd = parsedRange.end;
+        isRangeRequest = true;
     }
 
     // 澶勭悊HEAD璇锋眰
@@ -565,14 +620,14 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         if (isRangeRequest) {
             setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
 
-            return new Response(stream, {
+            return new Response(prepareFileBody(headers, stream), {
                 status: 206, // Partial Content
                 headers,
             });
         } else {
             headers.set('Cache-Control', getChunkedFileCacheControl(context));
 
-            return new Response(stream, {
+            return new Response(prepareFileBody(headers, stream, totalSize), {
                 status: 200,
                 headers,
             });
@@ -610,9 +665,10 @@ async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 
             const chunkData = await response.arrayBuffer();
             const actualSize = chunkData.byteLength;
 
-            // 濡傛灉鏈夋湡鏈涘ぇ灏忎笖涓嶅尮閰嶏紝璁板綍璀﹀憡
-            if (chunk.size && actualSize !== chunk.size) {
-                console.warn(`Discord chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
+            // Reject incomplete CDN reads instead of silently assembling a
+            // corrupt file. The surrounding loop will retry with a fresh URL.
+            if (actualSize !== chunk.size) {
+                throw new Error(`size mismatch: expected ${chunk.size}, got ${actualSize}`);
             }
 
             return new Uint8Array(chunkData);
@@ -679,6 +735,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
         const headers = new Headers();
         object.writeHttpMetadata(headers);
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        headers.set('Content-Length', object.size.toString());
 
         // 澶勭悊HEAD璇锋眰
         if (request.method === 'HEAD') {
@@ -690,14 +747,14 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
             headers.set('Content-Length', object.range.length.toString());
 
-            return new Response(object.body, {
+            return new Response(prepareFileBody(headers, object.body), {
                 status: 206, // Partial Content
                 headers,
             });
         }
 
         // 姝ｅ父璇锋眰
-        return new Response(object.body, {
+        return new Response(prepareFileBody(headers, object.body, object.size), {
             status: 200,
             headers,
         });
@@ -720,6 +777,8 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
             if (request.method === 'HEAD') {
                 const headers = new Headers();
                 setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+                const fileSize = getMetadataFileSize(metadata);
+                if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
                 return handleHeadRequest(headers);
             }
 
@@ -756,7 +815,10 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 headers.set('Content-Range', response.headers.get('Content-Range'));
             }
 
-            return new Response(response.body, {
+            const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
+            const body = prepareFileBody(headers, response.body, fallbackSize);
+
+            return new Response(body, {
                 status: response.status,
                 headers
             });
@@ -823,7 +885,7 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
 
         // 璁剧疆Content-Length鍜孋ontent-Range澶?
-        if (response.ContentLength) {
+        if (response.ContentLength !== undefined && response.ContentLength !== null) {
             headers.set('Content-Length', response.ContentLength.toString());
         }
 
@@ -831,14 +893,19 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
             headers.set('Content-Range', response.ContentRange);
         }
 
+        const isPartialResponse = Boolean(response.ContentRange);
+        const fallbackSize = isPartialResponse ? null : getMetadataFileSize(metadata);
+        const contentLength = resolveResponseLength(headers, fallbackSize);
+        if (contentLength !== null) headers.set('Content-Length', contentLength.toString());
+
         // 澶勭悊HEAD璇锋眰
         if (request.method === 'HEAD') {
             return handleHeadRequest(headers);
         }
 
         // 杩斿洖鍝嶅簲锛屾敮鎸佹祦寮忎紶杈?
-        const statusCode = range ? 206 : 200; // Range璇锋眰杩斿洖206 Partial Content
-        return new Response(response.Body, {
+        const statusCode = isPartialResponse ? 206 : 200;
+        return new Response(prepareFileBody(headers, response.Body, fallbackSize), {
             status: statusCode,
             headers
         });
@@ -876,6 +943,8 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         if (request.method === 'HEAD') {
             const headers = new Headers();
             setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+            const fileSize = getMetadataFileSize(metadata);
+            if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
             return handleHeadRequest(headers);
         }
 
@@ -907,7 +976,10 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
             headers.set('Content-Range', response.headers.get('Content-Range'));
         }
 
-        return new Response(response.body, {
+        const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
+        const body = prepareFileBody(headers, response.body, fallbackSize);
+
+        return new Response(body, {
             status: response.status,
             headers
         });
@@ -983,7 +1055,10 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             headers.set('Content-Range', response.headers.get('Content-Range'));
         }
 
-        return new Response(response.body, {
+        const fallbackSize = response.status === 206 ? null : fileSize;
+        const body = prepareFileBody(headers, response.body, fallbackSize);
+
+        return new Response(body, {
             status: response.status,
             headers
         });
@@ -1063,11 +1138,16 @@ async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
         if (response.status === 304) {
             return new Response(null, { status: 304, headers });
         }
+
+        const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
+        const contentLength = resolveResponseLength(headers, fallbackSize);
+        if (contentLength !== null) headers.set('Content-Length', contentLength.toString());
+
         if (request.method === 'HEAD') {
             return handleHeadRequest(headers, response.headers.get('ETag'));
         }
 
-        return new Response(response.body, {
+        return new Response(prepareFileBody(headers, response.body, fallbackSize), {
             status: response.status,
             headers
         });
