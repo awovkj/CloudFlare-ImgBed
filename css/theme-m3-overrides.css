@@ -219,3 +219,123 @@
 html, body {
   background: var(--md-background);
 }
+
+/* ════════════════════════════════════════════════════════════
+   Responsive refinements
+   The compiled bundle ships almost no breakpoints; these rules
+   adapt Element Plus surfaces (dialogs, drawers, tables,
+   pagination, …) to tablet and phone widths.
+   ════════════════════════════════════════════════════════════ */
+
+/* ── All widths: overlays never exceed the viewport.
+     13–14" laptops with scaled resolutions (125–150%) often report
+     narrow effective widths that fixed-px dialogs would overflow. ── */
+.el-dialog,
+.el-message-box {
+  max-width: calc(100vw - 48px);
+}
+
+/* ── Tablet: keep fixed-width overlays inside the viewport ── */
+@media (max-width: 1024px) {
+  .el-dialog {
+    max-width: calc(100vw - 32px);
+  }
+
+  .el-message-box {
+    max-width: calc(100vw - 32px);
+  }
+}
+
+/* ── Phone: full-bleed-ish overlays, compact density ── */
+@media (max-width: 768px) {
+  .el-dialog {
+    --el-dialog-padding-primary: 12px;
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+    margin-top: 5vh;
+  }
+
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px);
+  }
+
+  .el-notification {
+    width: calc(100vw - 32px);
+    max-width: 360px;
+  }
+
+  .el-message {
+    max-width: calc(100vw - 24px);
+  }
+
+  .el-drawer.ltr,
+  .el-drawer.rtl {
+    width: 86% !important;
+  }
+
+  .el-card__body {
+    padding: 14px;
+  }
+
+  .el-table {
+    font-size: 13px;
+  }
+
+  .el-table td.el-table__cell,
+  .el-table th.el-table__cell {
+    padding: 6px 0;
+  }
+
+  .el-form-item__label {
+    white-space: normal;
+    line-height: 1.5;
+  }
+
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+  }
+
+  .el-tabs__item {
+    padding: 0 12px;
+    font-size: 14px;
+  }
+
+  .el-tag {
+    font-size: 11px;
+  }
+}
+
+/* ── Small phone: tighter density, hide secondary pagination bits ── */
+@media (max-width: 480px) {
+  .el-dialog {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin-top: 4vh;
+  }
+
+  .el-dialog__title,
+  .el-message-box__title {
+    font-size: 15px;
+  }
+
+  .el-table {
+    font-size: 12px;
+  }
+
+  .el-table td.el-table__cell,
+  .el-table th.el-table__cell {
+    padding: 4px 0;
+  }
+
+  .el-table .cell {
+    padding: 0 8px;
+  }
+
+  .el-pagination .el-pagination__jump,
+  .el-pagination .el-pagination__sizes {
+    display: none;
+  }
+}

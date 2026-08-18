@@ -300,6 +300,18 @@ button:disabled::after{background:transparent}
   .composer-toolbar{grid-template-columns:1fr}
   .toolbar-right{justify-content:flex-start}
 }
+@media(max-width:480px){
+  .page-header h1{font-size:22px}
+  .control-bar{padding:12px 16px;gap:8px}
+  .channel-select{min-width:0;flex:1 1 100%}
+  .message-scroll{padding:16px;gap:10px}
+  .message-card{padding:12px}
+  .message-meta{flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .composer-wrap{padding:14px 16px 18px}
+  .composer{padding:12px}
+  .composer textarea{min-height:84px;padding:12px}
+  .auth-card input,.channel-select,.auth-card button,.primary-btn,.secondary-btn,.danger-btn,.icon-btn,.attach-btn,.send-btn{height:40px}
+}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
