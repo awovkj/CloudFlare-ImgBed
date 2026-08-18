@@ -364,3 +364,63 @@
     padding-right: 14px;
   }
 }
+
+/* ══════════════════════════════════════════════════════
+   Directory password unlock (dropdown & modal picker)
+   ══════════════════════════════════════════════════════ */
+
+.cfbed-dir-unlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 12px;
+}
+
+.cfbed-dir-unlock-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--md-on-surface, #1b1b1f);
+  text-align: center;
+}
+
+.cfbed-dir-unlock-desc {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant, #45464f);
+  text-align: center;
+}
+
+.cfbed-dir-unlock-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--md-outline-variant, #c5c6d0);
+  border-radius: var(--md-shape-full, 999px);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--md-on-surface, #1b1b1f);
+  background: var(--md-surface-container-lowest, #fff);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.cfbed-dir-unlock-input:focus {
+  border-color: var(--md-primary, #3b66d6);
+}
+
+.cfbed-dir-unlock-msg {
+  min-height: 14px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--md-on-surface-variant, #45464f);
+}
+
+.cfbed-dir-unlock-msg.is-error {
+  color: var(--md-error, #b3261e);
+}
+
+.cfbed-dir-unlock-actions {
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}

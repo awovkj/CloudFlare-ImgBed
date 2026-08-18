@@ -1,6 +1,7 @@
 import { getDirectoryTree } from '../utils/indexManager';
 import { dualAuthCheck } from '../utils/auth/dualAuth.js';
-import { fetchPageConfig } from '../utils/sysConfig';
+import { fetchPageConfig, fetchOthersConfig } from '../utils/sysConfig';
+import { verifyPassword } from '../utils/auth/passwordHash.js';
 
 export async function onRequestGet(context) {
     const { env, request } = context;
@@ -22,6 +23,26 @@ export async function onRequestGet(context) {
                 status: 403,
                 headers: { 'Content-Type': 'application/json' }
             });
+        }
+
+        // 目录列表密码门控：启用后非管理员需提供 X-Directory-Password 才能获取目录树
+        // （管理员 / API Token 豁免；无状态校验，前端在内存中持有密码）
+        const othersConfig = await fetchOthersConfig(env);
+        const dirListConfig = othersConfig.directoryList || {};
+        if (dirListConfig.enabled && dirListConfig.passwordHash) {
+            const dirPassword = request.headers.get('X-Directory-Password') || '';
+            const passwordOk = dirPassword
+                ? await verifyPassword(dirPassword, dirListConfig.passwordHash)
+                : false;
+            if (!passwordOk) {
+                return new Response(JSON.stringify({ error: 'directory_password_required' }), {
+                    status: 401,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-store'
+                    }
+                });
+            }
         }
     }
 

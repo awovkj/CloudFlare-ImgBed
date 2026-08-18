@@ -74,6 +74,7 @@ const DEFAULT_PAGE_CONFIG = { config: [] };
 const DEFAULT_OTHERS_CONFIG = {
     showStats: { enabled: true },
     chatPage: { enabled: false },
+    directoryList: { enabled: false, passwordHash: '' },
 };
 
 /**

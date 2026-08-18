@@ -9,6 +9,17 @@
   var activeDropdown = null;
   var observer = null;
   var enhanceScheduled = false;
+  // 目录列表密码（后端启用门控后查看已有目录需要）；仅保存在内存，刷新页面后需重新输入
+  var directoryPassword = '';
+
+  function isPasswordRequiredError(err) {
+    return !!(err && err.code === 'directory_password_required');
+  }
+
+  function invalidateTreeCache() {
+    treeCache = null;
+    treeCacheAt = 0;
+  }
 
   function normalizeForInput(path) {
     if (!path || path === '/') return '/';
@@ -88,18 +99,35 @@
     if (authCode) {
       apiUrl += '&authCode=' + encodeURIComponent(authCode);
     }
+    var headers = {
+      Accept: 'application/json',
+      authCode: authCode
+    };
+    if (directoryPassword) {
+      headers['X-Directory-Password'] = directoryPassword;
+    }
     return fetch(apiUrl, {
       method: 'GET',
       credentials: 'same-origin',
-      headers: {
-        Accept: 'application/json',
-        authCode: authCode
-      }
+      headers: headers
     }).then(function (response) {
       if (!response.ok) {
-        var error = new Error('目录树加载失败');
-        error.status = response.status;
-        throw error;
+        if (response.status === 401) {
+          // 区分"目录密码门控 401"（JSON 标记）与"未登录 401"（纯文本）
+          return response.json().catch(function () { return null; }).then(function (data) {
+            if (data && data.error === 'directory_password_required') {
+              var pwdError = new Error('directory_password_required');
+              pwdError.code = 'directory_password_required';
+              throw pwdError;
+            }
+            var error = new Error('目录树加载失败');
+            error.status = response.status;
+            throw error;
+          });
+        }
+        var err = new Error('目录树加载失败');
+        err.status = response.status;
+        throw err;
       }
       return response.json();
     }).then(function (data) {
@@ -113,6 +141,70 @@
       treeCacheAt = Date.now();
       return treeCache;
     });
+  }
+
+  // ── Directory password unlock UI（dropdown 与 modal picker 共用）──
+
+  function renderPasswordUnlock(container, options) {
+    container.innerHTML = '';
+    var wrap = createElement('div', 'cfbed-dir-unlock');
+    wrap.appendChild(createElement('div', 'cfbed-dir-unlock-title', '查看已有目录需要密码'));
+    wrap.appendChild(createElement('div', 'cfbed-dir-unlock-desc', '输入目录密码即可浏览已有目录；也可跳过此步，直接手动输入目录路径。'));
+
+    var input = document.createElement('input');
+    input.type = 'password';
+    input.className = 'cfbed-dir-unlock-input';
+    input.placeholder = '目录密码';
+    input.autocomplete = 'off';
+    wrap.appendChild(input);
+
+    var msg = createElement('div', 'cfbed-dir-unlock-msg', options.wrong ? '密码错误，请重试' : '');
+    if (options.wrong) msg.classList.add('is-error');
+    wrap.appendChild(msg);
+
+    var actions = createElement('div', 'cfbed-dir-unlock-actions');
+    var unlockButton = createElement('button', 'cfbed-tree-action is-primary', '解锁');
+    unlockButton.type = 'button';
+    actions.appendChild(unlockButton);
+    wrap.appendChild(actions);
+
+    container.appendChild(wrap);
+
+    function attemptUnlock() {
+      var value = input.value.trim();
+      if (!value) {
+        input.focus();
+        return;
+      }
+      directoryPassword = value;
+      invalidateTreeCache();
+      unlockButton.disabled = true;
+      unlockButton.textContent = '解锁中...';
+      fetchTree().then(function (nodes) {
+        options.onUnlocked(nodes);
+      }).catch(function (err) {
+        unlockButton.disabled = false;
+        unlockButton.textContent = '解锁';
+        if (isPasswordRequiredError(err)) {
+          // 密码错误：保留输入内容便于修改，仅重渲染提示
+          renderPasswordUnlock(container, Object.assign({}, options, { wrong: true }));
+          var newInput = container.querySelector('.cfbed-dir-unlock-input');
+          if (newInput) {
+            newInput.value = value;
+            newInput.focus();
+          }
+        } else {
+          container.innerHTML = '';
+          container.appendChild(createElement('div', 'cfbed-dd-msg', '目录列表加载失败，请直接输入'));
+        }
+      });
+    }
+
+    unlockButton.addEventListener('click', attemptUnlock);
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') attemptUnlock();
+    });
+    setTimeout(function () { input.focus(); }, 50);
   }
 
   // ── Inline dropdown (for homepage .upload-folder) ──
@@ -185,8 +277,18 @@
     document.body.appendChild(dropdown);
     activeDropdown = { el: dropdown };
 
-    fetchTree().then(function (nodes) {
-      list.removeChild(loading);
+    function renderNodes(nodes) {
+      list.innerHTML = '';
+      // Root option
+      var rootItem = createElement('div', 'cfbed-dd-item cfbed-dd-root');
+      rootItem.appendChild(createElement('span', 'cfbed-dd-icon', '🏠'));
+      rootItem.appendChild(createElement('span', 'cfbed-dd-label', '根目录 /'));
+      rootItem.addEventListener('click', function (e) {
+        e.stopPropagation();
+        onSelect('');
+      });
+      list.appendChild(rootItem);
+
       if (!nodes.length) {
         list.appendChild(createElement('div', 'cfbed-dd-msg', '暂无目录'));
         return;
@@ -194,8 +296,16 @@
       nodes.forEach(function (node) {
         list.appendChild(buildDropdownItem(node, 0, onSelect));
       });
-    }).catch(function () {
-      list.removeChild(loading);
+    }
+
+    fetchTree().then(renderNodes).catch(function (err) {
+      if (isPasswordRequiredError(err)) {
+        // 需要目录密码：dropdown 内渲染解锁 UI（输入框本身不受影响，仍可手动填写）
+        list.innerHTML = '';
+        renderPasswordUnlock(list, { onUnlocked: renderNodes });
+        return;
+      }
+      list.innerHTML = '';
       list.appendChild(createElement('div', 'cfbed-dd-msg', '加载失败'));
     });
   }
@@ -349,8 +459,13 @@
 
     fetchTree().then(function (nodes) {
       renderTree(nodes);
-    }).catch(function () {
+    }).catch(function (err) {
       content.innerHTML = '';
+      if (isPasswordRequiredError(err)) {
+        // 需要目录密码：内容区渲染解锁 UI；顶部手动输入框不受影响，仍可直接填写
+        renderPasswordUnlock(content, { onUnlocked: renderTree });
+        return;
+      }
       content.appendChild(createElement('div', 'cfbed-dd-msg', '目录列表加载失败，请直接输入'));
     });
 

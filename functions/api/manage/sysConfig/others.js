@@ -14,6 +14,15 @@ function sanitizeManagementSettings(settings) {
     musicPlayer.passwordConfigured = passwordConfigured;
     sanitized.musicPlayer = musicPlayer;
 
+    // 目录列表密码不下发到前端
+    const directoryList = sanitized.directoryList || {};
+    const dirPasswordConfigured = Boolean(directoryList.passwordHash);
+    delete directoryList.password;
+    delete directoryList.passwordHash;
+    delete directoryList.clearPassword;
+    directoryList.passwordConfigured = dirPasswordConfigured;
+    sanitized.directoryList = directoryList;
+
     // WebDAV internal token 不下发到前端
     if (sanitized.webDAV) {
         delete sanitized.webDAV.internalToken;
@@ -56,6 +65,8 @@ export async function onRequest(context) {
         const oldPasswordHash = settings.musicPlayer?.passwordHash
         const oldWebDAV = settings.webDAV || {}
         let musicPasswordChanged = false
+        const newDirectoryList = body.directoryList || {}
+        const oldDirectoryList = settings.directoryList || {}
 
         Object.assign(settings, body)
 
@@ -103,6 +114,25 @@ export async function onRequest(context) {
             settings.musicPlayer.passwordHash = oldPasswordHash
         } else {
             delete settings.musicPlayer.passwordHash
+        }
+
+        // 目录列表密码门控：三态处理与 musicPlayer 一致
+        settings.directoryList = {
+            ...oldDirectoryList,
+            ...newDirectoryList,
+        }
+        delete settings.directoryList.password
+        delete settings.directoryList.clearPassword
+        delete settings.directoryList.passwordConfigured
+
+        if (newDirectoryList.clearPassword === true) {
+            delete settings.directoryList.passwordHash
+        } else if (typeof newDirectoryList.password === 'string' && newDirectoryList.password !== '') {
+            settings.directoryList.passwordHash = await hashPassword(newDirectoryList.password)
+        } else if (oldDirectoryList.passwordHash) {
+            settings.directoryList.passwordHash = oldDirectoryList.passwordHash
+        } else {
+            delete settings.directoryList.passwordHash
         }
 
         // 写入数据库
@@ -193,6 +223,14 @@ export async function getOthersConfig(db, env) {
     settings.videoPlayer = {
         enabled: kvVideoPlayer.enabled ?? false,
         videoDir: kvVideoPlayer.videoDir || '',
+        fixed: false,
+    }
+
+    // 目录列表密码门控
+    const kvDirectoryList = settingsKV.directoryList || {}
+    settings.directoryList = {
+        enabled: kvDirectoryList.enabled ?? false,
+        passwordHash: kvDirectoryList.passwordHash || '',
         fixed: false,
     }
 
