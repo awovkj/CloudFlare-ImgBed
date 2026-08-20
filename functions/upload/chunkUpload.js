@@ -6,6 +6,7 @@ import { TelegramAPI } from '../utils/telegramAPI.js';
 import { DiscordAPI } from '../utils/discordAPI.js';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase, checkDatabaseConfig } from '../utils/databaseAdapter.js';
+import { fetchUploadConfig } from '../utils/sysConfig.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
@@ -17,6 +18,28 @@ const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 3600;
 const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
 export const TELEGRAM_LARGE_FILE_CONCURRENCY = 4;
+
+// Direct callers (and a few background/retry paths) do not always pass the
+// request-level uploadConfig that upload/index.js normally attaches. Resolve it
+// lazily and retain it on the context so all operations in one request share a
+// single config read. This also keeps the normal route path allocation-free.
+async function ensureUploadConfig(context) {
+    if (!context) return {};
+    if (context.uploadConfig && typeof context.uploadConfig === 'object') {
+        return context.uploadConfig;
+    }
+
+    try {
+        context.uploadConfig = await fetchUploadConfig(context.env);
+    } catch (error) {
+        // Configuration lookup must not hide the more useful storage error. The
+        // storage helpers will return a channel-not-configured result below.
+        console.warn('Failed to resolve upload config for chunk operation:', error?.message || error);
+        context.uploadConfig = {};
+    }
+
+    return context.uploadConfig;
+}
 
 // Telegram 大文件分片会直接发送到 Telegram。成功后只需要保存 file_id，
 // 原始分片数据仅在发送失败时才用于合并阶段的补偿重试。
@@ -75,6 +98,85 @@ async function putUploadManifest(env, uploadId, manifest, contextOrUrl = null) {
     return updatedManifest;
 }
 
+function selectConfiguredChannel(settings = {}, requestedName = '', uploadId = '') {
+    const channels = Array.isArray(settings.channels) ? settings.channels : [];
+    if (requestedName) {
+        const requested = channels.find(channel => channel?.name === requestedName);
+        if (requested) return requested;
+    }
+
+    if (channels.length === 0) return null;
+    const loadBalanceEnabled = settings.loadBalance?.enabled === true;
+    return selectConsistentChannel(channels, String(uploadId || ''), loadBalanceEnabled) || channels[0];
+}
+
+async function abortMultipartResource(context, multipartInfo) {
+    if (!multipartInfo) return;
+
+    try {
+        if (multipartInfo.backend === 'cfr2') {
+            const r2 = context?.env?.img_r2;
+            if (r2?.resumeMultipartUpload) {
+                await r2.resumeMultipartUpload(multipartInfo.key, multipartInfo.uploadId).abort();
+            }
+            return;
+        }
+
+    } catch {
+        // Rollback is best effort. Never replace the original initialization
+        // error with a cleanup failure (and do not leak storage credentials).
+    }
+}
+
+/**
+ * Establish an R2 multipart upload before persisting the session. Doing this
+ * once at initialization makes chunk zero deterministic and lets a later
+ * persistence failure cleanly abort the remote upload.
+ */
+async function createInitialMultipart(context, uploadId, originalFileName, originalFileType, uploadChannel, channelName) {
+    const { env } = context;
+    const db = getDatabase(env);
+    const multipartKey = `multipart_${uploadId}`;
+    const uploadConfig = await ensureUploadConfig(context);
+
+    if (uploadChannel === 'cfr2') {
+        const r2 = env?.img_r2;
+        if (!r2?.createMultipartUpload || !r2?.resumeMultipartUpload) return null;
+
+        const finalFileId = await buildUniqueFileId(context, originalFileName, originalFileType);
+        let remoteUpload = null;
+        try {
+            remoteUpload = await r2.createMultipartUpload(finalFileId);
+            if (!remoteUpload?.uploadId) {
+                throw new Error('R2 did not return a multipart upload id');
+            }
+
+            const channel = selectConfiguredChannel(uploadConfig.cfr2, channelName, uploadId);
+            // Keep the requested name even when a direct caller supplied only an
+            // env binding and the generated config names the channel R2_env.
+            const multipartInfo = {
+                backend: 'cfr2',
+                uploadId: remoteUpload.uploadId,
+                key: finalFileId,
+                channelName: channelName || channel?.name || ''
+            };
+            await db.put(multipartKey, JSON.stringify(multipartInfo), {
+                expirationTtl: getChunkRecordTtlSeconds(context)
+            });
+            return multipartInfo;
+        } catch (error) {
+            await abortMultipartResource(context, {
+                backend: 'cfr2',
+                key: finalFileId,
+                uploadId: remoteUpload?.uploadId
+            });
+            throw error;
+        }
+    }
+
+    return null;
+}
+
 export async function updateUploadManifestChunk(env, uploadId, chunkIndex, patch = {}, contextOrUrl = null) {
     try {
         const manifest = await getUploadManifest(env, uploadId) || {
@@ -122,6 +224,8 @@ export async function updateUploadManifestChunk(env, uploadId, chunkIndex, patch
 export async function initializeChunkedUpload(context) {
     const { request, env, url } = context;
     const db = getDatabase(env);
+    let createdMultipart = null;
+    const initializationKeys = new Set();
 
     try {
         // 解析表单数据
@@ -218,6 +322,11 @@ export async function initializeChunkedUpload(context) {
         // 获取指定的渠道名称
         let channelName = url.searchParams.get('channelName') || '';
 
+        // The normal route populates uploadConfig before reaching this function,
+        // while direct/background callers may only provide env. Resolve it once
+        // so channel selection and provider setup use the same snapshot.
+        await ensureUploadConfig(context);
+
         // A Telegram file_id belongs to the bot that uploaded it. Pin an automatic
         // channel choice to the upload session so every chunk of one file uses the
         // same bot, while different uploadIds can still be load-balanced.
@@ -239,6 +348,23 @@ export async function initializeChunkedUpload(context) {
                 'INVALID_UPLOAD_CHANNEL',
                 'WebDAV channel does not support chunked uploads. Please use non-chunked upload within your Cloudflare request body limit.'
             ), 400);
+        }
+
+        context.specifiedChannelName = channelName;
+
+        // Create provider multipart state before the session is visible. If any
+        // subsequent KV write fails, the catch block aborts this remote upload
+        // and removes every initialization record.
+        createdMultipart = await createInitialMultipart(
+            context,
+            uploadId,
+            originalFileName,
+            originalFileType,
+            uploadChannel,
+            channelName
+        );
+        if (createdMultipart) {
+            initializationKeys.add(`multipart_${uploadId}`);
         }
 
         const isChatUpload = isChatRequestFromUrl(url);
@@ -266,6 +392,7 @@ export async function initializeChunkedUpload(context) {
 
         // 保存会话信息
         const sessionKey = `upload_session_${uploadId}`;
+        initializationKeys.add(sessionKey);
         await db.put(sessionKey, JSON.stringify(sessionInfo), {
             expirationTtl: sessionTtlSeconds
         });
@@ -273,11 +400,13 @@ export async function initializeChunkedUpload(context) {
         // 写入指纹索引（用于断点续传查找），TTL 与会话一致
         if (fileFingerprint) {
             const fingerprintIndexKey = `upload_fp_${fileFingerprint}`;
+            initializationKeys.add(fingerprintIndexKey);
             await db.put(fingerprintIndexKey, uploadId, {
                 expirationTtl: sessionTtlSeconds
             });
         }
 
+        initializationKeys.add(getUploadManifestKey(uploadId));
         await putUploadManifest(env, uploadId, {
             schemaVersion: 2,
             revision: 0,
@@ -309,6 +438,12 @@ export async function initializeChunkedUpload(context) {
         });
 
     } catch (error) {
+        await abortMultipartResource(context, createdMultipart);
+        // Best-effort rollback. Keep this silent so the original, sanitized
+        // initialization error remains the only server error emitted.
+        await Promise.allSettled([...initializationKeys].map(key => (
+            Promise.resolve().then(() => db.delete(key))
+        )));
         console.error('Failed to initialize chunked upload:', error);
         return createUploadJsonResponse(uploadError(
             'CHUNK_INITIALIZATION_FAILED',
@@ -380,6 +515,12 @@ export async function handleChunkUpload(context) {
 
         // 将渠道名称存入 context
         context.specifiedChannelName = channelName;
+
+        // The Pages/Worker route normally attaches uploadConfig before this
+        // handler runs, but direct callers and Durable Object retries may only
+        // provide env. Resolve it once here so provider helpers never receive
+        // an undefined configuration object.
+        await ensureUploadConfig(context);
 
         // 立即创建分块记录，标记为"uploading"状态
         const chunkKey = `chunk_${uploadId}_${chunkIndex.toString().padStart(3, '0')}`;
@@ -751,11 +892,12 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
 
 // 上传单个分块到R2 (Multipart Upload)
 async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
-    const { env, uploadConfig } = context;
+    const { env } = context;
     const db = getDatabase(env);
 
     try {
-        const r2Settings = uploadConfig.cfr2;
+        const uploadConfig = await ensureUploadConfig(context);
+        const r2Settings = uploadConfig.cfr2 || {};
         if (!r2Settings.channels || r2Settings.channels.length === 0) {
             return { success: false, error: 'No R2 channel provided' };
         }
@@ -763,14 +905,30 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
         const R2DataBase = env.img_r2;
         const multipartKey = `multipart_${uploadId}`;
 
-        let finalFileId;
+        let multipartInfoData = await db.get(multipartKey);
 
-        // 如果是第一个分块，生成并保存 finalFileId
-        if (chunkIndex === 0) {
-            finalFileId = await buildUniqueFileId(context, originalFileName, originalFileType);
+        // Initialization writes can be briefly invisible on eventually
+        // consistent KV. Give the eagerly-created record a short window to
+        // appear before falling back to the legacy lazy path; otherwise a
+        // fast chunk-0 request could create a second remote multipart upload.
+        if (!multipartInfoData && chunkIndex === 0) {
+            let visibilityDelay = 50;
+            for (let attempt = 0; attempt < 4 && !multipartInfoData; attempt++) {
+                await new Promise(resolve => setTimeout(resolve, visibilityDelay));
+                multipartInfoData = await db.get(multipartKey);
+                visibilityDelay *= 2;
+            }
+        }
 
+        // Eager initialization normally creates this record before the first
+        // chunk arrives. Keep a lazy fallback for legacy sessions created by
+        // older versions, but never create a second multipart when state is
+        // already present.
+        if (!multipartInfoData && chunkIndex === 0) {
+            const finalFileId = await buildUniqueFileId(context, originalFileName, originalFileType);
             const multipartUpload = await R2DataBase.createMultipartUpload(finalFileId);
             const multipartInfo = {
+                backend: 'cfr2',
                 uploadId: multipartUpload.uploadId,
                 key: finalFileId,
                 status: 'initialized',
@@ -780,62 +938,38 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
             await db.put(multipartKey, JSON.stringify(multipartInfo), {
                 expirationTtl: getChunkRecordTtlSeconds(context)
             });
-            
+            multipartInfoData = JSON.stringify(multipartInfo);
             console.log(`R2 multipart upload initialized for ${finalFileId}`);
-        } else {
-            let multipartInfoData = null;
+        }
+
+        if (!multipartInfoData) {
             let retryCount = 0;
             const maxRetries = 60;
             // 指数退避轮询：200ms 起步，每次 ×1.5，上限 1000ms
-            // 比 fixed 500ms 更快响应初始化完成，同时减少无效请求
             let pollInterval = 200;
 
             while (!multipartInfoData && retryCount < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
                 multipartInfoData = await db.get(multipartKey);
-                if (!multipartInfoData) {
-                    await new Promise(resolve => setTimeout(resolve, pollInterval));
-                    retryCount++;
-                    // 指数退避，上限 1000ms
-                    pollInterval = Math.min(pollInterval * 1.5, 1000);
-                    if (retryCount % 10 === 0) {
-                        console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
-                    }
+                retryCount++;
+                pollInterval = Math.min(pollInterval * 1.5, 1000);
+                if (retryCount % 10 === 0) {
+                    console.log(`R2 chunk ${chunkIndex} waiting for multipart initialization... (${retryCount}/${maxRetries})`);
                 }
             }
-
-            if (!multipartInfoData) {
-                return { success: false, error: 'Multipart upload not initialized after waiting 30 seconds' };
-            }
-
-            const multipartInfo = JSON.parse(multipartInfoData);
-            finalFileId = multipartInfo.key;
-            
-            console.log(`R2 chunk ${chunkIndex} found multipart info for ${finalFileId}`);
-
-            const multipartUpload = R2DataBase.resumeMultipartUpload(finalFileId, multipartInfo.uploadId);
-            const uploadedPart = await multipartUpload.uploadPart(chunkIndex + 1, chunkData);
-
-            if (!uploadedPart || !uploadedPart.etag) {
-                throw new Error(`Failed to upload part ${chunkIndex + 1} to R2`);
-            }
-
-            return {
-                success: true,
-                partNumber: chunkIndex + 1,
-                etag: uploadedPart.etag,
-                size: chunkData.byteLength,
-                uploadTime: Date.now(),
-                multipartUploadId: multipartInfo.uploadId,
-                key: finalFileId
-            };
         }
 
-        const multipartInfoData = await db.get(multipartKey);
         if (!multipartInfoData) {
-            return { success: false, error: 'Multipart upload not initialized' };
+            return { success: false, error: 'Multipart upload not initialized after waiting 30 seconds' };
         }
 
         const multipartInfo = JSON.parse(multipartInfoData);
+        const finalFileId = multipartInfo.key;
+        if (!finalFileId || !multipartInfo.uploadId) {
+            return { success: false, error: 'Invalid multipart upload metadata' };
+        }
+
+        console.log(`R2 chunk ${chunkIndex} found multipart info for ${finalFileId}`);
 
         const multipartUpload = R2DataBase.resumeMultipartUpload(finalFileId, multipartInfo.uploadId);
         const uploadedPart = await multipartUpload.uploadPart(chunkIndex + 1, chunkData);

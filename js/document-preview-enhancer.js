@@ -25,6 +25,8 @@
     ];
 
     var originalFetch = global.fetch ? global.fetch.bind(global) : null;
+    // 当前预览模态框的全局键盘监听引用，关闭时同步释放。
+    var modalEscHandler = null;
 
     // ==================== 类型识别 ====================
 
@@ -265,6 +267,10 @@
     // ==================== 预览模态框 ====================
 
     function closeModal() {
+        if (modalEscHandler) {
+            document.removeEventListener('keydown', modalEscHandler);
+            modalEscHandler = null;
+        }
         var existing = document.getElementById(MODAL_ID);
         if (existing) existing.remove();
     }
@@ -305,13 +311,12 @@
         overlay.addEventListener('click', function (e) {
             if (e.target === overlay) closeModal();
         });
-        var escHandler = function (e) {
+        modalEscHandler = function (e) {
             if (e.key === 'Escape') {
                 closeModal();
-                document.removeEventListener('keydown', escHandler);
             }
         };
-        document.addEventListener('keydown', escHandler);
+        document.addEventListener('keydown', modalEscHandler);
 
         var body = modal.querySelector('.doc-preview-body');
         renderPreview(body, fileInfo, category);
@@ -507,32 +512,57 @@
 
     // ==================== MutationObserver ====================
 
-    function findDetailDialog(root) {
-        var dialogs = root.querySelectorAll('.el-dialog');
-        for (var i = 0; i < dialogs.length; i++) {
-            var titleEl = dialogs[i].querySelector('.el-dialog__title');
-            if (titleEl && titleEl.textContent.trim() === DIALOG_TITLE) {
-                return dialogs[i];
-            }
+    function collectMatching(root, selector) {
+        var matches = [];
+        var add = function (element) {
+            if (element && matches.indexOf(element) === -1) matches.push(element);
+        };
+        if (!root || root.nodeType === 9) {
+            document.querySelectorAll(selector).forEach(add);
+            return matches;
         }
-        return null;
+        if (root.nodeType !== 1) return matches;
+        if (root.matches && root.matches(selector)) add(root);
+        if (root.closest) add(root.closest(selector));
+        if (root.querySelectorAll) root.querySelectorAll(selector).forEach(add);
+        return matches;
     }
 
-    function scanForDetailDialog() {
-        var dialog = findDetailDialog(document);
-        if (dialog) {
-            injectPreviewButton(dialog);
-        }
+    function scanForDetailDialog(roots) {
+        var scanRoots = roots && roots.length ? roots : [document];
+        var dialogs = [];
+        scanRoots.forEach(function (root) {
+            collectMatching(root, '.el-dialog').forEach(function (dialog) {
+                if (dialogs.indexOf(dialog) === -1) dialogs.push(dialog);
+            });
+        });
+        dialogs.forEach(function (dialog) {
+            var titleEl = dialog.querySelector('.el-dialog__title');
+            if (titleEl && titleEl.textContent.trim() === DIALOG_TITLE) {
+                injectPreviewButton(dialog);
+            }
+        });
     }
 
     function attachObserver() {
         if (!global.MutationObserver || !document.documentElement) return;
 
         var scheduled = false;
-        var scheduleScan = function () {
+        var pendingRoots = [];
+        var scheduleScan = function (roots) {
+            if (roots && roots.length) {
+                roots.forEach(function (root) {
+                    if (pendingRoots.indexOf(root) === -1) pendingRoots.push(root);
+                });
+            }
             if (scheduled) return;
             scheduled = true;
-            var run = function () { scheduled = false; scanForDetailDialog(); };
+            var run = function () {
+                scheduled = false;
+                var rootsToScan = pendingRoots;
+                pendingRoots = [];
+                scanForDetailDialog(rootsToScan);
+            };
             if (typeof global.requestAnimationFrame === 'function') {
                 global.requestAnimationFrame(run);
             } else {
@@ -540,7 +570,16 @@
             }
         };
 
-        new global.MutationObserver(scheduleScan).observe(document.documentElement, {
+        new global.MutationObserver(function (mutations) {
+            var roots = [];
+            mutations.forEach(function (mutation) {
+                if (!mutation.addedNodes || !mutation.addedNodes.length) return;
+                Array.prototype.forEach.call(mutation.addedNodes, function (node) {
+                    if (node && node.nodeType === 1 && roots.indexOf(node) === -1) roots.push(node);
+                });
+            });
+            if (roots.length) scheduleScan(roots);
+        }).observe(document.documentElement, {
             childList: true,
             subtree: true,
         });

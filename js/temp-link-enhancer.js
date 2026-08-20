@@ -26,6 +26,8 @@
     var receiptByFileId = {};
     // 保存原始 fetch 引用，避免递归调用
     var originalFetch = global.fetch.bind(global);
+    // 当前模态框的全局键盘监听引用，关闭时必须释放，避免反复打开后累积。
+    var modalEscHandler = null;
 
     // ==================== 认证拦截 ====================
 
@@ -469,19 +471,22 @@
         });
 
         // ESC 关闭
-        var escHandler = function (e) {
+        modalEscHandler = function (e) {
             if (e.key === 'Escape') {
                 closeModal();
-                document.removeEventListener('keydown', escHandler);
             }
         };
-        document.addEventListener('keydown', escHandler);
+        document.addEventListener('keydown', modalEscHandler);
 
         // 加载已有链接
         loadTempLinks(fileId, overlay);
     }
 
     function closeModal() {
+        if (modalEscHandler) {
+            document.removeEventListener('keydown', modalEscHandler);
+            modalEscHandler = null;
+        }
         var existing = document.getElementById('temp-link-modal-overlay');
         if (existing) existing.remove();
     }
@@ -697,39 +702,66 @@
 
     // ==================== MutationObserver ====================
 
-    function findDetailDialog(root) {
-        var dialogs = root.querySelectorAll('.el-dialog');
-        for (var i = 0; i < dialogs.length; i++) {
-            var titleEl = dialogs[i].querySelector('.el-dialog__title');
-            if (titleEl && titleEl.textContent.trim() === DIALOG_TITLE) {
-                return dialogs[i];
-            }
+    function collectMatching(root, selector) {
+        var matches = [];
+        var add = function (element) {
+            if (element && matches.indexOf(element) === -1) matches.push(element);
+        };
+        if (!root || root.nodeType === 9) {
+            document.querySelectorAll(selector).forEach(add);
+            return matches;
         }
-        return null;
+        if (root.nodeType !== 1) return matches;
+        if (root.matches && root.matches(selector)) add(root);
+        if (root.closest) add(root.closest(selector));
+        if (root.querySelectorAll) root.querySelectorAll(selector).forEach(add);
+        return matches;
     }
 
-    function scanForDetailDialog() {
-        var dialog = findDetailDialog(document);
-        if (dialog) {
-            injectTempLinkButton(dialog);
-        }
-        // 扫描上传成功列表项，注入临时链接按钮
-        // 注：未成功上传的项（无 fileId）会被 injectTempLinkButtonIntoUploadItem 内部跳过，
-        // 上传成功后 href 被设置，MutationObserver 触发时即可完成注入
-        var uploadItems = document.querySelectorAll('.upload-list-item');
-        for (var i = 0; i < uploadItems.length; i++) {
-            injectTempLinkButtonIntoUploadItem(uploadItems[i]);
-        }
+    function scanForDetailDialog(roots) {
+        var scanRoots = roots && roots.length ? roots : [document];
+        var dialogs = [];
+        var uploadItems = [];
+        scanRoots.forEach(function (root) {
+            collectMatching(root, '.el-dialog').forEach(function (dialog) {
+                if (dialogs.indexOf(dialog) === -1) dialogs.push(dialog);
+            });
+            collectMatching(root, '.upload-list-item').forEach(function (item) {
+                if (uploadItems.indexOf(item) === -1) uploadItems.push(item);
+            });
+        });
+
+        dialogs.forEach(function (dialog) {
+            var titleEl = dialog.querySelector('.el-dialog__title');
+            if (titleEl && titleEl.textContent.trim() === DIALOG_TITLE) {
+                injectTempLinkButton(dialog);
+            }
+        });
+
+        // 扫描上传成功列表项，注入临时链接按钮。只检查本次发生变化的子树，
+        // 避免 SPA 每次局部更新都遍历整个 document。
+        uploadItems.forEach(injectTempLinkButtonIntoUploadItem);
     }
 
     function attachObserver() {
         if (!global.MutationObserver || !document.documentElement) return;
 
         var scheduled = false;
-        var scheduleScan = function () {
+        var pendingRoots = [];
+        var scheduleScan = function (roots) {
+            if (roots && roots.length) {
+                roots.forEach(function (root) {
+                    if (pendingRoots.indexOf(root) === -1) pendingRoots.push(root);
+                });
+            }
             if (scheduled) return;
             scheduled = true;
-            var run = function () { scheduled = false; scanForDetailDialog(); };
+            var run = function () {
+                scheduled = false;
+                var rootsToScan = pendingRoots;
+                pendingRoots = [];
+                scanForDetailDialog(rootsToScan);
+            };
             if (typeof global.requestAnimationFrame === 'function') {
                 global.requestAnimationFrame(run);
             } else {
@@ -737,7 +769,16 @@
             }
         };
 
-        new global.MutationObserver(scheduleScan).observe(document.documentElement, {
+        new global.MutationObserver(function (mutations) {
+            var roots = [];
+            mutations.forEach(function (mutation) {
+                if (!mutation.addedNodes || !mutation.addedNodes.length) return;
+                Array.prototype.forEach.call(mutation.addedNodes, function (node) {
+                    if (node && node.nodeType === 1 && roots.indexOf(node) === -1) roots.push(node);
+                });
+            });
+            if (roots.length) scheduleScan(roots);
+        }).observe(document.documentElement, {
             childList: true,
             subtree: true,
         });

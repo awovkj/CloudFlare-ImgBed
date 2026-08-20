@@ -6,6 +6,17 @@ const COMMON_ASSET_IGNORES = [
     '.wrangler-assets/',
     'frontend-dist',
     'frontend-dist/',
+    // Agent/worktree metadata can contain complete repository clones and their
+    // node_modules. Copying them into frontend-dist turns a small asset build
+    // into a multi-gigabyte recursive copy on Windows/WSL.
+    '.agents',
+    '.agents/',
+    '.codex',
+    '.codex/',
+    '.worktrees',
+    '.worktrees/',
+    '.wrangler-config',
+    '.wrangler-config/',
     '.wrangler-pages-dev.log',
     '.wrangler-pages-func-build',
     '.wrangler-pages-func-build/',

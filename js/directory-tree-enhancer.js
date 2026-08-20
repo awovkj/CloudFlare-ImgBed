@@ -6,6 +6,9 @@
   var treeCache = null;
   var treeCacheAt = 0;
   var treeCacheTtl = 60 * 1000;
+  // 多个目录选择器可能在同一帧内同时打开；复用同一请求，避免重复拉取目录树。
+  var treeFetchPromise = null;
+  var treeFetchKey = '';
   var activeDropdown = null;
   var observer = null;
   var enhanceScheduled = false;
@@ -106,7 +109,12 @@
     if (directoryPassword) {
       headers['X-Directory-Password'] = directoryPassword;
     }
-    return fetch(apiUrl, {
+    var requestKey = apiUrl + '|' + directoryPassword;
+    if (treeFetchPromise && treeFetchKey === requestKey) {
+      return treeFetchPromise;
+    }
+
+    var request = fetch(apiUrl, {
       method: 'GET',
       credentials: 'same-origin',
       headers: headers
@@ -141,6 +149,15 @@
       treeCacheAt = Date.now();
       return treeCache;
     });
+
+    treeFetchKey = requestKey;
+    treeFetchPromise = request;
+    request.then(function () {
+      if (treeFetchPromise === request) treeFetchPromise = null;
+    }, function () {
+      if (treeFetchPromise === request) treeFetchPromise = null;
+    });
+    return request;
   }
 
   // ── Directory password unlock UI（dropdown 与 modal picker 共用）──
@@ -275,9 +292,15 @@
     dropdown.style.width = ddWidth + 'px';
 
     document.body.appendChild(dropdown);
-    activeDropdown = { el: dropdown };
+    var dropdownState = { el: dropdown };
+    activeDropdown = dropdownState;
+
+    function isCurrentDropdown() {
+      return activeDropdown === dropdownState;
+    }
 
     function renderNodes(nodes) {
+      if (!isCurrentDropdown()) return;
       list.innerHTML = '';
       // Root option
       var rootItem = createElement('div', 'cfbed-dd-item cfbed-dd-root');
@@ -299,6 +322,7 @@
     }
 
     fetchTree().then(renderNodes).catch(function (err) {
+      if (!isCurrentDropdown()) return;
       if (isPasswordRequiredError(err)) {
         // 需要目录密码：dropdown 内渲染解锁 UI（输入框本身不受影响，仍可手动填写）
         list.innerHTML = '';
@@ -520,8 +544,29 @@
     bindTrigger(button, input, options);
   }
 
-  function enhanceUploadInputs() {
-    var candidates = document.querySelectorAll('input[placeholder="上传目录"], input[placeholder="请输入上传目录路径"]');
+  function queryCandidates(root, selector) {
+    var candidates = [];
+    var seen = [];
+    function add(element) {
+      if (!element || seen.indexOf(element) !== -1) return;
+      seen.push(element);
+      candidates.push(element);
+    }
+
+    if (!root || root.nodeType === 9) {
+      document.querySelectorAll(selector).forEach(add);
+      return candidates;
+    }
+
+    if (root.nodeType !== 1) return candidates;
+    if (root.matches && root.matches(selector)) add(root);
+    if (root.closest) add(root.closest(selector));
+    if (root.querySelectorAll) root.querySelectorAll(selector).forEach(add);
+    return candidates;
+  }
+
+  function enhanceUploadInputs(root) {
+    var candidates = queryCandidates(root, 'input[placeholder="上传目录"], input[placeholder="请输入上传目录路径"]');
     candidates.forEach(function (input) {
       insertTrigger(input, {
         title: '选择上传目录',
@@ -532,8 +577,8 @@
     });
   }
 
-  function enhanceMovePrompt() {
-    var dialogs = document.querySelectorAll('.el-message-box');
+  function enhanceMovePrompt(root) {
+    var dialogs = queryCandidates(root, '.el-message-box');
     dialogs.forEach(function (dialog) {
       if (dialog.dataset[STYLE_HOOK]) return;
       var title = dialog.querySelector('.el-message-box__title');
@@ -550,27 +595,45 @@
     });
   }
 
-  function enhancePage() {
-    enhanceUploadInputs();
-    enhanceMovePrompt();
+  function enhancePage(roots) {
+    if (!roots || !roots.length) {
+      enhanceUploadInputs(document);
+      enhanceMovePrompt(document);
+      return;
+    }
+    roots.forEach(function (root) {
+      enhanceUploadInputs(root);
+      enhanceMovePrompt(root);
+    });
   }
 
-  function scheduleEnhance() {
+  var pendingEnhanceRoots = [];
+
+  function scheduleEnhance(roots) {
+    if (roots && roots.length) {
+      roots.forEach(function (root) {
+        if (root && pendingEnhanceRoots.indexOf(root) === -1) pendingEnhanceRoots.push(root);
+      });
+    }
     if (enhanceScheduled) return;
     enhanceScheduled = true;
     requestAnimationFrame(function () {
       enhanceScheduled = false;
-      enhancePage();
+      var rootsToProcess = pendingEnhanceRoots;
+      pendingEnhanceRoots = [];
+      enhancePage(rootsToProcess);
     });
   }
 
-  function shouldProcessMutations(mutations) {
-    return mutations.some(function (mutation) {
-      if (!mutation.addedNodes || mutation.addedNodes.length === 0) return false;
-      return Array.prototype.some.call(mutation.addedNodes, function (node) {
-        return node && node.nodeType === 1;
+  function mutationRoots(mutations) {
+    var roots = [];
+    mutations.forEach(function (mutation) {
+      if (!mutation.addedNodes || mutation.addedNodes.length === 0) return;
+      Array.prototype.forEach.call(mutation.addedNodes, function (node) {
+        if (node && node.nodeType === 1 && roots.indexOf(node) === -1) roots.push(node);
       });
     });
+    return roots;
   }
 
   // ── Event delegation for homepage .upload-folder ──
@@ -613,9 +676,8 @@
     initHomepageFolderDelegate();
     enhancePage();
     observer = new MutationObserver(function (mutations) {
-      if (shouldProcessMutations(mutations)) {
-        scheduleEnhance();
-      }
+      var roots = mutationRoots(mutations);
+      if (roots.length) scheduleEnhance(roots);
     });
     observer.observe(document.body, {
       childList: true,

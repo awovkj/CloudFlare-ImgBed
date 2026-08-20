@@ -14,6 +14,7 @@ node_modules/
 .wrangler/
 .wrangler-worker-build/
 .wrangler-assets/
+.wrangler-config/
 
 # 开发数据
 data/
@@ -38,6 +39,9 @@ LICENSE
 # Git
 .git/
 .github/
+.agents/
+.codex/
+.worktrees/
 
 # IDE / 工具
 .kiro/

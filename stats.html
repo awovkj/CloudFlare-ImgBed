@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>文件统计</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="/css/theme-m3.css">
     <style>
         * {
@@ -496,7 +497,8 @@
             if (statsAbortController) {
                 statsAbortController.abort();
             }
-            statsAbortController = new AbortController();
+            const controller = new AbortController();
+            statsAbortController = controller;
 
             loading.style.display = 'block';
             error.style.display = 'none';
@@ -504,7 +506,7 @@
 
             try {
                 const response = await fetch('/api/site/storage-overview', {
-                    signal: statsAbortController.signal,
+                    signal: controller.signal,
                     cache: 'no-store'
                 });
                 if (!response.ok) {
@@ -583,12 +585,19 @@
                 error.textContent = `加载数据失败: ${err.message || '未知错误'}`;
                 error.style.display = 'block';
             } finally {
-                statsAbortController = null;
+                if (statsAbortController === controller) {
+                    statsAbortController = null;
+                }
             }
         }
 
-        // 页面加载时自动获取数据
-        loadStats();
+        // Chart.js 使用 defer 加载，等 DOMContentLoaded 可确保依赖已就绪，
+        // 同时避免第三方脚本阻塞统计页首屏解析。
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadStats, { once: true });
+        } else {
+            loadStats();
+        }
     </script>
 </body>
 </html>
