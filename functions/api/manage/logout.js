@@ -12,9 +12,10 @@ export async function onRequest(context) {
     } = context;
     const cookie = await destroySession(env, request, 'admin');
     return new Response('Logged out.', {
-      status: 401,
+      status: 200,
       headers: {
         'Set-Cookie': cookie,
+        'Cache-Control': 'no-store',
       },
     });
 

@@ -1,6 +1,6 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { hashPassword, isHashed } from '../../../utils/auth/passwordHash.js';
-import { destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
+import { createSession, destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
 import { normalizeSessionMaxAgeDays } from '../../../utils/auth/sessionConfig.js';
 
 export async function onRequest(context) {
@@ -55,6 +55,7 @@ export async function onRequest(context) {
         // 处理认证设置：空密码表示不修改，_clear 标记表示清除密码
         let userPasswordChanged = false;
         let adminPasswordChanged = false;
+        let adminCredentialsChanged = false;
 
         if (newSettings.auth) {
             if (newSettings.auth.user) {
@@ -77,14 +78,19 @@ export async function onRequest(context) {
                     newSettings.auth.admin.adminPassword = '';
                     newSettings.auth.admin.adminUsername = '';
                     adminPasswordChanged = true;
+                    adminCredentialsChanged = true;
                 } else if (newSettings.auth.admin.adminPassword === '' || newSettings.auth.admin.adminPassword === undefined) {
                     // 密码为空，保留原密码
                     newSettings.auth.admin.adminPassword = settings.auth.admin.adminPassword;
                 } else {
                     adminPasswordChanged = true;
+                    adminCredentialsChanged = true;
                 }
                 delete newSettings.auth.admin._clear;
                 if (newSettings.auth.admin.adminUsername !== undefined) {
+                    if (newSettings.auth.admin.adminUsername !== settings.auth.admin.adminUsername) {
+                        adminCredentialsChanged = true;
+                    }
                     settings.auth.admin.adminUsername = newSettings.auth.admin.adminUsername;
                 }
                 settings.auth.admin.adminPassword = newSettings.auth.admin.adminPassword;
@@ -110,18 +116,27 @@ export async function onRequest(context) {
         if (userPasswordChanged) {
             await destroySessionsByAuthType(env, 'user');
         }
-        if (adminPasswordChanged) {
+        if (adminCredentialsChanged) {
             await destroySessionsByAuthType(env, 'admin');
+        }
+
+        const responseHeaders = {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+        };
+        const authMethod = data?.auth?.method;
+        if (adminCredentialsChanged && ['basic', 'none', 'session'].includes(authMethod)) {
+            const { cookie } = await createSession(env, 'admin');
+            responseHeaders['Set-Cookie'] = cookie;
         }
 
         return new Response(JSON.stringify({
             message: 'security settings saved',
             userPasswordChanged,
             adminPasswordChanged,
+            adminCredentialsChanged,
         }), {
-            headers: {
-                'content-type': 'application/json',
-            },
+            headers: responseHeaders,
         })
     }
 

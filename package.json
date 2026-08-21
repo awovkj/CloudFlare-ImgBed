@@ -6,6 +6,7 @@
     "ci-test": "concurrently --kill-others \"npm start\" \"wait-on http://localhost:8788 && npm test\"",
     "test": "npm run verify:worker-routes && mocha",
     "start": "npm run worker:dev",
+    "patch:admin-session": "node scripts/patch-admin-session.mjs",
     "patch:music-admin-password": "node scripts/patch-music-admin-password.mjs",
     "patch:tg-upload-performance": "node scripts/patch-tg-upload-performance.mjs",
     "generate:worker-routes": "node deploy/worker/generate-routes.js",

@@ -11,6 +11,7 @@ test/*
 !test/tg-upload-lanes.test.js
 !test/tg-upload-cancel-lane.test.js
 !test/file-download-idm.test.js
+!test/admin-session-auth.test.js
 !test/worker-route-generation.test.js
 docs/*
 .wrangler-worker-build/

@@ -1,17 +1,11 @@
-import { fetchSecurityConfig } from "../../utils/sysConfig";
-import { checkDatabaseConfig } from "../../utils/middleware";
+import { fetchSecurityConfig } from "../../utils/sysConfig.js";
+import { checkDatabaseConfig } from "../../utils/middleware.js";
 import { validateApiToken } from "../../utils/auth/tokenValidator.js";
 import { getDatabase } from "../../utils/databaseAdapter.js";
-import { validateSession } from '../../utils/auth/sessionManager.js';
+import { createSession, validateSession } from '../../utils/auth/sessionManager.js';
 import { verifyPassword } from '../../utils/auth/passwordHash.js';
-import { createJsonResponse, createNoStoreTextResponse, createTextResponse } from "../../utils/response.js";
+import { createJsonResponse, createNoStoreTextResponse } from "../../utils/response.js";
 import { verifyTempLinkReceipt } from "../../upload/tempLinkReceipt.js";
-
-let securityConfig = {}
-let basicUser = ""
-let basicPass = ""
-let securityConfigLoadedAt = 0
-const SECURITY_CONFIG_TTL_MS = 5000
 
 async function errorHandling(context) {
   try {
@@ -73,22 +67,21 @@ function BadRequestException(reason) {
   return createNoStoreTextResponse(reason, 400, 'Bad Request');
 }
 
-function isSecurityConfigExpired(now) {
-  return now - securityConfigLoadedAt > SECURITY_CONFIG_TTL_MS;
-}
-
-async function refreshSecurityConfigIfNeeded(env, now = Date.now()) {
-  if (!isSecurityConfigExpired(now)) {
-    return securityConfig;
+async function continueWithAdminSession(context) {
+  const response = await context.next();
+  if (response.headers.has('Set-Cookie')) {
+    return response;
   }
 
-  securityConfig = await fetchSecurityConfig(env);
-  basicUser = securityConfig?.auth?.admin?.adminUsername || "";
-  basicPass = securityConfig?.auth?.admin?.adminPassword || "";
-  securityConfigLoadedAt = now;
-  return securityConfig;
+  const { cookie } = await createSession(context.env, 'admin');
+  const headers = new Headers(response.headers);
+  headers.set('Set-Cookie', cookie);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
-
 
 /**
  * 根据请求路径提取所需权限
@@ -174,7 +167,27 @@ async function authentication(context) {
     return context.next();
   }
 
-  await refreshSecurityConfigIfNeeded(context.env);
+  const adminSession = await validateSession(context.env, context.request, 'admin');
+  if (adminSession.valid) {
+    context.data.auth = { authType: 'admin', method: 'session' };
+    return context.next();
+  }
+
+  // Authentication settings are mutable from this same API. Read them for
+  // every Basic authentication attempt so password changes take effect
+  // immediately and never leave an isolate using stale credentials.
+  let securityConfig;
+  try {
+    securityConfig = await fetchSecurityConfig(context.env);
+  } catch (error) {
+    console.error('Manage authentication config unavailable:', error);
+    return createJsonResponse({ error: 'Security config unavailable' }, {
+      status: 503,
+      headers: { ...corsHeaders, 'Cache-Control': 'no-store' },
+    });
+  }
+  const basicUser = securityConfig?.auth?.admin?.adminUsername || "";
+  const basicPass = securityConfig?.auth?.admin?.adminPassword || "";
 
   const usernameConfigured = typeof basicUser !== 'undefined' && basicUser !== null && basicUser !== "";
   const passwordConfigured = typeof basicPass !== 'undefined' && basicPass !== null && basicPass !== "";
@@ -185,12 +198,6 @@ async function authentication(context) {
     context.data.auth = { authType: 'admin', method: 'none' };
     return context.next();
   } else {
-    const adminSession = await validateSession(context.env, context.request, 'admin');
-    if (adminSession.valid) {
-      context.data.auth = { authType: 'admin', method: 'session' };
-      return context.next();
-    }
-
     if (context.request.headers.has('Authorization')) {
       // 首先尝试使用API Token验证
 
@@ -218,17 +225,17 @@ async function authentication(context) {
         return UnauthorizedException('Invalid credentials.');
       } else {
         context.data.auth = { authType: 'admin', method: 'basic' };
-        return context.next();
+        return continueWithAdminSession(context);
       }
 
     } else {
-      // 要求客户端进行基本认证
-        return createTextResponse('You need to login.', {
+        // 管理 API 由前端会话或显式 Authorization 处理登录。
+        // WWW-Authenticate 会触发浏览器原生账号密码弹窗，不能用于 API 失效提示。
+        return createJsonResponse({ error: 'Authentication required' }, {
           status: 401,
           headers: {
-            // Prompts the user for credentials.
-            'WWW-Authenticate': 'Basic realm="my scope", charset="UTF-8"',
-            // 'WWW-Authenticate': 'None',
+            ...corsHeaders,
+            'Cache-Control': 'no-store',
           },
         });
      }

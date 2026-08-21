@@ -12,6 +12,9 @@ const dest      = path.resolve(root, '.wrangler-assets');
 
 // Apply bundle patches before copying so deployment always uses the checked-in
 // behavior, even after an upstream bundle refresh.
+execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-admin-session.mjs')], {
+    stdio: 'inherit'
+});
 execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-music-admin-password.mjs')], {
     stdio: 'inherit'
 });

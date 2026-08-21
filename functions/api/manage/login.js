@@ -12,7 +12,10 @@ export async function onRequest(context) {
     } = context;
     //get the request url
     const url = new URL(request.url);
-    const response = Response.redirect(url.origin+"/dashboard", 302)
+    const response = new Response(null, {
+      status: 302,
+      headers: { Location: `${url.origin}/dashboard` },
+    });
 
     if (data?.auth?.method === 'basic' || data?.auth?.method === 'none') {
       const { cookie } = await createSession(env, 'admin');
