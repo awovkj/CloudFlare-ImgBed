@@ -1,9 +1,5 @@
 #!/usr/bin/env node
-/**
- * scripts/copy-assets.mjs
- * 将项目根目录的静态资源复制到 .wrangler-assets/
- * 由 wrangler.toml [build] command 或 npm run build:assets 调用
- */
+/** Copy the deployable root assets into .wrangler-assets/. */
 import fs   from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -14,21 +10,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root      = path.resolve(__dirname, '..');
 const dest      = path.resolve(root, '.wrangler-assets');
 
-// Workers 单一部署形态：静态资源直接取项目根目录。
-// Patch/synchronise Telegram assets before copying so a stale bundle cannot
-// undo the upload tuning.
+// Apply bundle patches before copying so deployment always uses the checked-in
+// behavior, even after an upstream bundle refresh.
+execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-music-admin-password.mjs')], {
+    stdio: 'inherit'
+});
 execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-tg-upload-performance.mjs')], {
     stdio: 'inherit'
 });
-
-const sourceRoot = root;
 
 const ignored = addCommonAssetIgnores(loadAssetIgnore(root));
 
 fs.mkdirSync(dest, { recursive: true });
 
 const sourceEntries = new Set(
-    fs.readdirSync(sourceRoot).filter((entry) => !shouldIgnoreAsset(entry, ignored))
+    fs.readdirSync(root).filter((entry) => !shouldIgnoreAsset(entry, ignored))
 );
 
 for (const existingEntry of fs.readdirSync(dest)) {
@@ -47,7 +43,7 @@ for (const existingEntry of fs.readdirSync(dest)) {
 let copied = 0;
 let failed = 0;
 for (const entry of sourceEntries) {
-    const src = path.join(sourceRoot, entry);
+    const src = path.join(root, entry);
     const dst = path.join(dest, entry);
     try {
         fs.cpSync(src, dst, { recursive: true });
@@ -64,7 +60,7 @@ if (removedFiles > 0) {
     console.log(`✓ Pruned ${removedFiles} dev artifact(s) (~${(removedBytes / 1048576).toFixed(1)} MB)`);
 }
 
-console.log(`✓ Copied ${copied} entries from ${path.basename(sourceRoot)} to .wrangler-assets/`);
+console.log(`✓ Copied ${copied} entries to .wrangler-assets/`);
 
 if (failed > 0) {
     console.error(`✗ ${failed} entr${failed === 1 ? 'y' : 'ies'} failed to copy`);

@@ -5,10 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const uploadBundleRelativePath = path.join('js', '274.9b7364f3.js');
-const uploadBundlePaths = [
-    path.join(root, uploadBundleRelativePath),
-];
+const uploadBundlePath = path.join(root, 'js', '274.9b7364f3.js');
 
 function countOccurrences(text, needle) {
     let count = 0;
@@ -37,7 +34,7 @@ function replaceExactlyOnce(text, from, to, label) {
 
 let changedFiles = 0;
 
-for (const uploadBundlePath of uploadBundlePaths) {
+{
     let bundle = fs.readFileSync(uploadBundlePath, 'utf8');
 
     let patchedBundle = replaceExactlyOnce(

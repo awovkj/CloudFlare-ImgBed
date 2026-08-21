@@ -27,6 +27,7 @@ node_modules
 .vscode/
 .omc/
 .claude/
+.workbuddy/
 .worktrees/
 
 # 可再生构建产物：预压缩文件与 source map（部署时由 .assetsignore 排除，仓库也不追踪）
