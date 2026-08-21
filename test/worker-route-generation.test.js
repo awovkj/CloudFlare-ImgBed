@@ -47,7 +47,7 @@ describe('worker route generation', () => {
 
   it('wires verify and check scripts as non-mutating quality gates', () => {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-    assert.match(pkg.scripts['ci-test'], /wait-on http:\/\/localhost:8080 && npm test/);
+    assert.match(pkg.scripts['ci-test'], /wait-on http:\/\/localhost:8788 && npm test/);
     assert.equal(pkg.scripts['verify:worker-routes'], 'node deploy/worker/generate-routes.js --check');
     assert.equal(pkg.scripts.test, 'npm run verify:worker-routes && mocha');
     assert.equal(pkg.scripts.check, 'npm test');

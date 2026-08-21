@@ -138,6 +138,72 @@
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* ─────────── Dark scheme ───────────
+ * The compiled SPA toggles dark mode with a `dark` class on <html>
+ * (Element Plus does the same: `html.dark { --el-* }`).
+ * Without this block the --md-* tokens stayed light in dark mode, so every
+ * rule that consumes them — including theme-m3-overrides.css's .el-card /
+ * .el-dialog surfaces — painted light panels on a dark page.
+ * Specificity note: `html.dark` (0,1,1) beats the `:root` block above (0,1,0),
+ * so order inside this file does not matter.
+ */
+html.dark {
+  color-scheme: dark;
+
+  --md-primary: #b0c6ff;
+  --md-on-primary: #002d6d;
+  --md-primary-container: #24457f;
+  --md-on-primary-container: #dae2ff;
+
+  --md-secondary: #a0d0c7;
+  --md-on-secondary: #003733;
+  --md-secondary-container: #1f4f49;
+  --md-on-secondary-container: #bdece4;
+
+  --md-tertiary: #e5bad6;
+  --md-tertiary-container: #663c5b;
+
+  --md-background: #121317;
+  --md-surface: #14151a;
+  --md-surface-dim: #121317;
+  --md-surface-bright: #393a40;
+  --md-surface-container-lowest: #0e0f13;
+  --md-surface-container-low: #1b1c21;
+  --md-surface-container: #1f2025;
+  --md-surface-container-high: #292a2f;
+  --md-surface-container-highest: #34353b;
+  --md-surface-variant: #45464f;
+  --md-on-surface: #e4e2e9;
+  --md-on-surface-variant: #c5c6d0;
+  --md-on-surface-muted: #8f909a;
+  --md-inverse-surface: #e4e2e9;
+  --md-inverse-on-surface: #2f3036;
+
+  --md-outline: #8f909a;
+  --md-outline-variant: #45464f;
+
+  --md-error: #ffb4ab;
+  --md-on-error: #690005;
+  --md-error-container: #93000a;
+  --md-on-error-container: #ffdad6;
+  --md-success: #7ddf9f;
+  --md-success-container: #1c5233;
+  --md-warning: #f5bd6f;
+  --md-warning-container: #5c3f00;
+
+  /* Shadows need more opacity to stay visible on a dark surface */
+  --md-elev-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px 1px rgba(0, 0, 0, 0.25);
+  --md-elev-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px 2px rgba(0, 0, 0, 0.3);
+  --md-elev-3: 0 4px 8px 3px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --md-elev-4: 0 6px 10px 4px rgba(0, 0, 0, 0.35), 0 2px 3px rgba(0, 0, 0, 0.4);
+
+  --md-primary-gradient: linear-gradient(135deg, #24457f 0%, #1c3768 50%, #1f4f49 100%);
+  --md-hero-gradient: radial-gradient(80% 60% at 0% 0%, rgba(176, 198, 255, 0.09), transparent 60%),
+                      radial-gradient(80% 60% at 100% 0%, rgba(160, 208, 199, 0.07), transparent 60%);
+
+  --primary-dark: #8fa9e8;
+}
+
 /* ─────────── Global baseline for static HTML pages ─────────── */
 
 html.m3,

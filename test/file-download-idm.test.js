@@ -47,6 +47,8 @@ function compileFileRoute(overrides = {}) {
     },
     parseSingleRange: fileTools.parseSingleRange,
     resolveResponseLength: fileTools.resolveResponseLength,
+    resolveContentType: fileTools.resolveContentType,
+    resolveDispositionIntent: fileTools.resolveDispositionIntent,
     getDatabase: env => env.__db,
     authenticate: async () => ({ authorized: false, authType: null }),
     AUTH_SCOPE: { ADMIN: 'admin' },

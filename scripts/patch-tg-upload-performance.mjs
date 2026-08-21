@@ -8,10 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uploadBundleRelativePath = path.join('js', '274.9b7364f3.js');
 const uploadBundlePaths = [
     path.join(root, uploadBundleRelativePath),
-    path.join(root, 'frontend-dist', uploadBundleRelativePath),
-].filter((candidate, index, candidates) =>
-    fs.existsSync(candidate) && candidates.indexOf(candidate) === index
-);
+];
 
 function countOccurrences(text, needle) {
     let count = 0;
@@ -112,19 +109,6 @@ for (const uploadBundlePath of uploadBundlePaths) {
 
     if (patchedBundle !== bundle) {
         fs.writeFileSync(uploadBundlePath, patchedBundle, 'utf8');
-        changedFiles += 1;
-    }
-}
-
-// frontend-dist is generated and ignored by git, but Wrangler uses it when it
-// already exists. Keep the separately loaded lane scheduler in sync as well,
-// otherwise a direct `wrangler deploy` could silently ship the old scheduler.
-const laneSourcePath = path.join(root, 'js', 'tg-upload-lanes.js');
-const laneTargetPath = path.join(root, 'frontend-dist', 'js', 'tg-upload-lanes.js');
-if (fs.existsSync(laneSourcePath) && fs.existsSync(laneTargetPath)) {
-    const laneSource = fs.readFileSync(laneSourcePath, 'utf8');
-    if (fs.readFileSync(laneTargetPath, 'utf8') !== laneSource) {
-        fs.copyFileSync(laneSourcePath, laneTargetPath);
         changedFiles += 1;
     }
 }

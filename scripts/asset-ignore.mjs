@@ -4,11 +4,9 @@ import path from 'path';
 const COMMON_ASSET_IGNORES = [
     '.wrangler-assets',
     '.wrangler-assets/',
-    'frontend-dist',
-    'frontend-dist/',
     // Agent/worktree metadata can contain complete repository clones and their
-    // node_modules. Copying them into frontend-dist turns a small asset build
-    // into a multi-gigabyte recursive copy on Windows/WSL.
+    // node_modules. Copying them into the deploy assets turns a small asset
+    // build into a multi-gigabyte recursive copy on Windows/WSL.
     '.agents',
     '.agents/',
     '.codex',

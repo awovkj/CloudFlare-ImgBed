@@ -1,0 +1,548 @@
+/*
+ * admin-layout.css — 后台页面（/dashboard、/systemConfig、/customerConfig、/adminLogin）
+ * 布局与观感修正层。
+ *
+ * ─── 为什么需要这一层 ───
+ * 后台页面是编译后的 Vue SPA，样式在 css/443.*.css / 128.*.css / 601.*.css 里，
+ * 仓库中没有 .vue 源码，只能靠覆盖层调整。编译产物里有几处确定的问题：
+ *   1. 浮动顶栏 .header-content 是 position:fixed，但桌面端 .main-container 只有
+ *      padding-top:20px（移动端补了 margin-top:12vh），面包屑/首行卡片被顶栏压住；
+ *   2. .content 卡片网格写死 repeat(5,1fr) + grid-template-rows:repeat(3,1fr)，
+ *      769–1024px 挤成 5 列、超宽屏又过度拉伸，且行高被 1fr 拉伸得不一致；
+ *   3. .pagination-right 是 position:absolute;right:0，窄屏会和居中的分页器重叠；
+ *   4. .container 把字体钉成 Arial，中文回退到系统默认字形，观感老旧；
+ *   5. 强调色三套并存：天蓝 #38bdf8/#0ea5e9（dashboard 控件）、#409eff（systemConfig
+ *      选中项/保存按钮）、--admin-purple #b39ddb（顶栏图标 hover），与 Element Plus
+ *      的 M3 主色 #3b66d6 都不一致；
+ *   6. 一批硬编码浅色（#666 标题、白底 glass、纯白阴影）在暗色模式下对比度不足。
+ *
+ * ─── 特异性策略 ───
+ * 路由分包的 CSS 是访问该路由时动态插入 <head> 的，位置在本文件的 <link> 之后，
+ * 因此"同特异性靠顺序取胜"在这里不成立。编译产物的选择器带 Vue scoped 属性
+ * （如 .x[data-v-c54c530e]），最强形态是 `html.dark .x[data-v]:hover`（4 个
+ * class 级 + 1 个类型级）。本文件统一用：
+ *
+ *     html[data-admin-page] body .目标类.目标类 { ... }
+ *
+ * class 级同为 4 时，类型级 html+body = 2 > 1，稳定取胜，无需 !important。
+ * data-admin-page 由 js/admin-layout-enhancer.js 写到 <html> 上，同时把改动
+ * 限制在后台路由，不影响首页/上传页。
+ */
+
+/* ════════════════════════════════════════════════════════════
+   1. 令牌重调：把后台专属变量接到 M3 调色板
+   作用域挂在 html[data-admin-page] 上（0,1,1），高于 app.css 的 .dark（0,1,0）；
+   暗色再用 html[data-admin-page].dark（0,2,1）压回来。
+   ════════════════════════════════════════════════════════════ */
+
+html[data-admin-page] {
+  /* 页面底色：原本是 linear-gradient(90deg,#fdf3f6,#e4f8ff) 的粉→青渐变 */
+  --admin-container-bg-color: var(--md-hero-gradient), var(--md-background);
+  --admin-container-color: var(--md-on-surface);
+
+  /* 统一强调色（顶栏图标 hover、分页 hover、统计徽章 hover 都读这个） */
+  --admin-purple: var(--md-primary);
+
+  --admin-header-content-bg-color: color-mix(in srgb, var(--md-surface-container-low) 84%, transparent);
+  --admin-header-content-hover-bg-color: color-mix(in srgb, var(--md-surface-container-low) 94%, transparent);
+  --admin-header-content-border-bottom: 1px solid var(--md-outline-variant);
+  --admin-header-content-box-shadow: var(--md-elev-2);
+  --admin-header-content-hover-box-shadow: var(--md-elev-3);
+
+  --admin-dashboard-imgcard-bg-color: var(--md-surface-container-low);
+  --admin-dashboard-imgcard-shadow: var(--md-elev-1);
+  --admin-dashboard-search-card-bg-color: var(--md-surface-container-lowest);
+  --admin-dashboard-search-card-box-shadow: var(--md-elev-1);
+  --admin-dashboard-btn-bg-color: var(--md-surface-container);
+  --admin-dashboard-btn-color: var(--md-on-surface);
+  --admin-dashboard-btn-shadow: var(--md-elev-1);
+  --admin-dashboard-btn-hover-shadow: var(--md-elev-2);
+  --admin-dashboard-stats-bg: var(--md-surface-container);
+  --admin-dashboard-stats-shadow: var(--md-elev-1);
+  --admin-dashboard-stats-hover-shadow: var(--md-elev-2);
+  /* 上游拼写为 dashborad，保留原名才能生效 */
+  --admin-dashborad-stats-bg-color: var(--md-surface-container-low);
+  --admin-dashborad-stats-hover-bg-color: var(--md-surface-container-high);
+
+  --admin-dashboard-tag-suggestion-bg-color: var(--md-surface-container-lowest);
+  --admin-dashboard-tag-suggestion-border-color: var(--md-outline-variant);
+  --admin-dashboard-tag-suggestion-box-shadow: var(--md-elev-2);
+  --admin-dashboard-tag-suggestion-item-hover-bg-color: var(--md-surface-container-high);
+
+  --admin-cuscfg-table-bg-color: var(--md-surface-container-low);
+  --admin-cuscfg-table-shadow: var(--md-elev-1);
+  --admin-syscfg-tabs-border-color: var(--md-outline-variant);
+
+  /* 毛玻璃卡片（systemConfig 概览卡/图表卡、customerConfig 主表格） */
+  --glass-bg: color-mix(in srgb, var(--md-surface-container-low) 72%, transparent);
+  --glass-bg-hover: color-mix(in srgb, var(--md-surface-container-low) 88%, transparent);
+  --glass-border: var(--md-outline-variant);
+  --glass-border-hover: var(--md-outline);
+  --glass-shadow: var(--md-elev-1);
+  --glass-shadow-hover: var(--md-elev-3);
+  --glass-header-bg: color-mix(in srgb, var(--md-primary) 6%, transparent);
+  --glass-header-border: var(--md-outline-variant);
+
+  /* systemConfig 悬浮保存按钮 */
+  --floating-btn-bg: var(--md-primary);
+  --floating-btn-color: var(--md-on-primary);
+  --floating-btn-shadow: var(--md-elev-2);
+  --floating-btn-shadow-hover: var(--md-elev-4);
+
+  --skeleton-bg-color: var(--md-surface-container-high);
+  --skeleton-shimmer-color: color-mix(in srgb, var(--md-on-surface) 8%, transparent);
+}
+
+html[data-admin-page].dark {
+  --admin-header-content-bg-color: color-mix(in srgb, var(--md-surface-container) 82%, transparent);
+  --admin-header-content-hover-bg-color: color-mix(in srgb, var(--md-surface-container-high) 92%, transparent);
+  --glass-bg: color-mix(in srgb, var(--md-surface-container) 68%, transparent);
+  --glass-bg-hover: color-mix(in srgb, var(--md-surface-container-high) 84%, transparent);
+  --glass-header-bg: color-mix(in srgb, var(--md-primary) 12%, transparent);
+}
+
+/* ════════════════════════════════════════════════════════════
+   2. 后台外壳（三个页面共用 .container / .header-content / .main-container）
+   ════════════════════════════════════════════════════════════ */
+
+/* 字体：编译产物写死 Arial，中文只能回退系统默认字形 */
+html[data-admin-page] body .container.container {
+  font-family: var(--md-font-sans);
+  color: var(--md-on-surface);
+}
+
+/* 浮动顶栏：保留毛玻璃，换成 M3 的形状/描边/高度层级，并在超宽屏收口 */
+html[data-admin-page] body .header-content.header-content {
+  background: var(--admin-header-content-bg-color);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-lg);
+  box-shadow: var(--md-elev-2);
+  max-width: 1760px;
+  gap: 16px;
+}
+
+html[data-admin-page] body .header-content.header-content:hover {
+  background: var(--admin-header-content-hover-bg-color);
+  box-shadow: var(--md-elev-3);
+}
+
+/* 顶栏标题图标与右侧动作区对齐 */
+html[data-admin-page] body .header-content.header-content .actions {
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+/* 统计徽章：胶囊化，跟 M3 tag 一致 */
+html[data-admin-page] body .stats-badge.stats-badge {
+  border-radius: var(--md-shape-full);
+  border-color: var(--md-outline-variant);
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+}
+
+html[data-admin-page] body .stats-badge.stats-badge:hover {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  border-color: transparent;
+}
+
+/* 搜索框：胶囊 + 宽度不再溢出窄桌面 */
+html[data-admin-page] body .search-card.search-card .el-input__wrapper {
+  border-radius: var(--md-shape-full);
+  box-shadow: var(--md-elev-1);
+}
+
+html[data-admin-page] body .search-card.search-card .el-input__inner {
+  width: min(280px, 34vw);
+  font-size: 15px;
+}
+
+html[data-admin-page] body .search-card.search-card .el-input__inner:focus {
+  width: min(360px, 44vw);
+}
+
+/* ════════════════════════════════════════════════════════════
+   3. /dashboard 文件管理页
+   ════════════════════════════════════════════════════════════ */
+
+/* 3.1 顶栏是 fixed，桌面端必须自己留出高度，否则面包屑/首行卡片被压住 */
+@media (min-width: 769px) {
+  html[data-admin-page="dashboard"] body .main-container.main-container {
+    padding: 78px 40px 24px;
+    max-width: 1840px;
+    margin-inline: auto;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* 3.2 卡片网格：改成按可用宽度自适应列数，行高不再被 1fr 拉伸 */
+html[data-admin-page="dashboard"] body .content.content {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-rows: auto;
+  grid-auto-rows: auto;
+  align-content: start;
+  gap: 18px;
+  padding: 6px 0 0;
+  min-height: 40vh;
+}
+
+/* 3.3 卡片：高度收在合理区间（原来是裸 22vh，矮屏太扁、竖屏太高） */
+html[data-admin-page="dashboard"] body .img-card.img-card {
+  height: clamp(158px, 22vh, 252px);
+  border-radius: var(--md-shape-md);
+  box-shadow: var(--md-elev-1);
+  transition: transform var(--md-duration-short) var(--md-ease-standard),
+              box-shadow var(--md-duration-short) var(--md-ease-standard);
+}
+
+/* hover 用抬升代替 scale(1.05)：不再挤压相邻卡片、也不会裁掉圆角 */
+html[data-admin-page="dashboard"] body .img-card.img-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--md-elev-3);
+  z-index: 2;
+}
+
+/* 3.4 面包屑一行：与顶栏留距，胶囊底色 */
+html[data-admin-page="dashboard"] body .breadcrumb-container.breadcrumb-container {
+  padding: 4px 2px 0;
+  margin-bottom: 10px;
+  min-height: 32px;
+}
+
+/* 3.5 列表视图：卡片化容器 + 斑马纹 + 主色 hover */
+html[data-admin-page="dashboard"] body .list-view.list-view {
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-lg);
+  box-shadow: var(--md-elev-1);
+  background: var(--md-surface-container-low);
+  margin-top: 4px;
+}
+
+html[data-admin-page="dashboard"] body .list-header.list-header {
+  background: var(--md-surface-container);
+  border-bottom: 1px solid var(--md-outline-variant);
+  color: var(--md-on-surface-variant);
+  letter-spacing: 0.02em;
+}
+
+html[data-admin-page="dashboard"] body .list-item.list-item:nth-child(2n) {
+  background: color-mix(in srgb, var(--md-on-surface) 3%, transparent);
+}
+
+html[data-admin-page="dashboard"] body .list-item.list-item:hover {
+  background: color-mix(in srgb, var(--md-primary) 8%, transparent);
+}
+
+/* 3.6 空状态：用弱化前景色代替整体 opacity，文字更清晰 */
+html[data-admin-page="dashboard"] body .empty-state.empty-state {
+  opacity: 1;
+  color: var(--md-on-surface-variant);
+}
+
+html[data-admin-page="dashboard"] body .empty-state.empty-state .empty-hint {
+  color: var(--md-on-surface-muted);
+}
+
+/* 3.7 分页：≤1100px 时把绝对定位的右侧块折行，避免压住居中的分页器 */
+html[data-admin-page="dashboard"] body .pagination-container.pagination-container {
+  margin-top: 24px;
+}
+
+@media (max-width: 1100px) {
+  html[data-admin-page="dashboard"] body .pagination-container.pagination-container {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  html[data-admin-page="dashboard"] body .pagination-container.pagination-container .pagination-right {
+    position: static;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   4. 强调色统一到 M3 主色
+   编译产物里散落 22 处 #38bdf8 / #0ea5e9 天蓝硬编码，与 Element Plus 的
+   主色（theme-m3-overrides.css 已接到 --md-primary）不是一套。
+   ════════════════════════════════════════════════════════════ */
+
+/* 4.1 纯色文字/图标 */
+html[data-admin-page] body .breadcrumb-home-icon.breadcrumb-home-icon,
+html[data-admin-page] body .mobile-directory-icon.mobile-directory-icon,
+html[data-admin-page] body .bottom-sheet-icon.bottom-sheet-icon,
+html[data-admin-page] body .mobile-drawer-title.mobile-drawer-title,
+html[data-admin-page] body .refresh-btn.refresh-btn {
+  color: var(--md-primary);
+}
+
+html[data-admin-page] body .list-col-name.list-col-name:hover {
+  color: var(--md-primary);
+}
+
+html[data-admin-page] body .pagination-container.pagination-container .el-pager li:hover,
+html[data-admin-page] body .pagination-container.pagination-container .btn-prev:hover,
+html[data-admin-page] body .pagination-container.pagination-container .btn-next:hover {
+  color: var(--md-primary);
+}
+
+/* 4.2 填充块：渐变换成 M3 的平涂主色 */
+html[data-admin-page] body .load-more.load-more,
+html[data-admin-page] body .page-jump .jump-btn.jump-btn,
+html[data-admin-page] body .list-action-btn.list-action-btn:hover,
+html[data-admin-page] body .refresh-btn.refresh-btn:hover,
+html[data-admin-page] body .custom-checkbox.custom-checkbox.checked,
+html[data-admin-page] body .custom-checkbox.custom-checkbox.indeterminate {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  border-color: var(--md-primary);
+}
+
+html[data-admin-page] body .load-more.load-more {
+  box-shadow: var(--md-elev-1);
+}
+
+html[data-admin-page] body .load-more.load-more:hover,
+html[data-admin-page] body .refresh-btn.refresh-btn:hover {
+  box-shadow: var(--md-elev-2);
+}
+
+html[data-admin-page] body .custom-checkbox.custom-checkbox:hover {
+  border-color: var(--md-primary);
+}
+
+/* 4.3 分页当前页：编译产物用了 !important，这里同等级 + 更高特异性覆盖 */
+html[data-admin-page] body .pagination-container.pagination-container .el-pager li.is-active {
+  background: var(--md-primary) !important;
+  color: var(--md-on-primary) !important;
+  border-radius: var(--md-shape-sm);
+  box-shadow: var(--md-elev-1) !important;
+}
+
+html[data-admin-page] body .pagination-container.pagination-container .el-pager li {
+  border-radius: var(--md-shape-sm);
+}
+
+/* 编译产物对上下页按钮用了 border-radius:10px!important，这里必须同等级覆盖 */
+html[data-admin-page] body .pagination-container.pagination-container .btn-prev,
+html[data-admin-page] body .pagination-container.pagination-container .btn-next {
+  border-radius: var(--md-shape-sm) !important;
+}
+
+/* 4.4 筛选器徽章与按钮 */
+html[data-admin-page] body .filter-badge.filter-badge .el-badge__content {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+html[data-admin-page] body .filter-actions.filter-actions .el-button:hover:not(:disabled) {
+  background: var(--md-primary);
+  border-color: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* 4.5 移动端抽屉选中项：改成 M3 tonal 药丸 */
+html[data-admin-page] body .mobile-drawer-item.mobile-drawer-item.active,
+html[data-admin-page] body .mobile-drawer-item.active .mobile-drawer-item-icon.mobile-drawer-item-icon {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+html[data-admin-page] body .mobile-drawer-header.mobile-drawer-header {
+  background: color-mix(in srgb, var(--md-primary) 8%, transparent);
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+
+/* ════════════════════════════════════════════════════════════
+   5. /systemConfig 系统设置页
+   ════════════════════════════════════════════════════════════ */
+
+/* 5.1 内容区左右留白对称：原本 margin-left:170px + width:calc(100% - 280px)
+       会在右侧空出 110px，视觉重心偏左 */
+@media (min-width: 769px) {
+  html[data-admin-page="systemConfig"] body .main-container.main-container {
+    width: auto;
+    margin-right: 40px;
+    max-width: 1700px;
+  }
+}
+
+/* 5.2 侧边导航：M3 导航栏观感 */
+html[data-admin-page="systemConfig"] body .sidebar-container.sidebar-container {
+  background: var(--admin-header-content-bg-color);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-xl);
+  box-shadow: var(--md-elev-2);
+}
+
+html[data-admin-page="systemConfig"] body .sidebar-container.sidebar-container:hover {
+  box-shadow: var(--md-elev-3);
+}
+
+html[data-admin-page="systemConfig"] body .menu-item.menu-item {
+  border-radius: var(--md-shape-full);
+  padding-left: 4px;
+  color: var(--md-on-surface-variant);
+}
+
+html[data-admin-page="systemConfig"] body .menu-item.menu-item:hover {
+  background: color-mix(in srgb, var(--md-on-surface) 7%, transparent);
+  color: var(--md-on-surface);
+}
+
+html[data-admin-page="systemConfig"] body .menu-item.menu-item.is-active {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font-weight: 600;
+}
+
+/* 5.3 概览卡 / 图表卡：统一 M3 形状与层级 */
+html[data-admin-page="systemConfig"] body .overview-card.overview-card,
+html[data-admin-page="systemConfig"] body .chart-card.chart-card,
+html[data-admin-page="systemConfig"] body .file-info-card.file-info-card {
+  border-radius: var(--md-shape-lg);
+  border: 1px solid var(--md-outline-variant);
+  box-shadow: var(--md-elev-1);
+}
+
+html[data-admin-page="systemConfig"] body .overview-card.overview-card:hover,
+html[data-admin-page="systemConfig"] body .chart-card.chart-card:hover {
+  box-shadow: var(--md-elev-3);
+}
+
+/* 卡片标题写死 #666，暗色下对比度不足 */
+html[data-admin-page="systemConfig"] body .card-title.card-title {
+  color: var(--md-on-surface-variant);
+}
+
+html[data-admin-page="systemConfig"] body .card-value.card-value {
+  color: var(--md-on-surface);
+  letter-spacing: -0.01em;
+}
+
+/* 5.4 渠道卡：左侧色条改用主色，间距对齐概览卡 */
+html[data-admin-page="systemConfig"] body .channel-card.channel-card {
+  border-radius: var(--md-shape-lg);
+  border-left: 3px solid var(--md-outline-variant);
+  box-shadow: var(--md-elev-1);
+}
+
+html[data-admin-page="systemConfig"] body .channel-card.channel-card:hover {
+  border-left-color: var(--md-primary);
+  box-shadow: var(--md-elev-3);
+}
+
+/* 5.5 Token 表格容器 */
+html[data-admin-page="systemConfig"] body .token-table-container.token-table-container {
+  border-radius: var(--md-shape-lg);
+  border: 1px solid var(--md-outline-variant);
+  overflow: hidden;
+}
+
+/* 5.6 悬浮保存按钮：胶囊 FAB */
+html[data-admin-page="systemConfig"] body .floating-save-btn.floating-save-btn {
+  border-radius: var(--md-shape-full);
+  padding: 12px 22px;
+  font-weight: 600;
+}
+
+/* ════════════════════════════════════════════════════════════
+   6. /customerConfig 用户配置页
+   ════════════════════════════════════════════════════════════ */
+
+/* 顶栏同样是 fixed，桌面端 margin-top:20px 不足以避开它 */
+@media (min-width: 769px) {
+  html[data-admin-page="customerConfig"] body .main-container.main-container {
+    margin-top: 76px;
+  }
+}
+
+html[data-admin-page="customerConfig"] body .main-table.main-table {
+  border-radius: var(--md-shape-lg);
+  border: 1px solid var(--md-outline-variant);
+  box-shadow: var(--md-elev-1);
+}
+
+html[data-admin-page="customerConfig"] body .header-action.header-action {
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* ════════════════════════════════════════════════════════════
+   7. 响应式补充
+   编译产物只有 768px 一个断点，769–1024px 的平板/小笔记本没有过渡。
+   ════════════════════════════════════════════════════════════ */
+
+@media (min-width: 769px) and (max-width: 1180px) {
+  html[data-admin-page="dashboard"] body .main-container.main-container {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  html[data-admin-page="dashboard"] body .content.content {
+    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+    gap: 14px;
+  }
+
+  html[data-admin-page="systemConfig"] body .main-container.main-container {
+    margin-right: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  html[data-admin-page="dashboard"] body .content.content {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+    padding: 4px 0 0;
+  }
+
+  html[data-admin-page="dashboard"] body .img-card.img-card {
+    height: clamp(150px, 26vw, 210px);
+  }
+
+  html[data-admin-page] body .header-content.header-content {
+    border-radius: var(--md-shape-md);
+    gap: 6px;
+  }
+
+  html[data-admin-page] body .search-card.search-card .el-input__inner,
+  html[data-admin-page] body .search-card.search-card .el-input__inner:focus {
+    width: 100%;
+  }
+
+  html[data-admin-page] body .search-card.search-card {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   8. 无障碍 / 动效偏好
+   ════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-admin-page] body .img-card.img-card,
+  html[data-admin-page] body .header-content.header-content,
+  html[data-admin-page] body .sidebar-container.sidebar-container,
+  html[data-admin-page] body .load-more.load-more,
+  html[data-admin-page] body .refresh-btn.refresh-btn {
+    transition: none;
+  }
+
+  /* 注意：不能给 .header-content 置 transform:none —— 它靠 translateX(-50%) 居中 */
+  html[data-admin-page] body .img-card.img-card:hover,
+  html[data-admin-page] body .load-more.load-more:hover,
+  html[data-admin-page] body .refresh-btn.refresh-btn:hover,
+  html[data-admin-page] body .list-action-btn.list-action-btn:hover {
+    transform: none;
+  }
+}
+
+html[data-admin-page] body .menu-item.menu-item:focus-visible,
+html[data-admin-page] body .list-action-btn.list-action-btn:focus-visible,
+html[data-admin-page] body .refresh-btn.refresh-btn:focus-visible,
+html[data-admin-page] body .load-more.load-more:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}

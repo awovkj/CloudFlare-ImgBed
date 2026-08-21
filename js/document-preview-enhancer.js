@@ -12,6 +12,12 @@
  * - 通过 MutationObserver 监听文件详情对话框出现（与 temp-link-enhancer 同模式）
  * - 预览请求复用页面同源 Cookie，与图片/视频预览行为一致
  * - Markdown 渲染前先整体 HTML 转义，防止存储型 XSS
+ *
+ * 预览链接一律带 ?preview=1（下载按钮带 ?download=1）：
+ * - 让 /file/ 明确返回 Content-Disposition: inline 与按扩展名推断的 Content-Type，
+ *   否则 metadata.FileType 为 octet-stream 的文件在 nosniff 下只会触发下载；
+ * - 同时换掉缓存键，绕过浏览器/CDN 里 max-age=2592000 的旧响应
+ *   （旧响应带的是 octet-stream，不换 URL 的话修好后端也依旧是下载）。
  */
 (function attachDocumentPreviewEnhancer(global) {
     'use strict';
@@ -122,6 +128,31 @@
         }
     }
 
+    // ==================== 访问意图（inline / attachment） ====================
+
+    // 在文件 URL 上标记访问意图：preview=1 → 内联预览，download=1 → 强制下载。
+    // 两者互斥，切换时清掉另一个，避免出现 ?preview=1&download=1 这种矛盾链接。
+    function withIntent(url, intent) {
+        try {
+            var u = new URL(url, global.location.origin);
+            if (intent === 'download') {
+                u.searchParams.delete('preview');
+                u.searchParams.set('download', '1');
+            } else {
+                u.searchParams.delete('download');
+                u.searchParams.set('preview', '1');
+            }
+            return u.href;
+        } catch (e) {
+            // URL 解析失败时退回原始链接，至少不影响可用性
+            return url;
+        }
+    }
+
+    function previewUrlOf(fileInfo) {
+        return withIntent(fileInfo.url, 'preview');
+    }
+
     // ==================== 样式注入 ====================
 
     function injectStyles() {
@@ -170,6 +201,13 @@
             '  white-space:nowrap;',
             '}',
             '.doc-preview-open-btn:hover { opacity:0.9; }',
+            '.doc-preview-download-btn {',
+            '  padding:6px 14px;background:transparent;',
+            '  color:var(--el-color-primary,#409eff);',
+            '  border:1px solid var(--el-color-primary,#409eff);border-radius:6px;',
+            '  cursor:pointer;font-size:13px;font-family:inherit;white-space:nowrap;',
+            '}',
+            '.doc-preview-download-btn:hover { background:var(--el-color-primary-light-9,#ecf5ff); }',
             '.doc-preview-close-btn {',
             '  background:none;border:none;font-size:20px;cursor:pointer;',
             '  color:var(--el-text-color-secondary,#909399);padding:4px 8px;border-radius:4px;',
@@ -293,6 +331,7 @@
             '    <span class="doc-preview-badge">' + escapeHtml(categoryLabel) + '</span>' +
             '  </div>' +
             '  <div class="doc-preview-toolbar">' +
+            '    <button class="doc-preview-download-btn" title="强制下载原文件">下载</button>' +
             '    <button class="doc-preview-open-btn" title="在新标签页打开原文件">新窗口打开</button>' +
             '    <button class="doc-preview-close-btn" title="关闭">&times;</button>' +
             '  </div>' +
@@ -306,7 +345,17 @@
 
         overlay.querySelector('.doc-preview-close-btn').addEventListener('click', closeModal);
         overlay.querySelector('.doc-preview-open-btn').addEventListener('click', function () {
-            global.open(fileInfo.url, '_blank');
+            // 新窗口同样带 preview=1，否则可能命中旧的 octet-stream 缓存而变成下载
+            global.open(previewUrlOf(fileInfo), '_blank');
+        });
+        overlay.querySelector('.doc-preview-download-btn').addEventListener('click', function () {
+            var link = document.createElement('a');
+            link.href = withIntent(fileInfo.url, 'download');
+            link.rel = 'noopener';
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
         });
         overlay.addEventListener('click', function (e) {
             if (e.target === overlay) closeModal();
@@ -346,21 +395,21 @@
     function renderPdfPreview(body, fileInfo) {
         setBodyContent(
             body,
-            '<iframe class="doc-preview-frame" src="' + escapeHtml(fileInfo.url) + '" title="PDF 预览"></iframe>'
+            '<iframe class="doc-preview-frame" src="' + escapeHtml(previewUrlOf(fileInfo)) + '" title="PDF 预览"></iframe>'
         );
     }
 
     // Office：Microsoft Office Online 预览（文件需可公网访问）
     function renderOfficePreview(body, fileInfo) {
-        var viewerUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(fileInfo.url);
+        var viewerUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(previewUrlOf(fileInfo));
         body.innerHTML =
-            '<div class="doc-preview-hint">预览由 Microsoft Office Online 提供，需要文件可公开访问；若长时间无法显示，请使用"新窗口打开"或下载后查看。</div>' +
+            '<div class="doc-preview-hint">预览由 Microsoft Office Online 提供，需要文件可被公网访问；若站点开启了登录校验、部署在内网或 localhost，微软服务器取不到文件，请改用"下载"后本地打开。</div>' +
             '<iframe class="doc-preview-frame" src="' + escapeHtml(viewerUrl) + '" title="Office 文档预览"></iframe>';
     }
 
     // Markdown：fetch 内容 + marked.js 渲染，失败降级纯文本（完整内容，不截断）
     function renderMarkdownPreview(body, fileInfo) {
-        fetchFileText(fileInfo.url).then(function (text) {
+        fetchFileText(previewUrlOf(fileInfo)).then(function (text) {
             loadMarked(function (parseFn) {
                 if (parseFn) {
                     // 先整体转义再解析，防止文件内容中的内联 HTML/脚本执行
@@ -378,7 +427,7 @@
 
     // 文本/代码：纯文本完整显示，JSON 自动格式化
     function renderTextPreview(body, fileInfo) {
-        fetchFileText(fileInfo.url).then(function (text) {
+        fetchFileText(previewUrlOf(fileInfo)).then(function (text) {
             var ext = getExtension(fileInfo.fileId);
             if (ext === 'json') {
                 try {
@@ -602,5 +651,6 @@
         extractFileUrlFromDialog: extractFileUrlFromDialog,
         getDocCategory: getDocCategory,
         openPreviewModal: openPreviewModal,
+        withIntent: withIntent,
     };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -25,10 +25,9 @@ describe('music admin password UI patch', () => {
     assert.match(bundle, /settings\.musicPlayer\.clearPassword=!1/);
   });
 
-  it('is applied before frontend-dist is built', () => {
+  it('is wired as a standalone patch script for the Workers pipeline', () => {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
     assert.equal(pkg.scripts['patch:music-admin-password'], `node ${patchScript}`);
-    assert.match(pkg.scripts['build:frontend-dist'], /^npm run patch:music-admin-password && node scripts\/build-frontend-dist\.mjs$/);
   });
 
   it('is idempotent when run repeatedly', () => {

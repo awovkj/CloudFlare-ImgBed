@@ -7,7 +7,8 @@ import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL,
-    createFixedLengthBody, resolveResponseLength, parseSingleRange
+    createFixedLengthBody, resolveResponseLength, parseSingleRange,
+    resolveContentType, resolveDispositionIntent
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
@@ -60,6 +61,10 @@ export async function onRequest(context) {  // Contents of context object
     if (!context.fileAccess) {
         context.fileAccess = fileAccess;
     }
+    // 转发场景下上游 fileAccess 不含本次请求的 disposition 意图，这里补齐
+    if (context.fileAccess.disposition === undefined) {
+        context.fileAccess.disposition = fileAccess.disposition;
+    }
 
     // 临时链接访问跳过域名白名单检查（链接本身即是访问凭据）
     if (!context.skipDomainCheck && !isDomainAllowed(context)) {
@@ -77,7 +82,9 @@ export async function onRequest(context) {  // Contents of context object
 
     const fileName = imgRecord.metadata?.FileName || fileId;
     const encodedFileName = encodeURIComponent(fileName);
-    const fileType = imgRecord.metadata?.FileType || null;
+    // 以扩展名为准解析 Content-Type：metadata.FileType 常为 octet-stream/空串，
+    // 配合 nosniff 会让 PDF/文本等文件只能下载而无法在线预览。
+    const fileType = resolveContentType(fileName, imgRecord.metadata?.FileType, fileId);
 
     // 妫€鏌ユ枃浠跺彲璁块棶鐘舵€?
     let accessRes = await returnWithCheck(context, imgRecord);
@@ -165,7 +172,8 @@ export async function onRequest(context) {  // Contents of context object
         const fileDomain = TgProxyUrl ? `https://${TgProxyUrl}` : 'https://api.telegram.org';
         targetUrl = `${fileDomain}/file/bot${TgBotToken}/${filePath}`;
     } else {
-        targetUrl = 'https://telegra.ph/' + url.pathname + url.search;
+        // preview/download/disposition 是本服务自己的控制参数，不转发给 telegra.ph
+        targetUrl = 'https://telegra.ph/' + url.pathname + buildUpstreamSearch(url);
     }
 
     try {
@@ -178,7 +186,7 @@ export async function onRequest(context) {  // Contents of context object
         }
 
         const headers = new Headers(response.headers);
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
         if (response.status === 304) {
             return new Response(null, { status: 304, headers });
@@ -208,6 +216,7 @@ async function buildFileAccessContext(context) {
         isAdminPreview: fromAdmin,
         adminAuthResult: { authorized: false, authType: null },
         cacheControl: undefined,
+        disposition: resolveDispositionIntent(url),
     };
 
     if (fileAccess.isAdminPreview) {
@@ -230,6 +239,22 @@ async function buildFileAccessContext(context) {
 
 function getFileCacheControl(context) {
     return context.fileAccess?.cacheControl;
+}
+
+// 传给 setCommonHeaders 的附加选项：仅携带 disposition 意图，
+// 不传 url —— 避免激活 setCommonHeaders 中基于 Referer 的缓存分支，保持原有缓存行为。
+function getFileHeaderOptions(context) {
+    return { disposition: context.fileAccess?.disposition || null };
+}
+
+// 本服务自有的响应控制参数，不应转发给第三方上游
+const LOCAL_ONLY_SEARCH_PARAMS = ['preview', 'download', 'disposition'];
+
+function buildUpstreamSearch(url) {
+    const params = new URLSearchParams(url.search);
+    for (const key of LOCAL_ONLY_SEARCH_PARAMS) params.delete(key);
+    const search = params.toString();
+    return search ? `?${search}` : '';
 }
 
 function getChunkedFileCacheControl(context) {
@@ -328,7 +353,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
 
     // 鏋勫缓鍝嶅簲澶?
     const headers = new Headers();
-    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context));
+    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context), getFileHeaderOptions(context));
     headers.set('Content-Length', totalSize.toString());
 
     // 娣诲姞ETag鏀寔
@@ -527,7 +552,7 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
 
     // 鏋勫缓鍝嶅簲澶?
     const headers = new Headers();
-    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context));
+    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context), getFileHeaderOptions(context));
     headers.set('Content-Length', totalSize.toString());
 
     // 娣诲姞ETag鏀寔
@@ -734,7 +759,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
 
         const headers = new Headers();
         object.writeHttpMetadata(headers);
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
         headers.set('Content-Length', object.size.toString());
 
         // 澶勭悊HEAD璇锋眰
@@ -776,7 +801,7 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
             // 澶勭悊 HEAD 璇锋眰
             if (request.method === 'HEAD') {
                 const headers = new Headers();
-                setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+                setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
                 const fileSize = getMetadataFileSize(metadata);
                 if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
                 return handleHeadRequest(headers);
@@ -805,7 +830,7 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
 
             // 鏋勫缓鍝嶅簲澶?
             const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
             // 澶嶅埗鐩稿叧澶撮儴
             if (response.headers.get('Content-Length')) {
@@ -882,7 +907,7 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
 
         // 璁剧疆鍝嶅簲澶?
         const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
         // 璁剧疆Content-Length鍜孋ontent-Range澶?
         if (response.ContentLength !== undefined && response.ContentLength !== null) {
@@ -942,7 +967,7 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         // 澶勭悊 HEAD 璇锋眰
         if (request.method === 'HEAD') {
             const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
             const fileSize = getMetadataFileSize(metadata);
             if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
             return handleHeadRequest(headers);
@@ -966,7 +991,7 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
 
         // 鏋勫缓鍝嶅簲澶?
         const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
         // 澶嶅埗鐩稿叧澶撮儴
         if (response.headers.get('Content-Length')) {
@@ -1013,7 +1038,7 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         // 澶勭悊 HEAD 璇锋眰
         if (request.method === 'HEAD') {
             const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
             if (fileSize) {
                 headers.set('Content-Length', fileSize.toString());
             }
@@ -1045,7 +1070,7 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
 
         // 鏋勫缓鍝嶅簲澶?
         const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
         // 澶嶅埗鐩稿叧澶撮儴
         if (response.headers.get('Content-Length')) {
@@ -1084,7 +1109,7 @@ async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
         }
 
         const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context));
+        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
 
         const fetchHeaders = {};
         const range = request.headers.get('Range');

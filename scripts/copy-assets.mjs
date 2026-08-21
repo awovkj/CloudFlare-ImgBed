@@ -13,18 +13,17 @@ import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset, pruneDeployA
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root      = path.resolve(__dirname, '..');
 const dest      = path.resolve(root, '.wrangler-assets');
-const frontendDist = path.resolve(root, 'frontend-dist');
 
-// `wrangler deploy` can invoke this script directly and prefer an existing
-// frontend-dist directory. Patch/synchronise Telegram assets before choosing
-// that source so a stale generated directory cannot undo the upload tuning.
+// Workers 单一部署形态：静态资源直接取项目根目录。
+// Patch/synchronise Telegram assets before copying so a stale bundle cannot
+// undo the upload tuning.
 execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-tg-upload-performance.mjs')], {
     stdio: 'inherit'
 });
 
-const sourceRoot = fs.existsSync(frontendDist) ? frontendDist : root;
+const sourceRoot = root;
 
-const ignored = addCommonAssetIgnores(sourceRoot === root ? loadAssetIgnore(root) : new Set());
+const ignored = addCommonAssetIgnores(loadAssetIgnore(root));
 
 fs.mkdirSync(dest, { recursive: true });
 

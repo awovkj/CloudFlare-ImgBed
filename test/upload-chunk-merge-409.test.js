@@ -10,8 +10,6 @@ import {
   TELEGRAM_LARGE_FILE_CONCURRENCY,
 } from '../functions/upload/chunkUpload.js';
 
-const uploadChunkMap = JSON.parse(fs.readFileSync('js/274.9b7364f3.js.map', 'utf8'));
-const uploadFormSource = uploadChunkMap.sourcesContent[uploadChunkMap.sources.indexOf('webpack://sanyue_imghub/./src/components/upload/UploadForm.vue')];
 const uploadChunkBundle = fs.readFileSync('js/274.9b7364f3.js', 'utf8');
 const chunkMergeSource = fs.readFileSync('functions/upload/chunkMerge.js', 'utf8');
 const chunkUploadSource = fs.readFileSync('functions/upload/chunkUpload.js', 'utf8');
@@ -103,7 +101,7 @@ describe('chunked upload merge 409 handling', () => {
     assert.match(uploadChunkBundle, /const v="telegram"===o\?3:5;while\(b<v\)/);
   });
 
-  it('keeps the Telegram bundle patch idempotent and wired into both asset build paths', () => {
+  it('keeps the Telegram bundle patch idempotent and wired into the asset build path', () => {
     assert.equal(fs.existsSync(tgPatchScript), true);
     const firstRun = spawnSync(process.execPath, [tgPatchScript], { encoding: 'utf8' });
     assert.equal(firstRun.status, 0, firstRun.stderr || firstRun.stdout);
@@ -113,9 +111,7 @@ describe('chunked upload merge 409 handling', () => {
     assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
     assert.equal(sha256('js/274.9b7364f3.js'), firstHash);
 
-    const frontendBuildSource = fs.readFileSync('scripts/build-frontend-dist.mjs', 'utf8');
     const assetBuildSource = fs.readFileSync('scripts/copy-assets.mjs', 'utf8');
-    assert.match(frontendBuildSource, /patch-tg-upload-performance\.mjs/);
     assert.match(assetBuildSource, /patch-tg-upload-performance\.mjs/);
   });
 });
