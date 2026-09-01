@@ -4,7 +4,7 @@
 
 An open-source file hosting service for Cloudflare Workers. It supports Telegram, Discord, Cloudflare R2, S3, Hugging Face, and WebDAV, with upload management, directory browsing, authentication, temporary links, random images, and music, video, and chat pages.
 
-![Interface preview](static/readme/海报.png)
+![Interface preview](img/海报.png)
 
 ## Development And Deployment
 

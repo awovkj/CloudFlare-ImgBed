@@ -4,7 +4,7 @@
 
 基于 Cloudflare Workers 的开源文件托管服务，支持 Telegram、Discord、Cloudflare R2、S3、Hugging Face 和 WebDAV，提供上传、管理、目录浏览、鉴权、临时链接、随机图、音乐、视频与聊天页面。
 
-![界面预览](static/readme/海报.png)
+![界面预览](img/海报.png)
 
 ## 开发与部署
 
