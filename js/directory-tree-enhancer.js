@@ -19,6 +19,11 @@
     return !!(err && err.code === 'directory_password_required');
   }
 
+  // 后台"目录候选项"开关关闭时，/api/directoryTree 返回 403
+  function isDirectoryDisabledError(err) {
+    return !!(err && err.code === 'directory_suggestions_disabled');
+  }
+
   function invalidateTreeCache() {
     treeCache = null;
     treeCacheAt = 0;
@@ -132,6 +137,13 @@
             error.status = response.status;
             throw error;
           });
+        }
+        if (response.status === 403) {
+          // 目录候选项开关关闭：显示禁用提示，隐藏已有目录
+          var disabledError = new Error('directory_suggestions_disabled');
+          disabledError.code = 'directory_suggestions_disabled';
+          disabledError.status = response.status;
+          throw disabledError;
         }
         var err = new Error('目录树加载失败');
         err.status = response.status;
@@ -329,6 +341,12 @@
         renderPasswordUnlock(list, { onUnlocked: renderNodes });
         return;
       }
+      if (isDirectoryDisabledError(err)) {
+        // 目录候选项开关关闭：隐藏已有目录，提示直接输入
+        list.innerHTML = '';
+        list.appendChild(createElement('div', 'cfbed-dd-msg', '目录选择已禁用，请直接输入路径'));
+        return;
+      }
       list.innerHTML = '';
       list.appendChild(createElement('div', 'cfbed-dd-msg', '加载失败'));
     });
@@ -488,6 +506,11 @@
       if (isPasswordRequiredError(err)) {
         // 需要目录密码：内容区渲染解锁 UI；顶部手动输入框不受影响，仍可直接填写
         renderPasswordUnlock(content, { onUnlocked: renderTree });
+        return;
+      }
+      if (isDirectoryDisabledError(err)) {
+        // 目录候选项开关关闭：隐藏已有目录，提示直接输入
+        content.appendChild(createElement('div', 'cfbed-tree-empty', '目录选择已禁用，请直接输入路径'));
         return;
       }
       content.appendChild(createElement('div', 'cfbed-dd-msg', '目录列表加载失败，请直接输入'));

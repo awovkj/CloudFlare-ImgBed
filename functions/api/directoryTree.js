@@ -16,7 +16,7 @@ export async function onRequestGet(context) {
     if (authResult.authType !== 'admin') {
         const pageConfig = await fetchPageConfig(env);
         const showDirSetting = pageConfig.config?.find((item) => item.id === 'showDirectorySuggestions');
-        const showDirectorySuggestions = showDirSetting?.value ?? showDirSetting?.default ?? true;
+        const showDirectorySuggestions = showDirSetting?.value ?? showDirSetting?.default ?? false;
 
         if (!showDirectorySuggestions) {
             return new Response(JSON.stringify({ error: 'Directory suggestions disabled' }), {
