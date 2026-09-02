@@ -14,6 +14,8 @@
   var enhanceScheduled = false;
   // 目录列表密码（后端启用门控后查看已有目录需要）；仅保存在内存，刷新页面后需重新输入
   var directoryPassword = '';
+  // 目录候选项开关关闭（403）后置真：本页生命周期内短路所有目录树请求（取消加载）
+  var treeDisabled = false;
 
   function isPasswordRequiredError(err) {
     return !!(err && err.code === 'directory_password_required');
@@ -24,9 +26,16 @@
     return !!(err && err.code === 'directory_suggestions_disabled');
   }
 
+  function createDirectoryDisabledError() {
+    var disabledError = new Error('directory_suggestions_disabled');
+    disabledError.code = 'directory_suggestions_disabled';
+    return disabledError;
+  }
+
   function invalidateTreeCache() {
     treeCache = null;
     treeCacheAt = 0;
+    treeDisabled = false;
   }
 
   function normalizeForInput(path) {
@@ -97,6 +106,10 @@
   }
 
   function fetchTree() {
+    // 目录候选项已关闭：不再发起请求，直接走禁用分支（取消加载）
+    if (treeDisabled) {
+      return Promise.reject(createDirectoryDisabledError());
+    }
     if (treeCache && Date.now() - treeCacheAt < treeCacheTtl) {
       return Promise.resolve(treeCache);
     }
@@ -139,9 +152,9 @@
           });
         }
         if (response.status === 403) {
-          // 目录候选项开关关闭：显示禁用提示，隐藏已有目录
-          var disabledError = new Error('directory_suggestions_disabled');
-          disabledError.code = 'directory_suggestions_disabled';
+          // 目录候选项开关关闭：缓存禁用状态（后续不再加载），显示禁用提示，隐藏已有目录
+          treeDisabled = true;
+          var disabledError = createDirectoryDisabledError();
           disabledError.status = response.status;
           throw disabledError;
         }
@@ -173,29 +186,64 @@
   }
 
   // ── Directory password unlock UI（dropdown 与 modal picker 共用）──
+  // 默认折叠为单个锁图标（挂在目录 UI 旁），点击才展开密码输入条；
+  // 目录候选项关闭（403）时密码 UI 完全不渲染、不加载
+
+  var LOCK_ICON_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+    ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>';
 
   function renderPasswordUnlock(container, options) {
     container.innerHTML = '';
     var wrap = createElement('div', 'cfbed-dir-unlock');
-    wrap.appendChild(createElement('div', 'cfbed-dir-unlock-title', '查看已有目录需要密码'));
-    wrap.appendChild(createElement('div', 'cfbed-dir-unlock-desc', '输入目录密码即可浏览已有目录；也可跳过此步，直接手动输入目录路径。'));
+    if (options.wrong) wrap.classList.add('is-error');
+    if (options.expanded) {
+      renderUnlockBar(container, wrap, options);
+    } else {
+      renderCollapsedLock(container, wrap, options);
+    }
+  }
+
+  // 折叠态（默认）：仅一个锁图标，点击展开输入条
+  function renderCollapsedLock(container, wrap, options) {
+    wrap.classList.add('is-collapsed');
+    var lockButton = createElement('button', 'cfbed-dir-unlock-lock');
+    lockButton.type = 'button';
+    lockButton.title = '输入目录密码';
+    lockButton.setAttribute('aria-label', '输入目录密码');
+    lockButton.innerHTML = LOCK_ICON_SVG;
+    lockButton.addEventListener('click', function () {
+      renderPasswordUnlock(container, Object.assign({}, options, { expanded: true }));
+    });
+    wrap.appendChild(lockButton);
+    container.appendChild(wrap);
+  }
+
+  // 展开态：一体式胶囊解锁条（锁图标 + 密码输入框 + 解锁按钮）
+  function renderUnlockBar(container, wrap, options) {
+    var bar = createElement('div', 'cfbed-dir-unlock-bar');
+    var icon = createElement('span', 'cfbed-dir-unlock-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = LOCK_ICON_SVG;
+    bar.appendChild(icon);
 
     var input = document.createElement('input');
     input.type = 'password';
     input.className = 'cfbed-dir-unlock-input';
     input.placeholder = '目录密码';
     input.autocomplete = 'off';
-    wrap.appendChild(input);
+    bar.appendChild(input);
+
+    var unlockButton = createElement('button', 'cfbed-dir-unlock-btn', '解锁');
+    unlockButton.type = 'button';
+    bar.appendChild(unlockButton);
+
+    wrap.appendChild(bar);
 
     var msg = createElement('div', 'cfbed-dir-unlock-msg', options.wrong ? '密码错误，请重试' : '');
     if (options.wrong) msg.classList.add('is-error');
     wrap.appendChild(msg);
-
-    var actions = createElement('div', 'cfbed-dir-unlock-actions');
-    var unlockButton = createElement('button', 'cfbed-tree-action is-primary', '解锁');
-    unlockButton.type = 'button';
-    actions.appendChild(unlockButton);
-    wrap.appendChild(actions);
 
     container.appendChild(wrap);
 
@@ -215,8 +263,8 @@
         unlockButton.disabled = false;
         unlockButton.textContent = '解锁';
         if (isPasswordRequiredError(err)) {
-          // 密码错误：保留输入内容便于修改，仅重渲染提示
-          renderPasswordUnlock(container, Object.assign({}, options, { wrong: true }));
+          // 密码错误：保持展开，保留输入内容便于修改
+          renderPasswordUnlock(container, Object.assign({}, options, { wrong: true, expanded: true }));
           var newInput = container.querySelector('.cfbed-dir-unlock-input');
           if (newInput) {
             newInput.value = value;
@@ -273,13 +321,7 @@
     return fragment;
   }
 
-  function openDropdown(anchor, onSelect, currentValue) {
-    closeDropdown();
-
-    var dropdown = createElement('div', 'cfbed-dd');
-    var list = createElement('div', 'cfbed-dd-list');
-
-    // Root option
+  function buildRootItem(onSelect) {
     var rootItem = createElement('div', 'cfbed-dd-item cfbed-dd-root');
     rootItem.appendChild(createElement('span', 'cfbed-dd-icon', '🏠'));
     rootItem.appendChild(createElement('span', 'cfbed-dd-label', '根目录 /'));
@@ -287,7 +329,17 @@
       e.stopPropagation();
       onSelect('');
     });
-    list.appendChild(rootItem);
+    return rootItem;
+  }
+
+  function openDropdown(anchor, onSelect, currentValue) {
+    closeDropdown();
+
+    var dropdown = createElement('div', 'cfbed-dd');
+    var list = createElement('div', 'cfbed-dd-list');
+
+    // Root option
+    list.appendChild(buildRootItem(onSelect));
 
     // Loading state
     var loading = createElement('div', 'cfbed-dd-msg', '加载中...');
@@ -315,14 +367,7 @@
       if (!isCurrentDropdown()) return;
       list.innerHTML = '';
       // Root option
-      var rootItem = createElement('div', 'cfbed-dd-item cfbed-dd-root');
-      rootItem.appendChild(createElement('span', 'cfbed-dd-icon', '🏠'));
-      rootItem.appendChild(createElement('span', 'cfbed-dd-label', '根目录 /'));
-      rootItem.addEventListener('click', function (e) {
-        e.stopPropagation();
-        onSelect('');
-      });
-      list.appendChild(rootItem);
+      list.appendChild(buildRootItem(onSelect));
 
       if (!nodes.length) {
         list.appendChild(createElement('div', 'cfbed-dd-msg', '暂无目录'));
@@ -336,9 +381,12 @@
     fetchTree().then(renderNodes).catch(function (err) {
       if (!isCurrentDropdown()) return;
       if (isPasswordRequiredError(err)) {
-        // 需要目录密码：dropdown 内渲染解锁 UI（输入框本身不受影响，仍可手动填写）
+        // 需要目录密码：根目录仍可直接选择，密码 UI 折叠为锁图标挂在目录列表旁
         list.innerHTML = '';
-        renderPasswordUnlock(list, { onUnlocked: renderNodes });
+        list.appendChild(buildRootItem(onSelect));
+        var unlockSlot = createElement('div', 'cfbed-dd-unlock-slot');
+        list.appendChild(unlockSlot);
+        renderPasswordUnlock(unlockSlot, { onUnlocked: renderNodes });
         return;
       }
       if (isDirectoryDisabledError(err)) {
@@ -504,7 +552,7 @@
     }).catch(function (err) {
       content.innerHTML = '';
       if (isPasswordRequiredError(err)) {
-        // 需要目录密码：内容区渲染解锁 UI；顶部手动输入框不受影响，仍可直接填写
+        // 需要目录密码：内容区默认仅显示锁图标，点击展开输入；顶部手动输入框不受影响
         renderPasswordUnlock(content, { onUnlocked: renderTree });
         return;
       }
@@ -724,8 +772,7 @@
     openPicker: openPicker,
     closePicker: closePicker,
     refresh: function () {
-      treeCache = null;
-      treeCacheAt = 0;
+      invalidateTreeCache();
       enhancePage();
     }
   };

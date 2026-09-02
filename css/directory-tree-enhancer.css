@@ -367,49 +367,138 @@
 
 /* ══════════════════════════════════════════════════════
    Directory password unlock (dropdown & modal picker)
+   默认折叠为单个锁图标（挂在目录 UI 旁），点击展开胶囊输入条
    ══════════════════════════════════════════════════════ */
 
 .cfbed-dir-unlock {
+  padding: 12px 10px 6px;
+}
+
+/* ── 折叠态（默认）：仅一个锁图标 ── */
+.cfbed-dir-unlock.is-collapsed {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 12px;
+  justify-content: center;
+  padding: 14px 10px;
 }
 
-.cfbed-dir-unlock-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--md-on-surface, #1b1b1f);
-  text-align: center;
-}
-
-.cfbed-dir-unlock-desc {
-  font-size: 11px;
-  line-height: 1.5;
+.cfbed-dir-unlock-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--md-outline-variant, #c5c6d0);
+  border-radius: var(--md-shape-full, 999px);
+  background: var(--md-surface-container-lowest, #fff);
   color: var(--md-on-surface-variant, #45464f);
-  text-align: center;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+
+.cfbed-dir-unlock-lock:hover {
+  color: var(--md-primary, #3b66d6);
+  border-color: var(--md-primary, #3b66d6);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary, #3b66d6) 12%, transparent);
+}
+
+.cfbed-dir-unlock-lock:active {
+  transform: scale(0.92);
+}
+
+.cfbed-dir-unlock-lock:focus-visible {
+  outline: 2px solid var(--md-primary, #3b66d6);
+  outline-offset: 2px;
+}
+
+.cfbed-dir-unlock-lock svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* ── 展开态：胶囊解锁条 ── */
+
+.cfbed-dir-unlock-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--md-outline-variant, #c5c6d0);
+  border-radius: var(--md-shape-full, 999px);
+  background: var(--md-surface-container-lowest, #fff);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.cfbed-dir-unlock-bar:focus-within {
+  border-color: var(--md-primary, #3b66d6);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary, #3b66d6) 14%, transparent);
+}
+
+.cfbed-dir-unlock-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--md-on-surface-variant, #45464f);
+  opacity: 0.75;
+}
+
+.cfbed-dir-unlock-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .cfbed-dir-unlock-input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--md-outline-variant, #c5c6d0);
-  border-radius: var(--md-shape-full, 999px);
-  padding: 8px 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 8px 2px;
   font-size: 13px;
   font-family: inherit;
   color: var(--md-on-surface, #1b1b1f);
-  background: var(--md-surface-container-lowest, #fff);
-  outline: none;
-  transition: border-color 0.15s ease;
 }
 
-.cfbed-dir-unlock-input:focus {
-  border-color: var(--md-primary, #3b66d6);
+.cfbed-dir-unlock-input::placeholder {
+  color: var(--md-on-surface-variant, #45464f);
+  opacity: 0.6;
+}
+
+.cfbed-dir-unlock-btn {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--md-shape-full, 999px);
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  background: var(--md-primary, #3b66d6);
+  color: var(--md-on-primary, #fff);
+  transition: background 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+
+.cfbed-dir-unlock-btn:hover {
+  background: color-mix(in srgb, #000 8%, var(--md-primary, #3b66d6));
+  box-shadow: var(--md-elev-1, 0 1px 2px rgba(0,0,0,.05), 0 1px 3px 1px rgba(0,0,0,.04));
+}
+
+.cfbed-dir-unlock-btn:active {
+  transform: scale(0.97);
+}
+
+.cfbed-dir-unlock-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .cfbed-dir-unlock-msg {
-  min-height: 14px;
+  min-height: 16px;
+  margin-top: 6px;
+  padding: 0 6px;
   font-size: 11px;
   text-align: center;
   color: var(--md-on-surface-variant, #45464f);
@@ -419,8 +508,38 @@
   color: var(--md-error, #b3261e);
 }
 
-.cfbed-dir-unlock-actions {
-  display: flex;
-  justify-content: center;
-  padding-top: 2px;
+/* 密码错误：胶囊条红框 + 抖动反馈 */
+.cfbed-dir-unlock.is-error .cfbed-dir-unlock-bar {
+  border-color: var(--md-error, #b3261e);
+  animation: cfbed-unlock-shake 0.4s ease;
+}
+
+.cfbed-dir-unlock.is-error .cfbed-dir-unlock-bar:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-error, #b3261e) 14%, transparent);
+}
+
+@keyframes cfbed-unlock-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
+
+@media (max-width: 768px) {
+  .cfbed-dir-unlock {
+    padding: 10px 8px 4px;
+  }
+
+  .cfbed-dir-unlock.is-collapsed {
+    padding: 12px 8px;
+  }
+
+  .cfbed-dir-unlock-lock {
+    width: 32px;
+    height: 32px;
+  }
+
+  .cfbed-dir-unlock-btn {
+    padding: 6px 12px;
+  }
 }
