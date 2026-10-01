@@ -242,9 +242,6 @@ async function getAllFileRecords(env, dir) {
             allRecords.push(...pageRecords);
 
             if (!cursor) break;
-
-            // 添加协作点
-            await new Promise(resolve => setTimeout(resolve, 10));
         }
 
         // 提取目录信息

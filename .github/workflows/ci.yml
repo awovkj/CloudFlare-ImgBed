@@ -1,0 +1,40 @@
+name: CI
+
+# 背景：仓库此前没有任何 workflow 运行 npm test（只有 docker-publish /
+# sync-release / sync），导致测试写了但不产生约束力 —— 这也是
+# test/worker-route-generation.test.js 在 Windows 上必然失败却长期无人
+# 发现的原因（见 .gitattributes 与 deploy/worker/generate-routes.js）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # test/music-page-route.test.js 断言 .wrangler-assets/music.html 存在，
+      # 而该目录由构建步骤生成。先准备构建产物，再跑测试。
+      - name: Prepare deployable assets
+        run: node scripts/copy-assets.mjs
+
+      # npm test = verify:worker-routes && mocha
+      #   - verify:worker-routes 校验生成物新鲜度 + 全量路由覆盖
+      #   - mocha 跑 test/ 下全部用例
+      - name: Verify routes and run tests
+        run: npm test

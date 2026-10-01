@@ -1,5 +1,5 @@
-import { fetchOthersConfig } from "../utils/sysConfig";
-import { readIndex } from "../utils/indexManager";
+import { fetchOthersConfig } from "../utils/sysConfig.js";
+import { readIndex } from "../utils/indexManager.js";
 import { detectDevice, resolveOrientation, addClientHintsHeaders } from "./adaptive.js";
 
 const corsHeaders = {

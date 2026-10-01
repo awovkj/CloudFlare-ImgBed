@@ -1,0 +1,21 @@
+# 统一行尾为 LF。
+#
+# 原因：src/generatedAuthRoutes.js 由 deploy/worker/generate-routes.js 生成，
+# 产出恒为 LF。若工作区因 core.autocrlf=true 被 checkout 成 CRLF，
+# 「生成物新鲜度校验」会把行尾差异误判成「文件过期」，导致 npm test
+# 在 Windows 上必然失败、在 Linux 上通过。
+#
+# 参考：deploy/worker/generate-routes.js 的 isGeneratedRouteFileCurrent()
+
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.pdf   binary

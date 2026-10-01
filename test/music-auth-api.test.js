@@ -182,7 +182,8 @@ describe('music auth API', () => {
   });
 
   it('registers the three Worker routes with method guards', () => {
-    const source = fs.readFileSync('src/worker.js', 'utf8');
+    // 路由表在迁移后集中在 src/routes.js（此前内联在 src/worker.js）
+    const source = fs.readFileSync('src/routes.js', 'utf8');
     assert.match(source, /import \{ onRequestPost as onMusicLoginPost \}[^;]+music\/login\.js/);
     assert.match(source, /import \{ onRequestPost as onMusicLogoutPost \}[^;]+music\/logout\.js/);
     assert.match(source, /import \{ onRequestGet as onMusicSessionGet \}[^;]+music\/session\.js/);

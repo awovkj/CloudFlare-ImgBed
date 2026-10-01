@@ -1,22 +1,34 @@
 /**
- * Generate subordinate worker routes for phase-1 safe paths only.
+ * 路由生成与校验
  *
- * This is intentionally narrower than upstream route generation:
- * - current allowlist: functions/api/auth/*.js
- * - current output: src/generatedAuthRoutes.js
- * - current purpose: let src/worker.js remain the main entry while
- *   delegating only /api/auth/* endpoints to a generated manifest.
+ * 两件事：
+ *   1. 生成：把 functions/api/auth/*.js 渲染成 src/generatedAuthRoutes.js
+ *      （这些端点的路由路径可由文件路径直接推导，适合生成）
+ *   2. 校验：全量检查 functions/ 下的 handler 是否都被登记（见 route-coverage.js）
+ *
+ * 为什么只对 api/auth 做生成、而对其余做校验：
+ * 本项目存在无法由文件路径推导的路由 —— /music、/music/、/music.html 三条路径
+ * 指向同一 handler；/api/site/storage-overview 是 /api/manage/stats 的别名；
+ * 部分动态路由需要函数式参数提取。全量生成需要引入一套描述这些情况的 DSL，
+ * 复杂度高于收益。而「全量校验」能以极低成本消除漏登记导致的静默失败。
+ *
+ * 输出：src/generatedAuthRoutes.js
+ * 用法：
+ *   node deploy/worker/generate-routes.js           # 生成
+ *   node deploy/worker/generate-routes.js --check   # 只校验，不修改（CI 用）
  */
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { basename, dirname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { verifyRouteCoverage, formatCoverageResult } from './route-coverage.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(__dirname, '../..');
 export const FUNCTIONS_DIR = join(ROOT, 'functions');
 export const AUTH_DIR = join(FUNCTIONS_DIR, 'api', 'auth');
 export const OUTPUT_FILE = join(ROOT, 'src', 'generatedAuthRoutes.js');
+export const ROUTES_FILE = join(ROOT, 'src', 'routes.js');
 
 export function hasRouteExport(filePath) {
     const content = readFileSync(filePath, 'utf8');
@@ -84,9 +96,21 @@ export function matchGeneratedAuthRoute(pathname) {
 `;
 }
 
+/**
+ * 统一行尾后再比较。
+ *
+ * 背景：生成器产出 LF，但 Windows 工作区在 core.autocrlf=true 时 checkout 为
+ * CRLF，直接字符串比较会把「行尾差异」误判成「生成物过期」，导致
+ * npm test 在 Windows 上必然失败、在 Linux 上通过。此处做规范化比较，
+ * 同时用 .gitattributes 从源头约束行尾。
+ */
+function normalizeEol(text) {
+    return text.replace(/\r\n/g, '\n');
+}
+
 export function isGeneratedRouteFileCurrent(outputFile = OUTPUT_FILE, expectedOutput = renderGeneratedAuthRoutes()) {
     try {
-        return readFileSync(outputFile, 'utf8') === expectedOutput;
+        return normalizeEol(readFileSync(outputFile, 'utf8')) === normalizeEol(expectedOutput);
     } catch (error) {
         if (error?.code === 'ENOENT') {
             return false;
@@ -95,17 +119,41 @@ export function isGeneratedRouteFileCurrent(outputFile = OUTPUT_FILE, expectedOu
     }
 }
 
+/**
+ * 校验全量路由覆盖：functions/ 下每个导出 onRequest 的 handler
+ * 都应被 src/routes.js 或 src/generatedAuthRoutes.js 覆盖。
+ *
+ * 这是「漏登记静默失败」的防线 —— 详见 route-coverage.js 的模块注释。
+ */
+export function verifyRoutes() {
+    const coverage = verifyRouteCoverage({
+        functionsDir: FUNCTIONS_DIR,
+        routesFile: ROUTES_FILE,
+        generatedFile: OUTPUT_FILE,
+    });
+    console.log(formatCoverageResult(coverage));
+    return coverage.ok;
+}
+
 export function generateAuthRoutes({ check = false } = {}) {
     const output = renderGeneratedAuthRoutes();
 
     if (check) {
+        let ok = true;
+
         if (!isGeneratedRouteFileCurrent(OUTPUT_FILE, output)) {
             console.error(`✗ ${basename(OUTPUT_FILE)} is stale; run npm run generate:worker-routes`);
-            return false;
+            ok = false;
+        } else {
+            console.log(`✓ Verified ${basename(OUTPUT_FILE)} is current`);
         }
 
-        console.log(`✓ Verified ${basename(OUTPUT_FILE)} is current`);
-        return true;
+        // 除生成物新鲜度外，同时校验全量路由覆盖（覆盖范围远大于 api/auth）
+        if (!verifyRoutes()) {
+            ok = false;
+        }
+
+        return ok;
     }
 
     mkdirSync(dirname(OUTPUT_FILE), { recursive: true });

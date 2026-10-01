@@ -1,4 +1,5 @@
 import { fetchSecurityConfig } from "../../utils/sysConfig.js";
+import { buildCorsHeaders } from '../../utils/cors.js';
 import { checkDatabaseConfig } from "../../utils/middleware.js";
 import { validateApiToken } from "../../utils/auth/tokenValidator.js";
 import { getDatabase } from "../../utils/databaseAdapter.js";
@@ -137,13 +138,8 @@ async function tryTempLinkReceiptAccess(context, pathname) {
   return await verifyTempLinkReceipt(context.env, receipt, fileId);
 }
 
-// CORS 跨域响应头
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, PUT, PATCH, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age': '86400',
-};
+// CORS 跨域响应头（集中定义见 functions/utils/cors.js）
+const corsHeaders = buildCorsHeaders();
 
 async function authentication(context) {
   // OPTIONS 预检请求不需要鉴权，直接返回 CORS 响应

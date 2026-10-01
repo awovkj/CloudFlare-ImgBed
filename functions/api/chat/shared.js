@@ -1,4 +1,5 @@
 import { fetchOthersConfig, fetchUploadConfig } from '../../utils/sysConfig.js';
+import { buildCorsHeaders } from '../../utils/cors.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
 import { CHAT_DIRECTORY, CHAT_DIRECTORY_PREFIX, CHAT_RECORD_TYPE, CHAT_SOURCE_APP, CHAT_TEXT_PREFIX, createChatTextRecordId, isChatTransferRecord, listAllKeysByPrefix } from '../../utils/chat.js';
 import { getDatabase } from '../../utils/databaseAdapter.js';
@@ -6,12 +7,11 @@ import { addFileToIndex, readIndex, batchRemoveFilesFromIndex } from '../../util
 import { deleteStoredFile } from '../../utils/deleteFile.js';
 import { TelegramAPI } from '../../utils/telegramAPI.js';
 
-export const chatCorsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, authCode',
-    'Access-Control-Max-Age': '86400',
-};
+// CORS 跨域响应头（集中定义见 functions/utils/cors.js）
+export const chatCorsHeaders = buildCorsHeaders({
+    methods: 'GET, POST, OPTIONS',
+    headers: 'Content-Type, Authorization, authCode',
+});
 
 export function jsonResponse(payload, status = 200, headers = {}) {
     return new Response(JSON.stringify(payload), {

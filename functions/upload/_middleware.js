@@ -1,4 +1,4 @@
-import { checkDatabaseConfig } from '../utils/middleware';
+import { checkDatabaseConfig } from '../utils/middleware.js';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',

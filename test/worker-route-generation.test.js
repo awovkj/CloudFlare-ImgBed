@@ -29,7 +29,14 @@ describe('worker route generation', () => {
 
   it('keeps the checked-in route manifest synchronized', () => {
     assert.equal(isGeneratedRouteFileCurrent(), true);
-    assert.equal(fs.readFileSync(OUTPUT_FILE, 'utf8'), renderGeneratedAuthRoutes());
+
+    // 规范化行尾后比较：Windows(core.autocrlf=true → CRLF) 与生成器(LF) 的
+    // 差异不应被判定为「生成物过期」。见 deploy/worker/generate-routes.js。
+    const normalizeEol = (text) => text.replace(/\r\n/g, '\n');
+    assert.equal(
+      normalizeEol(fs.readFileSync(OUTPUT_FILE, 'utf8')),
+      normalizeEol(renderGeneratedAuthRoutes()),
+    );
   });
 
   it('detects a stale manifest without modifying it', () => {

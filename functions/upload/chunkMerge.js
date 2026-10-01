@@ -1,6 +1,6 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink, sanitizeUploadFolder } from './uploadTools';
-import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload';
+import { createResponse, getUploadIp, getIPAddress, selectChannel, buildUniqueFileId, endUpload, buildReturnLink, sanitizeUploadFolder } from './uploadTools.js';
+import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData } from './chunkUpload.js';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';

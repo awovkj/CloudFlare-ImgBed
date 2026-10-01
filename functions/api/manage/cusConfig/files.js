@@ -1,4 +1,4 @@
-import { readIndex } from "../../../utils/indexManager";
+import { readIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from "../../../utils/databaseAdapter.js";
 import { buildFileMetadataForManagement, createMetadataViewContext } from "../../../utils/metadata/metadataView.js";
 

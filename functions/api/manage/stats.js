@@ -1,4 +1,5 @@
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
+import { buildCorsHeaders } from '../../utils/cors.js';
 import { getIndexMeta, readIndex } from '../../utils/indexManager.js';
 
 const ALL_ACCESS_STATUSES = ['normal', 'blocked'];
@@ -42,13 +43,8 @@ function formatStatsResponse(baseStats, fileTypes, channels) {
     });
 }
 
-// CORS 跨域响应头
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Max-Age': '86400',
-};
+// CORS 跨域响应头（集中定义见 functions/utils/cors.js）
+const corsHeaders = buildCorsHeaders({ methods: 'GET, OPTIONS' });
 
 export async function onRequest(context) {
     const { request, env } = context;

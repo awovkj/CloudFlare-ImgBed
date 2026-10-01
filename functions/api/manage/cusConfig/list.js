@@ -1,4 +1,4 @@
-import { readIndex } from "../../../utils/indexManager";
+import { readIndex } from "../../../utils/indexManager.js";
 
 export async function onRequest(context) {
     // Contents of context object

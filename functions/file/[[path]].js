@@ -1,15 +1,16 @@
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { fetchSecurityConfig } from "../utils/sysConfig";
+import { fetchSecurityConfig } from "../utils/sysConfig.js";
+import { createServerErrorResponse } from '../utils/response.js';
 import { TelegramAPI } from "../utils/telegramAPI.js";
 import { DiscordAPI } from "../utils/discordAPI.js";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI.js";
-import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
+import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI.js";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL,
     createFixedLengthBody, resolveResponseLength, parseSingleRange,
     resolveContentType, resolveDispositionIntent
-} from './fileTools';
+} from './fileTools.js';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
 import {
@@ -205,7 +206,7 @@ export async function onRequest(context) {  // Contents of context object
 
         return newRes;
     } catch (error) {
-        return new Response('Error: ' + error, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -467,7 +468,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         }
 
     } catch (error) {
-        return new Response(`Error: Failed to reconstruct chunked file - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -659,7 +660,7 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         }
 
     } catch (error) {
-        return new Response(`Error: Failed to reconstruct Discord chunked file - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -784,7 +785,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             headers,
         });
     } catch (error) {
-        return new Response(`Error: Failed to fetch from R2 - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -936,7 +937,7 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
         });
 
     } catch (error) {
-        return new Response(`Error: Failed to fetch from S3 - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -1010,7 +1011,7 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         });
 
     } catch (error) {
-        return new Response(`Error: Failed to fetch from Discord - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -1089,7 +1090,7 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         });
 
     } catch (error) {
-        return new Response(`Error: Failed to fetch from HuggingFace - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
@@ -1178,7 +1179,7 @@ async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
         });
 
     } catch (error) {
-        return new Response(`Error: Failed to fetch from WebDAV - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 

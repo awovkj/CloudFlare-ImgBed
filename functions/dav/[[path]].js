@@ -1,7 +1,7 @@
 // WebDAV 服务支持
-import { fetchOthersConfig } from "../utils/sysConfig";
-import { getDatabase } from "../utils/databaseAdapter";
-import { createApiToken } from "../api/manage/apiTokens";
+import { fetchOthersConfig } from "../utils/sysConfig.js";
+import { getDatabase } from "../utils/databaseAdapter.js";
+import { createApiToken } from "../api/manage/apiTokens.js";
 
 // HTML 转义，防止目录/文件名或反射路径注入脚本（XSS）
 function escapeHtml(value) {

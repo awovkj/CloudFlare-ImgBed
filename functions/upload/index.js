@@ -1,15 +1,15 @@
 import { userAuthCheck, UnauthorizedResponse } from "../utils/auth/userAuth.js";
-import { fetchUploadConfig, fetchSecurityConfig, fetchOthersConfig, fetchPageConfig } from "../utils/sysConfig";
+import { fetchUploadConfig, fetchSecurityConfig, fetchOthersConfig, fetchPageConfig } from "../utils/sysConfig.js";
 import {
     createResponse, getUploadIp, getIPAddress, resolveFileExt,
     moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
     sanitizeUploadFolder, buildReturnLink, selectChannel
-} from "./uploadTools";
-import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram, handleCleanupRequest } from "./chunkUpload";
-import { handleChunkMerge } from "./chunkMerge";
-import { TelegramAPI } from "../utils/telegramAPI";
-import { DiscordAPI } from "../utils/discordAPI";
-import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
+} from "./uploadTools.js";
+import { initializeChunkedUpload, handleChunkUpload, uploadLargeFileToTelegram, handleCleanupRequest } from "./chunkUpload.js";
+import { handleChunkMerge } from "./chunkMerge.js";
+import { TelegramAPI } from "../utils/telegramAPI.js";
+import { DiscordAPI } from "../utils/discordAPI.js";
+import { HuggingFaceAPI } from "../utils/huggingfaceAPI.js";
 import { WebDAVAPI } from "../utils/storage/webdavAPI.js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';

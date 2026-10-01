@@ -1,6 +1,6 @@
-import { getDirectoryTree } from '../utils/indexManager';
+import { getDirectoryTree } from '../utils/indexManager.js';
 import { dualAuthCheck } from '../utils/auth/dualAuth.js';
-import { fetchPageConfig, fetchOthersConfig } from '../utils/sysConfig';
+import { fetchPageConfig, fetchOthersConfig } from '../utils/sysConfig.js';
 import { verifyPassword } from '../utils/auth/passwordHash.js';
 
 export async function onRequestGet(context) {
