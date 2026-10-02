@@ -37,11 +37,26 @@ let changedFiles = 0;
 {
     let bundle = fs.readFileSync(uploadBundlePath, 'utf8');
 
+    // Telegram 分片并发：4 → 2。
+    //
+    // 为什么降：分片请求既不带 uploadId（URL 与 X-Upload-Id 都没有，uploadId
+    // 只出现在 FormData 里），而 shouldRouteUploadToDurableObject() 对
+    // chunked=true 且无 uploadId 的请求返回 false —— 所以分片根本不经
+    // Durable Object，DO 的 runSerial 串行队列从未生效。
+    //
+    // 于是前端并发 N 就是真的 N 个 Worker 并发打 Telegram，而 Telegram 对同一
+    // chat 的限速约 1 条/秒。并发 4 必然触发 429，等待 retry_after 期间连接被
+    // 关闭（ERR_CONNECTION_CLOSED），表现为「每个分片都失败一次、重试才成功」。
     let patchedBundle = replaceExactlyOnce(
         bundle,
         'const f=("discord"===o||"telegram"===o)?3:6,',
-        'const f="telegram"===o?4:"discord"===o?3:6,',
+        'const f="telegram"===o?2:"discord"===o?3:6,',
         'Telegram chunk concurrency'
+    );
+    // 兼容已经打过旧版补丁（并发 4）的 bundle，使其可被下调
+    patchedBundle = patchedBundle.replace(
+        'const f="telegram"===o?4:"discord"===o?3:6,',
+        'const f="telegram"===o?2:"discord"===o?3:6,',
     );
     patchedBundle = replaceExactlyOnce(
         patchedBundle,
