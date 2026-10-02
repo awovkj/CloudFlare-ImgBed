@@ -14,7 +14,11 @@ import { isCleanupProtectedByMerge } from './chunkMergeState.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
-const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 3600;
+// 上传会话 TTL。原值 3600s（1 小时）对 1GB+ 大文件偏紧：5 Mbps 上行传 16MB 需
+// 约 26 秒，64 片需 28 分钟；叠加 Telegram 单 chat 的 ~1 msg/s 限速后，1GB 总时长
+// 接近 1.5 小时 —— 会越过 TTL，导致剩余分片全部返回 400/410、整个上传作废。
+// 调整为 6 小时，覆盖慢速上行与「中断后隔段时间续传」的场景。
+const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 6 * 60 * 60;
 const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
 export const TELEGRAM_LARGE_FILE_CONCURRENCY = 4;
@@ -327,13 +331,17 @@ export async function initializeChunkedUpload(context) {
         // so channel selection and provider setup use the same snapshot.
         await ensureUploadConfig(context);
 
-        // A Telegram file_id belongs to the bot that uploaded it. Pin an automatic
-        // channel choice to the upload session so every chunk of one file uses the
-        // same bot, while different uploadIds can still be load-balanced.
-        if (uploadChannel === 'telegram' && !channelName) {
-            const selectedTelegramChannel = selectTelegramChunkChannel(context, uploadId, 0);
-            channelName = selectedTelegramChannel?.name || '';
-        }
+        // 历史行为：把自动选中的 Telegram bot pin 到上传会话，保证同一文件的所有分片
+        // 使用同一个 bot（file_id 是 bot-scoped）。
+        //
+        // 现在不再 pin：分片改为按 chunkIndex 轮询分散到 bot 池（见
+        // selectTelegramChunkChannel），以绕开 Telegram 对单个 chat 的 ~1 msg/s 限速。
+        // 每片在 uploadResult 中记录自己所用 bot 的 token，读取端
+        // （functions/file/[[path]].js 的 handleTelegramChunkedFile）与合并端
+        // （functions/upload/chunkMerge.js 的 mergeTelegramChunksInfo）均逐片取回。
+        //
+        // 用户显式指定 channelName 时仍然生效（经 context.specifiedChannelName），
+        // 那种情况下不做分散 —— 尊重显式选择。
 
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
             return createUploadJsonResponse(uploadError(
@@ -368,7 +376,12 @@ export async function initializeChunkedUpload(context) {
         }
 
         const isChatUpload = isChatRequestFromUrl(url);
-        const sessionTtlMs = isChatUpload ? CHAT_UPLOAD_SESSION_TTL_MS : 3600000;
+        // 与 KV 记录的 expirationTtl 保持一致：否则会出现「记录还在（6h）但
+        // expiresAt 已过（1h）」的错配，请求在 handleChunkUpload 的 expiresAt
+        // 检查处返回 410，大文件上传照样中断。
+        const sessionTtlMs = isChatUpload
+            ? CHAT_UPLOAD_SESSION_TTL_MS
+            : DEFAULT_UPLOAD_SESSION_TTL_SECONDS * 1000;
         const sessionTtlSeconds = getChunkRecordTtlSeconds(url);
 
         // 存储上传会话信息
@@ -578,6 +591,20 @@ export async function handleChunkUpload(context) {
         );
 
         if (!uploadOutcome.success) {
+            // 数据未落盘时不能返回 success:true —— merge 阶段的 retryFailedChunks
+            // 只重试 hasData 的分片，这些分片会被跳过，最终以 CHUNKS_FAILED 收场，
+            // 而前端一直以为全部成功。如实返回失败让前端重传该分片
+            // （前端对分片请求本就有重试），这是唯一能真正恢复的路径。
+            if (!uploadOutcome.dataPersisted) {
+                return createUploadJsonResponse({
+                    success: false,
+                    message: `Chunk ${chunkIndex + 1}/${totalChunks} upload failed and could not be persisted for retry`,
+                    uploadId,
+                    chunkIndex,
+                    error: uploadOutcome.error || 'Unknown upload error'
+                }, 500);
+            }
+
             return createUploadJsonResponse({
                 success: true,
                 message: `Chunk ${chunkIndex + 1}/${totalChunks} received; storage upload will be retried during merge`,
@@ -698,6 +725,10 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
         // 失败时优先用内存中的 chunkData 和已知 metadata 写回，
         // 不再读 KV：KV 最终一致性下刚写入的记录可能读不到，
         // 会导致无法更新为 timeout/failed，chunk 卡在 'uploading' → merge 报错。
+        // dataPersisted 表示「原始分片数据是否已落到存储」，它决定 merge 阶段能否补偿：
+        // retryFailedChunks 只重试 hasData 的分片。若为 false，服务端已无数据可重放，
+        // 只能让客户端重传（见 handleChunkUpload 的失败分支）。
+        let dataPersisted = false;
         try {
             const isTimeout = error.message === 'Upload timeout';
             const baseMetadata = initialChunkMetadata || {};
@@ -716,15 +747,17 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
                 metadata: errorMetadata,
                 expirationTtl: getChunkRecordTtlSeconds(context)
             });
+            dataPersisted = Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0);
             await updateUploadManifestChunk(env, uploadId, chunkIndex, {
                 ...errorMetadata,
-                hasData: Boolean(fallbackChunkValue && fallbackChunkValue.byteLength > 0)
+                hasData: dataPersisted
             }, context);
         } catch (metaError) {
             console.error('Failed to save timeout/error metadata:', metaError);
+            dataPersisted = false;
         }
 
-        return { success: false, error: error.message };
+        return { success: false, error: error.message, dataPersisted };
     }
 }
 
@@ -1165,9 +1198,19 @@ export function selectTelegramChunkChannel(context, uploadId, chunkIndex, fallba
         return fallbackChannel || tgChannels[0];
     }
 
-    // Do not include chunkIndex: all chunks in one upload must stay on one bot.
-    // uploadId still spreads separate files across the configured bot pool.
-    return selectConsistentChannel(tgChannels, String(uploadId || ''), true);
+    // 分片按序号轮询分散到 bot 池。
+    //
+    // 为什么要分散：Telegram 对同一 chat 的消息速率约 1 条/秒。若同一文件的所有
+    // 分片固定使用一个 bot（历史行为），并发上传必然触发 429 —— 并发在此不产生
+    // 任何吞吐收益，只制造限流与重试。分散后每个 bot 独立限速，总吞吐随 bot 数提升。
+    //
+    // 为什么可以分散：file_id 是 bot-scoped，因此每片必须记录自己所用 bot 的 token。
+    // 读取端（functions/file/[[path]].js 的 handleTelegramChunkedFile）与合并端
+    // （functions/upload/chunkMerge.js）均已按 chunk.tgBotToken 逐片取回，链路完整。
+    //
+    // 轮询而非哈希：chunkIndex 连续且已知，取模分布最均匀；哈希在分片数较少时可能倾斜。
+    const index = Number.isInteger(chunkIndex) && chunkIndex >= 0 ? chunkIndex : 0;
+    return tgChannels[index % tgChannels.length];
 }
 
 async function uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType) {
@@ -1371,9 +1414,31 @@ export async function retryFailedChunks(context, failedChunks, uploadChannel, op
         chunk.status !== 'completed'
     );
 
+    // 数据未持久化、又未完成的分片：既无法重放，也不在重试范围内。
+    // 必须显式区分出来 —— 否则它们会被「无需重试」的日志掩盖，让调用方以为
+    // 一切正常，直到最终完整性校验才以 CHUNKS_INCOMPLETE 这类笼统错误暴露。
+    // 这类分片唯一的补救手段是客户端重传（服务端已无原始数据）。
+    const unrecoverableChunks = failedChunks.filter(chunk =>
+        !chunk.hasData &&
+        chunk.status !== 'uploading' &&
+        chunk.status !== 'completed'
+    );
+
+    if (unrecoverableChunks.length > 0) {
+        console.error(
+            `[retryFailedChunks] ${unrecoverableChunks.length} chunk(s) have no persisted data and cannot be retried: `
+            + unrecoverableChunks.map(c => `#${c.index}(${c.status})`).join(', ')
+            + ' — the server has no payload to replay; the client must re-upload these chunks.'
+        );
+    }
+
     if (chunksToRetry.length === 0) {
-        console.log('No chunks need retry (all are either uploading, completed, or have no data)');
-        return { success: true, results: [] };
+        console.log(`No retryable chunks (retryable=0, unrecoverable=${unrecoverableChunks.length})`);
+        return {
+            success: true,
+            results: [],
+            unrecoverable: unrecoverableChunks.map(c => c.index),
+        };
     }
 
     // 分批处理以控制并发
@@ -1962,7 +2027,10 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const db = getDatabase(env);
 
     const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB (TG Bot getFile 下载限制 20MB，预留 4MB 余量)
-    // 同一文件固定使用一个 bot；限制单 bot 并发，避免放大 429。
+    // 分片按 chunkIndex 轮询分散到 bot 池（见 selectTelegramChunkChannel），
+    // 每个 bot 独立受 Telegram 的 ~1 msg/s 限速约束。workerCount 取
+    // TELEGRAM_LARGE_FILE_CONCURRENCY；并发数不应超过可用 bot 数，
+    // 否则请求会在同一 bot 上堆积并触发 429。
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 

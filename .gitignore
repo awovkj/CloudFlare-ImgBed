@@ -14,6 +14,7 @@ test/*
 !test/admin-session-auth.test.js
 !test/worker-route-generation.test.js
 !test/route-registration.test.js
+!test/tg-chunk-distribution.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/
