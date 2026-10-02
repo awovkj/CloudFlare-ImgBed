@@ -13,6 +13,10 @@ import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from 
 import { isCleanupProtectedByMerge } from './chunkMergeState.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
+// Telegram 分片的兜底超时。取值远大于单次 retry_after（Telegram 的 429 退避可达
+// 数十秒），确保正常重试不会被误切；仅用于兜住「上游挂起 / retry_after 异常长」
+// 导致的无限等待。
+const TELEGRAM_CHUNK_UPLOAD_TIMEOUT_MS = 180000;
 const CHUNK_STATUS_TIMEOUT_GRACE_MS = 20000;
 // 上传会话 TTL。原值 3600s（1 小时）对 1GB+ 大文件偏紧：5 Mbps 上行传 16MB 需
 // 约 26 秒，64 片需 28 分钟；叠加 Telegram 单 chat 的 ~1 msg/s 限速后，1GB 总时长
@@ -699,7 +703,24 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
             // Telegram sendDocument has no idempotency key. If a local timeout
             // wins this race, Telegram may still accept the file while we lose
             // its file_id and later upload a duplicate. Wait for it to settle.
-            uploadResult = await uploadPromise;
+            //
+            // 但「无限等待」本身是更糟的失败模式：当上游连接挂起、或 429 的
+            // retry_after 异常长时，请求会一直挂着直到被 Cloudflare 切断，客户端
+            // 只看到 net::ERR_CONNECTION_CLOSED，服务端没有任何可诊断信息。
+            // 因此用远大于正常重试窗口的上限兜底：宁可让这一片走「失败 → 重传」，
+            // 也不要让整个请求无声挂死。
+            const tgTimeoutPromise = new Promise((_, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error('Telegram upload timeout')),
+                    TELEGRAM_CHUNK_UPLOAD_TIMEOUT_MS,
+                );
+            });
+
+            try {
+                uploadResult = await Promise.race([uploadPromise, tgTimeoutPromise]);
+            } finally {
+                cleanupTimer();
+            }
         } else {
             const timeoutPromise = new Promise((_, reject) => {
                 timer = setTimeout(() => reject(new Error('Upload timeout')), CHUNK_UPLOAD_TIMEOUT_MS);
@@ -730,7 +751,10 @@ async function uploadChunkToStorageWithTimeout(context, chunkIndex, totalChunks,
         // 只能让客户端重传（见 handleChunkUpload 的失败分支）。
         let dataPersisted = false;
         try {
-            const isTimeout = error.message === 'Upload timeout';
+            // 两种超时都要识别：通用分支抛 'Upload timeout'，
+            // Telegram 分支抛 'Telegram upload timeout'。漏掉后者会让超时分片
+            // 被标记为普通 'failed'，丢失 isTimeout 语义（影响排查与后续判定）。
+            const isTimeout = /timeout/i.test(String(error.message || ''));
             const baseMetadata = initialChunkMetadata || {};
             const errorMetadata = {
                 ...baseMetadata,

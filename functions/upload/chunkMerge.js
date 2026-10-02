@@ -918,6 +918,23 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
             throw new Error(`Invalid Telegram upload result for chunk ${invalidChunk.index}`);
         }
 
+        // 分片现在会按 chunkIndex 分散到多个 bot（见 selectTelegramChunkChannel），
+        // 因此每片必须携带自己所用 bot 的 token —— file_id 是 bot-scoped 的，
+        // 用错 token 会在读取阶段 401/404。
+        //
+        // 单 bot 时代下面第 946 行的 fallback（`|| topLevelBotToken`）无害，因为
+        // 所有分片本来就是同一个 bot；分散之后 fallback 会静默指向错误的 bot，
+        // 产出一个「合并成功、却读不回来」的文件 —— 比直接报错更难排查。
+        // 这里显式告警，便于定位异常数据。
+        const chunksMissingToken = sortedChunks.filter(chunk => !chunk.uploadResult?.tgBotToken);
+        if (chunksMissingToken.length > 0) {
+            console.warn(
+                `[mergeTelegramChunksInfo] ${chunksMissingToken.length}/${sortedChunks.length} chunk(s) lack tgBotToken `
+                + `(indices: ${chunksMissingToken.map(c => c.index).join(', ')}); falling back to the first chunk's bot. `
+                + 'If this upload spanned multiple bots, those chunks may be unreadable.',
+            );
+        }
+
         // 计算总大小
         const totalSize = sortedChunks.reduce((sum, chunk) => sum + Number(chunk.uploadResult.size), 0);
 
