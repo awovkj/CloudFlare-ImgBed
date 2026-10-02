@@ -47,16 +47,18 @@ let changedFiles = 0;
     // 于是前端并发 N 就是真的 N 个 Worker 并发打 Telegram，而 Telegram 对同一
     // chat 的限速约 1 条/秒。并发 4 必然触发 429，等待 retry_after 期间连接被
     // 关闭（ERR_CONNECTION_CLOSED），表现为「每个分片都失败一次、重试才成功」。
+    // 先把 bundle 归一化回「未打补丁」形态，兼容已打过旧版补丁（?4）的 bundle；
+    // 再统一降级到 ?2。顺序很重要 —— 否则 replaceExactlyOnce 在已打补丁的
+    // bundle 上会因找不到原始片段而抛错。
+    const normalized = bundle.replace(
+        'const f="telegram"===o?4:"discord"===o?3:6,',
+        'const f=("discord"===o||"telegram"===o)?3:6,',
+    );
     let patchedBundle = replaceExactlyOnce(
-        bundle,
+        normalized,
         'const f=("discord"===o||"telegram"===o)?3:6,',
         'const f="telegram"===o?2:"discord"===o?3:6,',
         'Telegram chunk concurrency'
-    );
-    // 兼容已经打过旧版补丁（并发 4）的 bundle，使其可被下调
-    patchedBundle = patchedBundle.replace(
-        'const f="telegram"===o?4:"discord"===o?3:6,',
-        'const f="telegram"===o?2:"discord"===o?3:6,',
     );
     patchedBundle = replaceExactlyOnce(
         patchedBundle,
