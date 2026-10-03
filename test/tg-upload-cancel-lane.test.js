@@ -63,3 +63,25 @@ describe('Telegram upload lane cancellation ownership', () => {
     );
   });
 });
+
+describe('Chunk requests carry uploadId so they route to the Durable Object', () => {
+  it('appends uploadId to the chunk request URL', () => {
+    const chunked = bundleSection('async uploadFileInChunks(', 'handleRemove(');
+
+    // src/uploadRequestRouting.js 的 shouldRouteUploadToDurableObject() 只认 URL
+    // 或 X-Upload-Id 上的 uploadId（extractUploadId 对非 merge 请求不解析 body）。
+    // 不带 uploadId 时分片会回退到 Worker：吃 Free 计划的 10ms CPU 预算，
+    // 且同一 uploadId 落不到同一个 DO 实例，runSerial 串行队列不生效。
+    assert.match(
+      chunked,
+      /&chunked=true&uploadId="\+encodeURIComponent\(h\),method:"post",data:f,/
+    );
+    assert.doesNotMatch(chunked, /&chunked=true",method:"post",data:f,/);
+  });
+
+  it('leaves the merge URL unchanged (merge 靠 body 解析路由)', () => {
+    const chunked = bundleSection('async uploadFileInChunks(', 'handleRemove(');
+
+    assert.match(chunked, /&chunked=true&merge=true/);
+  });
+});

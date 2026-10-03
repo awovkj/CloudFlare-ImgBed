@@ -50,6 +50,11 @@ let changedFiles = 0;
     // 先把 bundle 归一化回「未打补丁」形态，兼容已打过旧版补丁（?4）的 bundle；
     // 再统一降级到 ?2。顺序很重要 —— 否则 replaceExactlyOnce 在已打补丁的
     // bundle 上会因找不到原始片段而抛错。
+    //
+    // 后续修正：分片请求现在会带上 uploadId 并路由到 DO（见下方 Chunk DO
+    // routing），runSerial 串行队列开始真正生效，同一 uploadId 的分片不再
+    // 并发打 Telegram。并发 2 予以保留 —— 代价只是多一个请求在 DO 队列里排队，
+    // 而 DO 侧本来就是串行的。
     const normalized = bundle.replace(
         'const f="telegram"===o?4:"discord"===o?3:6,',
         'const f=("discord"===o||"telegram"===o)?3:6,',
@@ -65,6 +70,25 @@ let changedFiles = 0;
         'let b=0;const v=5;while(b<v)',
         'let b=0;const v="telegram"===o?3:5;while(b<v)',
         'Telegram request retry count'
+    );
+
+    // 分片请求带上 uploadId，让它落到 Durable Object 上。
+    //
+    // 为什么：分片 URL 原本没有 uploadId（也不带 X-Upload-Id），uploadId 只塞在
+    // FormData 里；而 extractUploadId() 只对 merge 请求解析 body，其余直接取
+    // URL/header，于是 shouldRouteUploadToDurableObject() 对「chunked=true 且无
+    // uploadId」返回 false —— 分片全部落在 Worker 上，吃 Worker 的 CPU 预算
+    // （Free 计划仅 10ms），DO 的 runSerial 串行队列也从未生效。
+    //
+    // URL 带上 uploadId 后，extractRouteUploadId() 无需解析大 body 即可完成路由，
+    // 同一 uploadId 的分片全部进同一个 DO 实例，由 runSerial 串行执行。
+    // 路由时 URL 里的 uploadId 会与 FormData 里的做一致性校验
+    // （handleChunkUpload 内的 assertRouteUploadIdMatches），两者同取自 h。
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        '"&uploadFolder="+this.uploadFolder+"&chunked=true",method:"post",data:f,',
+        '"&uploadFolder="+this.uploadFolder+"&chunked=true&uploadId="+encodeURIComponent(h),method:"post",data:f,',
+        'Chunk DO routing'
     );
 
     // Removing an active Telegram file used to release its lane before the

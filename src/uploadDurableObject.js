@@ -1,6 +1,9 @@
 // ── Upload Durable Object ───────────────────────────────────────────────────
-// Durable Object 没有实际的 CPU 时间限制（每次 I/O 重置计时器），
-// 非常适合上传这类包含多次顺序异步操作的长任务。
+// DO 的 CPU 预算是 30s/次调用（Paid 可用 limits.cpu_ms 提到 5min），且 CPU 只统计
+// 活跃执行时间——等待 Telegram/KV/网络等 I/O 不计入，所以适合承载上传这类
+// "大量时间在等上游"的长任务。
+// 注意：DO 并不豁免 Worker 的隔离内存（128MB）与子请求上限（按计划 Free 50 /
+// Paid 10000），"DO 没有 CPU/子请求限制"是常见误解。
 // Worker 仅作为薄代理，将 /upload 请求转发到此 DO 处理。
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';

@@ -85,8 +85,11 @@ export async function extractUploadId(request) {
  * binary chunk. Route those directly through the Worker so routing never
  * clones or parses the potentially large body.
  *
- * 合并请求（chunked=true&merge=true）走 DO：DO 没有子请求/CPU 时间限制，
- * 可以安全地批量读取分块状态并执行长时间合并，避免 Worker 子请求超限导致的 503。
+ * 合并请求（chunked=true&merge=true）走 DO：DO 的 CPU 预算是 30s/次调用
+ * （Worker Free 只有 10ms），且 I/O 等待不计入 CPU，可以安全地批量读取分块
+ * 状态并执行长时间合并，避免合并逻辑撞穿 Worker 的 CPU 预算导致 503。
+ * 注意：DO 并不豁免子请求上限（按计划 Free 50 / Paid 10000），
+ * 因此合并的分片数 × 每片子请求数仍需控制在限额内。
  */
 export function shouldRouteUploadToDurableObject(request, uploadId) {
     if (uploadId) {

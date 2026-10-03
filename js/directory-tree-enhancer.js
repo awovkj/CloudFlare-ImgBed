@@ -334,33 +334,33 @@
 
   function openDropdown(anchor, onSelect, currentValue) {
     closeDropdown();
+    // 目录候选项开关关闭：不拦截、不展示
+    if (treeDisabled) return;
 
     var dropdown = createElement('div', 'cfbed-dd');
     var list = createElement('div', 'cfbed-dd-list');
-
-    // Root option
-    list.appendChild(buildRootItem(onSelect));
-
-    // Loading state
-    var loading = createElement('div', 'cfbed-dd-msg', '加载中...');
-    list.appendChild(loading);
-
     dropdown.appendChild(list);
 
-    // Position below anchor, match its width
-    var rect = anchor.getBoundingClientRect();
-    var ddWidth = Math.max(rect.width, 160);
-    dropdown.style.position = 'fixed';
-    dropdown.style.top = (rect.bottom + 6) + 'px';
-    dropdown.style.right = (window.innerWidth - rect.right) + 'px';
-    dropdown.style.width = ddWidth + 'px';
-
-    document.body.appendChild(dropdown);
     var dropdownState = { el: dropdown };
+    var attached = false;
     activeDropdown = dropdownState;
 
     function isCurrentDropdown() {
       return activeDropdown === dropdownState;
+    }
+
+    // 先解析目录树再挂载：功能关闭时不会出现"加载中"占位或任何提示闪烁
+    function attach() {
+      if (attached || !isCurrentDropdown()) return;
+      attached = true;
+      // Position below anchor, match its width
+      var rect = anchor.getBoundingClientRect();
+      var ddWidth = Math.max(rect.width, 160);
+      dropdown.style.position = 'fixed';
+      dropdown.style.top = (rect.bottom + 6) + 'px';
+      dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+      dropdown.style.width = ddWidth + 'px';
+      document.body.appendChild(dropdown);
     }
 
     function renderNodes(nodes) {
@@ -378,10 +378,15 @@
       });
     }
 
-    fetchTree().then(renderNodes).catch(function (err) {
+    fetchTree().then(function (nodes) {
+      if (!isCurrentDropdown()) return;
+      attach();
+      renderNodes(nodes);
+    }).catch(function (err) {
       if (!isCurrentDropdown()) return;
       if (isPasswordRequiredError(err)) {
         // 需要目录密码：根目录仍可直接选择，密码 UI 折叠为锁图标挂在目录列表旁
+        attach();
         list.innerHTML = '';
         list.appendChild(buildRootItem(onSelect));
         var unlockSlot = createElement('div', 'cfbed-dd-unlock-slot');
@@ -390,11 +395,12 @@
         return;
       }
       if (isDirectoryDisabledError(err)) {
-        // 目录候选项开关关闭：隐藏已有目录，提示直接输入
-        list.innerHTML = '';
-        list.appendChild(createElement('div', 'cfbed-dd-msg', '目录选择已禁用，请直接输入路径'));
+        // 目录候选项开关关闭：不显示任何提示，直接撤掉入口（下拉框从未挂载）
+        closeDropdown();
+        removeAllTriggers();
         return;
       }
+      attach();
       list.innerHTML = '';
       list.appendChild(createElement('div', 'cfbed-dd-msg', '加载失败'));
     });
@@ -527,11 +533,17 @@
     dialog.appendChild(content);
     dialog.appendChild(footer);
     overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
+    var overlayState = { el: overlay };
+    activeDropdown = overlayState;
 
-    activeDropdown = { el: overlay };
-
-    content.appendChild(createElement('div', 'cfbed-dd-msg', '加载中...'));
+    var attached = false;
+    // 先解析目录树再挂载：功能关闭时不会出现"加载中"占位或任何提示闪烁
+    function attach() {
+      if (attached || activeDropdown !== overlayState) return;
+      attached = true;
+      document.body.appendChild(overlay);
+      setTimeout(function () { manualInput.focus(); manualInput.select(); }, 50);
+    }
 
     closeButton.addEventListener('click', closePicker);
     cancelButton.addEventListener('click', closePicker);
@@ -548,28 +560,49 @@
     });
 
     fetchTree().then(function (nodes) {
+      if (activeDropdown !== overlayState) return;
+      attach();
       renderTree(nodes);
     }).catch(function (err) {
-      content.innerHTML = '';
+      if (activeDropdown !== overlayState) return;
       if (isPasswordRequiredError(err)) {
         // 需要目录密码：内容区默认仅显示锁图标，点击展开输入；顶部手动输入框不受影响
+        attach();
         renderPasswordUnlock(content, { onUnlocked: renderTree });
         return;
       }
       if (isDirectoryDisabledError(err)) {
-        // 目录候选项开关关闭：隐藏已有目录，提示直接输入
-        content.appendChild(createElement('div', 'cfbed-tree-empty', '目录选择已禁用，请直接输入路径'));
+        // 目录候选项开关关闭：不显示任何提示，直接关闭并撤掉入口（弹层从未挂载）
+        closePicker();
+        removeAllTriggers();
         return;
       }
+      attach();
       content.appendChild(createElement('div', 'cfbed-dd-msg', '目录列表加载失败，请直接输入'));
     });
-
-    setTimeout(function () { manualInput.focus(); manualInput.select(); }, 50);
   }
 
   // ── Enhance non-homepage inputs (settings, move dialogs) ──
 
+  // 目录候选项开关关闭后调用：撤掉已注入的入口（按钮/说明），
+  // 不显示任何提示，交回原生输入框让用户直接输入路径。
+  function removeAllTriggers() {
+    document.querySelectorAll('.cfbed-tree-inline-trigger').forEach(function (el) {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    document.querySelectorAll('.cfbed-tree-inline-button').forEach(function (el) {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    document.querySelectorAll('.cfbed-tree-input-merged').forEach(function (el) {
+      el.classList.remove('cfbed-tree-input-merged');
+    });
+    document.querySelectorAll('input[data-cfbed-tree-enhancer]').forEach(function (input) {
+      delete input.dataset[STYLE_HOOK];
+    });
+  }
+
   function insertTrigger(input, options) {
+    if (treeDisabled) return;
     if (!input || input.dataset[STYLE_HOOK]) return;
     var wrapper = input.closest('.el-input') || input.parentElement;
     if (!wrapper || !wrapper.parentElement) return;
@@ -667,6 +700,8 @@
   }
 
   function enhancePage(roots) {
+    // 目录候选项开关关闭：不再注入任何目录选择入口
+    if (treeDisabled) return;
     if (!roots || !roots.length) {
       enhanceUploadInputs(document);
       enhanceMovePrompt(document);
@@ -727,6 +762,9 @@
       var folderWrapper = target.closest && target.closest('.upload-folder');
       if (!folderWrapper) return;
       if (!folderWrapper.classList.contains('el-input')) return;
+
+      // 目录候选项开关关闭：不再拦截点击，交回原生输入框直接输入路径
+      if (treeDisabled) return;
 
       // If dropdown already open, don't reopen
       if (activeDropdown && activeDropdown.el && activeDropdown.el.classList.contains('cfbed-dd')) return;

@@ -221,6 +221,56 @@ html, body {
 }
 
 /* ════════════════════════════════════════════════════════════
+   首页右上角悬浮工具条（上传页 .upload-home 内）
+   编译产物把每个按钮写成 position:fixed + 固定 right 偏移、尺寸统一 2.5rem，
+   相邻按钮只留 10px，视觉上贴靠在一起。这里整体收小一档并同步缩小图标字形，
+   间距随之拉开，避免相互遮挡。
+
+   只在桌面断点生效：≤768px 编译产物已经自带 2rem 的紧凑版，
+   且移动端按钮的 right 偏移更密（30/70/110），不能再放大。
+
+   特异性：编译产物是 .x[data-v-…]（0,2,0），本文件用
+   html body .upload-home .x.x（0,2,2）稳定取胜；
+   #themeToggle 是 id（1,1,0），用 html body .upload-home #themeToggle#themeToggle（2,1,2）取胜。
+   ════════════════════════════════════════════════════════════ */
+
+@media (min-width: 769px) {
+  html body .upload-home .info-container.info-container,
+  html body .upload-home .upload-method-button.upload-method-button,
+  html body .upload-home .history-button.history-button,
+  html body .upload-home .announcement-button.announcement-button,
+  html body .upload-home #themeToggle#themeToggle {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 10px;
+  }
+
+  /* 主题切换：组件内 svg 写死 1.5em（16px → 24px），单独收一档 */
+  html body .upload-home #themeToggle#themeToggle svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Font Awesome 图标默认 size="lg"（1.25em ≈ 17.5px），收小到 1.05em */
+  html body .upload-home .info-container.info-container svg,
+  html body .upload-home .upload-method-button.upload-method-button svg,
+  html body .upload-home .history-button.history-button svg,
+  html body .upload-home .announcement-button.announcement-button svg {
+    font-size: 1.05em;
+  }
+
+  /* 上传目录输入框高度与按钮对齐 */
+  html body .upload-home .upload-folder.upload-folder {
+    height: 2.25rem;
+  }
+
+  html body .upload-home .upload-folder.upload-folder .el-input__wrapper {
+    height: 2.25rem;
+    min-height: 2.25rem;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
    Responsive refinements
    The compiled bundle ships almost no breakpoints; these rules
    adapt Element Plus surfaces (dialogs, drawers, tables,
