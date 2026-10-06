@@ -1,36 +1,29 @@
-const JSON_HEADERS = {
-    'Content-Type': 'application/json'
-};
+function mergeHeaders(defaults, overrides) {
+    const headers = new Headers(defaults);
+    new Headers(overrides).forEach((value, key) => headers.set(key, value));
+    return headers;
+}
 
 export function createJsonResponse(payload, options = {}) {
     return new Response(JSON.stringify(payload), {
         ...options,
-        headers: {
-            ...JSON_HEADERS,
-            ...(options.headers || {})
-        }
+        headers: mergeHeaders({ 'Content-Type': 'application/json' }, options.headers),
     });
 }
 
 export function createTextResponse(body, options = {}) {
-    return new Response(body, {
-        ...options,
-        headers: {
-            ...(options.headers || {})
-        }
-    });
+    return new Response(body, options);
 }
 
 export function createNoStoreTextResponse(body, status, statusText, headers = {}) {
     return createTextResponse(body, {
         status,
         statusText,
-        headers: {
+        headers: mergeHeaders({
             'Content-Type': 'text/plain;charset=UTF-8',
             'Cache-Control': 'no-store',
-            'Content-Length': String(body.length),
-            ...headers
-        }
+            'Content-Length': String(new TextEncoder().encode(body).byteLength),
+        }, headers)
     });
 }
 
@@ -59,9 +52,6 @@ export function createServerErrorResponse(env, error, { pathname = '', headers =
 
     return createJsonResponse(payload, {
         status: 500,
-        headers: {
-            'Cache-Control': 'no-store',
-            ...headers,
-        },
+        headers: mergeHeaders({ 'Cache-Control': 'no-store' }, headers),
     });
 }

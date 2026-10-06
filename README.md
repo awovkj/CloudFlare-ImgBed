@@ -9,7 +9,7 @@
 ## 开发与部署
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
@@ -44,3 +44,13 @@ test/        自动化测试
 ## License
 
 [MIT](LICENSE)
+
+## 维护与验证
+
+要求 Node.js 22 或更高版本。`npm test` 不需要启动本地服务或预先构建静态资源；
+`npm run ci-test` 为其兼容别名。CI 同时在 Linux 和 Windows 上运行检查。
+
+`node scripts/copy-assets.mjs` 会重新生成 `.wrangler-assets/`，不复制隐藏文件、
+本地密钥、source map、预压缩文件和文档截图，并清除已失效的嵌套构建产物。
+请勿在该生成目录中存放手工维护的文件。构建不会复制符号链接，遇到带链接的目标目录会报错。
+更新上游前端构建产物时仍需保留并执行现有前端补丁脚本。

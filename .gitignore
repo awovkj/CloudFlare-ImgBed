@@ -1,20 +1,4 @@
 .wrangler/
-test/*
-!test/upload-metadata-persistence.test.js
-!test/music-page-route.test.js
-!test/music-session-manager.test.js
-!test/music-config-password.test.js
-!test/music-auth-helpers.test.js
-!test/music-auth-api.test.js
-!test/music-access-control.test.js
-!test/music-admin-password-ui.test.js
-!test/tg-upload-lanes.test.js
-!test/tg-upload-cancel-lane.test.js
-!test/file-download-idm.test.js
-!test/admin-session-auth.test.js
-!test/worker-route-generation.test.js
-!test/route-registration.test.js
-!test/tg-chunk-distribution.test.js
 docs/*
 .wrangler-worker-build/
 .wrangler-assets/
@@ -40,3 +24,10 @@ node_modules
 
 # 未被引用的历史截图
 screenshot-home.png
+
+# Local credentials must not be committed
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*

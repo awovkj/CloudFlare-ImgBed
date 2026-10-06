@@ -9,7 +9,7 @@ An open-source file hosting service for Cloudflare Workers. It supports Telegram
 ## Development And Deployment
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
@@ -44,3 +44,14 @@ The frontend source is maintained in [MarSeventh/Sanyue-ImgHub](https://github.c
 ## License
 
 [MIT](LICENSE)
+
+## Maintenance checks
+
+Requires Node.js 22 or later. `npm test` runs without a local server or prebuilt assets;
+`npm run ci-test` is an alias. CI checks both Linux and Windows.
+
+`node scripts/copy-assets.mjs` rebuilds `.wrangler-assets/` from scratch, excluding
+hidden files, local secrets, source maps, precompressed files and documentation assets.
+Do not put manually maintained files in that generated directory. Symbolic links are
+not copied, and linked destinations are rejected. Frontend bundle patches remain
+necessary when refreshing the upstream frontend build.

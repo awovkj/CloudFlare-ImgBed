@@ -1,5 +1,5 @@
 # Cloudflare Workers 静态资源排除列表
-# assets.directory = "." 时生效，排除以下文件/目录不上传为静态资源
+# Used recursively by scripts/copy-assets.mjs before Wrangler uploads .wrangler-assets/
 # 文档：https://developers.cloudflare.com/workers/static-assets/configuration/#assetsignore
 
 # Worker 源码
@@ -24,11 +24,7 @@ package.json
 package-lock.json
 .assetsignore
 .gitignore
-.dockerignore
 
-# Docker
-Dockerfile
-docker-compose.yml
 
 # 文档
 README.md

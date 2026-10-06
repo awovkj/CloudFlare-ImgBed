@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { addCommonAssetIgnores, loadAssetIgnore, shouldIgnoreAsset } from '../scripts/asset-ignore.mjs';
 
 describe('music page route regression', () => {
   it('fetches music.html from the asset binding with an explicit GET request', () => {
@@ -12,7 +13,7 @@ describe('music page route regression', () => {
 
   it('includes music.html in the deployable assets', () => {
     assert.equal(fs.existsSync('music.html'), true);
-    assert.equal(fs.existsSync('.wrangler-assets/music.html'), true);
+    assert.equal(shouldIgnoreAsset('music.html', addCommonAssetIgnores(loadAssetIgnore('.'))), false);
   });
 
   it('uses cookie sessions instead of exposing an authCode in the URL', () => {
