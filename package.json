@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "ci-test": "npm test",
-    "test": "npm run verify:worker-routes && mocha",
+    "test": "npm run verify:worker-routes && npm run typecheck && mocha",
+    "typecheck": "tsc -p tsconfig.audit.json",
     "start": "npm run worker:dev",
     "patch:admin-session": "node scripts/patch-admin-session.mjs",
     "patch:music-admin-password": "node scripts/patch-music-admin-password.mjs",
@@ -19,16 +20,17 @@
     "worker:secret": "wrangler secret put"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.726.1"
+    "@aws-sdk/client-s3": "^3.1159.0"
   },
   "overrides": {
     "fast-xml-parser": "^5.3.6"
   },
   "devDependencies": {
-    "mocha": "^10.6.0",
-    "wrangler": "^4.45.0"
+    "mocha": "^12.0.3",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.155.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }

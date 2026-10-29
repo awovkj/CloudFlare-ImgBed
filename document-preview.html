@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="referrer" content="no-referrer">
+    <title>Local Document Preview</title>
+    <style>
+        html, body { margin: 0; min-height: 100%; background: #e9ebee; color: #333; }
+        #status { padding: 24px; text-align: center; font: 14px sans-serif; }
+        .docx-wrapper { padding: 16px !important; }
+        .docx-wrapper > section.docx { max-width: 100%; box-sizing: border-box; }
+        @media (max-width: 640px) {
+            .docx-wrapper { padding: 4px !important; }
+            .docx-wrapper > section.docx { padding: 18px !important; }
+        }
+    </style>
+    <script defer src="/js/document-archive-guards.js"></script>
+    <script defer src="/js/vendor/jszip-3.10.1.min.js"></script>
+    <script defer src="/js/vendor/docx-preview-0.3.6.min.js"></script>
+    <script defer src="/js/document-docx-frame.js"></script>
+</head>
+<body><div id="status" role="status">Loading document renderer...</div><div id="styles"></div><div id="document"></div></body>
+</html>

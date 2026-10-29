@@ -7,6 +7,10 @@
 // Worker 仅作为薄代理，将 /upload 请求转发到此 DO 处理。
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
+import { buildPreflightResponse } from '../functions/utils/cors.js';
+import { createServerErrorResponse } from '../functions/utils/response.js';
+import { createRequestBodyTooLargeResponse, isRequestBodyTooLargeError } from '../functions/utils/requestLimits.js';
+import { enforceRequestBodyLimit } from './requestBodyPolicy.js';
 import {
     buildUploadDurableObjectRouteData,
     createSerialExecutor,
@@ -26,7 +30,19 @@ function createMergeInProgressResponse() {
         retryAfterMs: 1000
     }), {
         status: 409,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+    });
+}
+
+function createCleanupInProgressResponse() {
+    return new Response(JSON.stringify({
+        success: false,
+        code: 'CLEANUP_IN_PROGRESS',
+        message: 'Upload cleanup is in progress',
+        retryAfterMs: 1000,
+    }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
     });
 }
 
@@ -38,16 +54,29 @@ export class UploadDurableObject {
         this.runSerial = createSerialExecutor();
         // 合并是长任务（15~60s+），不能走 runSerial，否则会阻塞同一 uploadId 的
         // 轮询与清理请求。用内存锁确保同一 DO 实例内同一时刻只有一个合并在执行；
-        // 跨 DO 实例（如驱逐重建）的并发安全由 handleChunkMerge 内的 claimMergeLease
-        // （KV CAS）保证。
+        // KV lease/revision checks are best effort, not an atomic compare-and-swap.
+        // Keep merge requests on the same DO; Worker-only fallback needs a transactional coordinator.
         this.activeMergePromise = null;
+        this.activeCleanupPromise = null;
     }
 
     fetch(request) {
+        const methodRejection = getUploadRequestMethodRejection(request);
+        if (methodRejection) return Promise.resolve(methodRejection);
+        if (request.method === 'OPTIONS') {
+            return Promise.resolve(buildPreflightResponse({ methods: 'GET, POST, OPTIONS', request, env: this.env }));
+        }
         // 合并请求绕过 runSerial：合并是长任务，若走串行队列会阻塞轮询（65s 超时 →
         // 前端重试 → 请求堆积 → 合并"看起来卡住"）和清理请求。轮询请求在合并期间
         // 通过 activeMergePromise 立即返回 409，不触碰 KV。
         const url = new URL(request.url);
+        // KV may still show an old lease while this instance is actively merging.
+        if (url.searchParams.get('cleanup') === 'true' && this.activeMergePromise) {
+            return Promise.resolve(createMergeInProgressResponse());
+        }
+        if (url.searchParams.get('cleanup') === 'true') {
+            return this.runSerial(() => this._handleCleanupRequest(request));
+        }
         if (url.searchParams.get('merge') === 'true') {
             return this._handleMergeRequest(request);
         }
@@ -62,9 +91,12 @@ export class UploadDurableObject {
      *   不进入 handleChunkMerge，不读 KV。
      * - 否则将请求交给 _handleRequest（会调用 handleChunkMerge），并用
      *   activeMergePromise 记录正在执行的合并 Promise，合并结束后自动清除。
-     * - claimMergeLease（KV CAS）作为跨实例的最终并发安全兜底。
+     * - KV leases support recovery, but cannot guarantee cross-instance atomic ownership.
      */
     async _handleMergeRequest(request) {
+        if (this.activeCleanupPromise) {
+            return createCleanupInProgressResponse();
+        }
         if (this.activeMergePromise) {
             return createMergeInProgressResponse();
         }
@@ -77,6 +109,17 @@ export class UploadDurableObject {
         return promise;
     }
 
+    async _handleCleanupRequest(request) {
+        // A merge can start while cleanup waits behind a chunk in the serial queue.
+        if (this.activeMergePromise) return createMergeInProgressResponse();
+        if (this.activeCleanupPromise) return createCleanupInProgressResponse();
+        const promise = this._handleRequest(request).finally(() => {
+            if (this.activeCleanupPromise === promise) this.activeCleanupPromise = null;
+        });
+        this.activeCleanupPromise = promise;
+        return promise;
+    }
+
     async _handleRequest(request) {
         // cleanup 兼容 GET；上传与预检分别使用 POST、OPTIONS。
         const methodRejection = getUploadRequestMethodRejection(request);
@@ -85,23 +128,18 @@ export class UploadDurableObject {
         }
 
         try {
+            if (request.method === 'OPTIONS') {
+                return buildPreflightResponse({ methods: 'GET, POST, OPTIONS', request, env: this.env });
+            }
+            request = enforceRequestBodyLimit(request, this.env);
             const context = this._buildContext(request);
             return await onUploadRequest(context);
         } catch (error) {
             if (isRouteUploadIdMismatchError(error)) {
                 return createRouteUploadIdMismatchResponse(error);
             }
-            console.error('[UploadDO] Unhandled error:', error);
-            return new Response(JSON.stringify({
-                error: 'Upload Durable Object internal error',
-                message: error.message
-            }), {
-                status: 500,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                }
-            });
+            if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+            return createServerErrorResponse(this.env, error, { pathname: new URL(request.url).pathname });
         }
     }
 

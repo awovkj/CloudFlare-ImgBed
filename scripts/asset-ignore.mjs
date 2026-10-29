@@ -6,7 +6,8 @@ import path from 'path';
 const COMMON_ASSET_IGNORES = [
     'node_modules', 'src', 'functions', 'data', 'database', 'deploy',
     'scripts', 'docs', 'test', 'wrangler.log', 'wrangler.toml',
-    'package.json', 'package-lock.json', '*.map', '*.gz',
+    'package.json', 'package-lock.json', 'dist', 'build', 'coverage', 'frontend-dist',
+    '*.map', '*.gz', '*.log', '*.tsbuildinfo', '*.md', '*.pem', '*.key', '*.p12', '*.pfx', 'credentials.json', 'tsconfig*.json',
 ];
 
 export function loadAssetIgnore(root) {

@@ -1,6 +1,6 @@
 import { batchRemoveFilesFromIndex } from '../../../utils/indexManager.js';
 import { mapConcurrent, normalizeBatchFileIds } from '../../../utils/deleteBatch.js';
-import { deleteFile } from './[[path]].js';
+import { deleteStoredFile } from '../../../utils/deleteFile.js';
 
 const MAX_BATCH_SIZE = 500;
 const DELETE_CONCURRENCY = 10;
@@ -27,10 +27,11 @@ export async function onRequest(context) {
         const results = await mapConcurrent(fileIds, DELETE_CONCURRENCY, async (fileId) => {
             try {
                 const cdnUrl = `${url.origin}/file/${fileId.split('/').map(encodeURIComponent).join('/')}`;
-                const success = await deleteFile(context.env, fileId, cdnUrl, url);
+                const success = await deleteStoredFile(context.env, fileId, cdnUrl, url);
                 return { fileId, success, error: success ? '' : 'Delete file failed' };
             } catch (err) {
-                return { fileId, success: false, error: String(err?.message || err) };
+                console.error('Batch file deletion failed:', err);
+                return { fileId, success: false, error: 'Delete file failed' };
             }
         });
 
@@ -48,6 +49,6 @@ export async function onRequest(context) {
 function jsonResponse(payload, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders },
     });
 }

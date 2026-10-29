@@ -166,13 +166,15 @@ export class DiscordAPI {
      */
     async deleteMessage(channelId, messageId) {
         try {
-            const response = await fetch(`${this.baseURL}/channels/${channelId}/messages/${messageId}`, {
+            const response = await fetch(`${this.baseURL}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}`, {
                 method: 'DELETE',
-                headers: this.defaultHeaders
+                headers: this.defaultHeaders,
+                redirect: 'manual',
             });
 
-            // Discord 删除成功返回 204 No Content
-            if (response.status === 204 || response.ok) {
+            await response.body?.cancel().catch(() => {});
+            // Missing messages allow safe retries after a partially completed deletion.
+            if (response.status === 204 || response.status === 404) {
                 return true;
             }
 

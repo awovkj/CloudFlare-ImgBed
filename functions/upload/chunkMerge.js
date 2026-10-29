@@ -4,10 +4,18 @@ import { retryFailedChunks, getChunkUploadStatusesWithManifest, cleanupChunkData
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { fetchPageConfig } from '../utils/sysConfig.js';
-import { buildUploadResult } from './uploadShared.js';
+import { buildUploadResult, createUploadJsonResponse } from './uploadShared.js';
 import { issueTempLinkReceipt, extractFileIdFromLink } from './tempLinkReceipt.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
+import { resolveContentType } from '../utils/fileTypes.js';
+import { createRequestBodyTooLargeResponse, isRequestBodyTooLargeError } from '../utils/requestLimits.js';
+import { createServerErrorResponse } from '../utils/response.js';
+import { validateChunkInitialization } from './chunkProtocol.js';
+import {
+    createUploadPolicyResponse, normalizeUploadChannel, validateChunkUploadLayout,
+    validateCompletedChunks, validateUploadSessionBinding,
+} from './uploadPolicy.js';
 import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
 import {
     MERGE_HEARTBEAT_INTERVAL_MS,
@@ -31,7 +39,15 @@ const SETTLE_INTERVAL_MS = 500;
 const FINAL_PENDING_GRACE_MS = 5000;
 const MERGE_PENDING_RETRY_AFTER_MS = 1000;
 const MERGE_RETRY_TIMEOUT_MS = 15000;
-const MERGE_RETRY_CONCURRENCY = 3;
+// Retried parts are buffered; leave headroom for Blob/provider copies in a 128 MiB isolate.
+const MERGE_RETRY_CONCURRENCY = 2;
+
+async function createMergeErrorResponse(context, error, uploadId) {
+    const response = createServerErrorResponse(context.env, error, { pathname: context.url?.pathname || '/upload' });
+    return createUploadJsonResponse({
+        ...await response.json(), success: false, code: 'MERGE_FAILED', uploadId,
+    }, 500, response.headers);
+}
 
 function summarizeChunkStatuses(chunkStatuses) {
     return chunkStatuses.reduce((acc, chunk) => {
@@ -263,14 +279,13 @@ export async function handleChunkMerge(context) {
     const { request, env, url, waitUntil } = context;
     const db = getDatabase(env);
 
-    // 解析表单数据
-    const formdata = await request.formData();
-    context.formdata = formdata;
-
     let uploadId, totalChunks, originalFileName, originalFileType, uploadChannel;
     try {
+        const formdata = await request.formData();
+        context.formdata = formdata;
         uploadId = formdata.get('uploadId');
-        totalChunks = parseInt(formdata.get('totalChunks'));
+        const parameters = validateChunkInitialization({ totalChunks: formdata.get('totalChunks') });
+        totalChunks = parameters.totalChunks;
         originalFileName = formdata.get('originalFileName');
         originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
 
@@ -289,7 +304,10 @@ export async function handleChunkMerge(context) {
             return createMergeSuccessResponse(context, successReceipt.mergeResult);
         }
 
-        if (!totalChunks || !originalFileName) {
+        if (!parameters.ok) return createResponse(JSON.stringify({ success: false, code: parameters.code, message: 'Invalid merge parameters' }), {
+            status: 400, headers: { 'Content-Type': 'application/json' },
+        });
+        if (!originalFileName) {
             return createResponse('Error: Missing merge parameters', { status: 400 });
         }
 
@@ -315,17 +333,7 @@ export async function handleChunkMerge(context) {
         }
 
         if (sessionInfo.status === 'merge_failed') {
-            return createResponse(JSON.stringify({
-                success: false,
-                code: 'MERGE_FAILED',
-                message: sessionInfo.mergeError || sessionInfo.mergeBackgroundError || 'Merge failed in background',
-                uploadId,
-                statusSummary: sessionInfo.mergeLastStatusSummary || {},
-                mergeBackgroundAttempt: sessionInfo.mergeBackgroundAttempt || 0
-            }), {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' }
-            });
+            return createMergeErrorResponse(context, new Error(sessionInfo.mergeError || sessionInfo.mergeBackgroundError || 'Merge failed in background'), uploadId);
         }
 
         const mergeState = classifyMergeSession(sessionInfo, now);
@@ -358,10 +366,13 @@ export async function handleChunkMerge(context) {
         }
 
         // 验证会话信息
-        if (sessionInfo.originalFileName !== originalFileName ||
-            sessionInfo.totalChunks !== totalChunks) {
-            return createResponse('Error: Session parameters mismatch', { status: 400 });
-        }
+        const binding = validateUploadSessionBinding(sessionInfo, {
+            originalFileName, originalFileType, totalChunks, uploadChannel: url.searchParams.get('uploadChannel'),
+        });
+        if (!binding.ok) return createUploadPolicyResponse(binding);
+        const policy = validateChunkUploadLayout(sessionInfo, env);
+        if (!policy.ok) return createUploadPolicyResponse(policy);
+        originalFileType = resolveContentType(sessionInfo.originalFileName, sessionInfo.originalFileType);
 
         // 检查会话是否过期
         if (Date.now() > sessionInfo.expiresAt) {
@@ -369,7 +380,7 @@ export async function handleChunkMerge(context) {
         }
 
         // 使用会话中的上传渠道，或者从URL参数获取
-        uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
+        uploadChannel = normalizeUploadChannel(sessionInfo.uploadChannel || 'telegram');
         if (isChatRequestFromUrl(url) && !isChatUploadChannel(uploadChannel)) {
             return createResponse('Error: Chat uploads only support Telegram channels', { status: 400 });
         }
@@ -413,21 +424,13 @@ export async function handleChunkMerge(context) {
         return await startMerge(context, uploadId, totalChunks, originalFileName, originalFileType, uploadChannel, mergeJobId);
 
     } catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         console.error('[handleChunkMerge] error:', error?.stack || error?.message || error);
         const successReceipt = uploadId ? await getMergeSuccessReceipt(env, uploadId).catch(() => null) : null;
         if (successReceipt?.mergeResult) {
             return createMergeSuccessResponse(context, successReceipt.mergeResult);
         }
-        return createResponse(JSON.stringify({
-            success: false,
-            code: 'MERGE_FAILED',
-            message: `Failed to merge chunks - ${error?.message || String(error)}`,
-            uploadId,
-            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        return createMergeErrorResponse(context, error, uploadId);
     }
 }
 
@@ -506,6 +509,14 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
             );
         }
 
+        if (result.status && result.code) {
+            await stopHeartbeat();
+            await updateUploadSessionStatus(context, uploadId, {
+                status: 'merge_failed', mergeError: result.message, mergeFailedAt: Date.now(), mergeLeaseUntil: 0,
+            }, { expectedJobId: mergeJobId, allowedStatuses: ['merging'] });
+            return createUploadPolicyResponse(result);
+        }
+
         throw new Error(result.error || 'Merge failed');
 
     } catch (error) {
@@ -535,16 +546,7 @@ async function startMerge(context, uploadId, totalChunks, originalFileName, orig
         });
 
         console.error('[startMerge] error:', error?.stack || error?.message || error);
-        return createResponse(JSON.stringify({
-            success: false,
-            code: 'MERGE_FAILED',
-            message: `Failed to merge chunks - ${error?.message || String(error)}`,
-            uploadId,
-            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        return createMergeErrorResponse(context, error, uploadId);
     }
 }
 
@@ -605,7 +607,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             terminalFailedChunks = chunkStatuses.filter(isChunkTerminalFailure);
         }
 
-        // 合并运行在 DO 中（无子请求限制），可以一次性重试所有失败分块。
+        // Retry work is concurrency-bounded; DO still has plan-specific subrequest limits.
         // 之前仅重试 2 个/次，12 个分块需要 6 次合并请求（每次间隔 10s grace），总计 60s+。
         // 前端在等待期间持续轮询 409，造成 660 次无意义请求。
         if (failedChunks.length > 0) {
@@ -671,7 +673,11 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             };
         }
 
-        // 根据渠道合并分块信息
+        const sessionInfo = await getUploadSessionInfo(context, uploadId);
+        const policy = validateCompletedChunks(sessionInfo, completedChunks, env);
+        if (!policy.ok) return { ...policy, success: false, error: policy.message };
+
+        // Validate actual stored part sizes before committing a remote multipart upload.
         let result;
         if (uploadChannel === 'cfr2') {
             result = await mergeR2ChunksInfo(context, uploadId, completedChunks, metadata);
@@ -691,8 +697,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         console.error('[handleChannelBasedMerge] error:', error?.stack || error?.message || error);
         return {
             success: false,
-            error: error?.message || String(error),
-            errorStack: error?.stack?.split('\n').slice(0, 5).join(' | ')
+            error: error?.message || String(error)
         };
     }
 }
@@ -757,7 +762,7 @@ async function mergeR2ChunksInfo(context, uploadId, completedChunks, metadata) {
         await multipartUpload.complete(parts);
 
         // 计算总大小
-        const totalSize = completedChunks.reduce((sum, chunk) => sum + chunk.uploadResult.size, 0);
+        const totalSize = completedChunks.reduce((sum, chunk) => sum + Number(chunk.uploadResult.size), 0);
 
         // 使用multipart info中的finalFileId更新metadata
         const finalFileId = multipartInfo.key;
@@ -849,7 +854,7 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
         }));
 
         // 计算总大小
-        const totalSize = completedChunks.reduce((sum, chunk) => sum + chunk.uploadResult.size, 0);
+        const totalSize = completedChunks.reduce((sum, chunk) => sum + Number(chunk.uploadResult.size), 0);
 
         // 使用multipart info中的finalFileId更新metadata
         const finalFileId = multipartInfo.key;
@@ -1034,7 +1039,7 @@ async function mergeDiscordChunksInfo(context, uploadId, completedChunks, metada
         const sortedChunks = completedChunks.sort((a, b) => a.index - b.index);
 
         // 计算总大小
-        const totalSize = sortedChunks.reduce((sum, chunk) => sum + chunk.uploadResult.size, 0);
+        const totalSize = sortedChunks.reduce((sum, chunk) => sum + Number(chunk.uploadResult.size), 0);
 
         // 构建分块信息数组（不存储 url 因为会过期，读取时通过 API 获取）
         const chunks = sortedChunks.map(chunk => ({

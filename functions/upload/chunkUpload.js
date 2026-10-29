@@ -1,7 +1,7 @@
 /* ======= 客户端分块上传处理 ======= */
 import { createResponse, selectConsistentChannel, getUploadIp, getIPAddress, buildUniqueFileId, endUpload } from './uploadTools.js';
 import { buildUploadResults, createUploadJsonResponse } from './uploadShared.js';
-import { uploadError, validateChunkInitialization } from './chunkProtocol.js';
+import { MAX_MULTIPART_CHUNKS, uploadError, validateChunkInitialization, validateChunkRequest } from './chunkProtocol.js';
 import { TelegramAPI } from '../utils/telegramAPI.js';
 import { DiscordAPI } from '../utils/discordAPI.js';
 import { S3Client, CreateMultipartUploadCommand, UploadPartCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
@@ -10,7 +10,14 @@ import { fetchUploadConfig } from '../utils/sysConfig.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
 import { assertRouteUploadIdMatches, createRouteUploadIdMismatchResponse } from '../../src/uploadRequestRouting.js';
-import { isCleanupProtectedByMerge } from './chunkMergeState.js';
+import { getEffectiveMergeLeaseUntil, isCleanupProtectedByMerge } from './chunkMergeState.js';
+import { resolveContentType } from '../utils/fileTypes.js';
+import { createRequestBodyTooLargeResponse, isRequestBodyTooLargeError } from '../utils/requestLimits.js';
+import { createServerErrorResponse } from '../utils/response.js';
+import {
+    createUploadPolicyResponse, normalizeUploadChannel, validateChunkUploadLayout,
+    validateUploadChunk, validateUploadSessionBinding,
+} from './uploadPolicy.js';
 
 const CHUNK_UPLOAD_TIMEOUT_MS = 60000;
 // Telegram 分片的兜底超时。取值远大于单次 retry_after（Telegram 的 429 退避可达
@@ -26,6 +33,8 @@ const DEFAULT_UPLOAD_SESSION_TTL_SECONDS = 6 * 60 * 60;
 const CHAT_UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_UPLOAD_SESSION_TTL_SECONDS = 24 * 60 * 60;
 export const TELEGRAM_LARGE_FILE_CONCURRENCY = 4;
+const CLEANUP_DELETE_CONCURRENCY = 8;
+const CLEANUP_SESSION_STATUSES = new Set(['initialized', 'merging', 'waiting_chunks', 'merge_success', 'merge_failed']);
 
 // Direct callers (and a few background/retry paths) do not always pass the
 // request-level uploadConfig that upload/index.js normally attaches. Resolve it
@@ -154,7 +163,9 @@ async function createInitialMultipart(context, uploadId, originalFileName, origi
         const finalFileId = await buildUniqueFileId(context, originalFileName, originalFileType);
         let remoteUpload = null;
         try {
-            remoteUpload = await r2.createMultipartUpload(finalFileId);
+            remoteUpload = await r2.createMultipartUpload(finalFileId, {
+                httpMetadata: { contentType: resolveContentType(originalFileName, originalFileType) },
+            });
             if (!remoteUpload?.uploadId) {
                 throw new Error('R2 did not return a multipart upload id');
             }
@@ -240,7 +251,8 @@ export async function initializeChunkedUpload(context) {
         const formdata = await request.formData();
 
         const originalFileName = formdata.get('originalFileName');
-        const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
+        let originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
+        const uploadChannel = normalizeUploadChannel(url.searchParams.get('uploadChannel') || 'telegram');
         const initialization = validateChunkInitialization({
             totalChunks: formdata.get('totalChunks'),
             fileSize: formdata.get('fileSize'),
@@ -263,6 +275,11 @@ export async function initializeChunkedUpload(context) {
         }
 
         const { totalChunks, fileSize, chunkSize, fileFingerprint } = initialization;
+        const policy = validateChunkUploadLayout({
+            ...initialization, originalFileName, originalFileType, uploadChannel,
+        }, env);
+        if (!policy.ok) return createUploadPolicyResponse(policy);
+        originalFileType = policy.fileType;
         const optionalInitializationMetadata = {
             ...(fileSize !== undefined ? { fileSize } : {}),
             ...(chunkSize !== undefined ? { chunkSize } : {}),
@@ -283,7 +300,11 @@ export async function initializeChunkedUpload(context) {
                         if (Date.now() < existingSession.expiresAt
                             && !['merge_success', 'merge_failed'].includes(existingSession.status)
                             && existingSession.totalChunks === totalChunks
-                            && existingSession.originalFileName === originalFileName) {
+                            && existingSession.originalFileName === originalFileName
+                            && resolveContentType(existingSession.originalFileName, existingSession.originalFileType) === originalFileType
+                            && normalizeUploadChannel(existingSession.uploadChannel) === uploadChannel
+                            && (existingSession.fileSize ?? null) === (fileSize ?? null)
+                            && (existingSession.chunkSize ?? null) === (chunkSize ?? null)) {
                             // 复用已有会话，查询已完成分片
                             const chunkStatuses = await getChunkUploadStatusesWithManifest(env, existingUploadId, totalChunks);
                             const uploadedChunks = chunkStatuses
@@ -326,7 +347,6 @@ export async function initializeChunkedUpload(context) {
         const ipAddress = await getIPAddress(env, uploadIp, context.securityConfig);
 
         // 获取上传渠道
-        const uploadChannel = url.searchParams.get('uploadChannel') || 'telegram';
         // 获取指定的渠道名称
         let channelName = url.searchParams.get('channelName') || '';
 
@@ -455,6 +475,7 @@ export async function initializeChunkedUpload(context) {
         });
 
     } catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         await abortMultipartResource(context, createdMultipart);
         // Best-effort rollback. Keep this silent so the original, sanitized
         // initialization error remains the only server error emitted.
@@ -474,17 +495,18 @@ export async function handleChunkUpload(context) {
     const { env, request, url, waitUntil } = context;
     const db = getDatabase(env);
 
-    // 解析表单数据
-    const formdata = await request.formData();
-    context.formdata = formdata;
-
     try {
+        const formdata = await request.formData();
+        context.formdata = formdata;
         const chunk = formdata.get('file');
-        const chunkIndex = parseInt(formdata.get('chunkIndex'));
-        const totalChunks = parseInt(formdata.get('totalChunks'));
+        const parameters = validateChunkRequest({
+            chunkIndex: formdata.get('chunkIndex'), totalChunks: formdata.get('totalChunks'),
+        });
+        if (!parameters.ok) return createUploadJsonResponse(uploadError(parameters.code, 'Invalid chunk upload parameters'), 400);
+        const { chunkIndex, totalChunks } = parameters;
         const uploadId = formdata.get('uploadId');
         const originalFileName = formdata.get('originalFileName');
-        const originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
+        let originalFileType = formdata.get('originalFileType') || 'application/octet-stream';
 
         try {
             assertRouteUploadIdMatches(context.data?.routeUploadId, uploadId);
@@ -492,7 +514,7 @@ export async function handleChunkUpload(context) {
             return createRouteUploadIdMismatchResponse(error);
         }
 
-        if (!chunk || Number.isNaN(chunkIndex) || !totalChunks || !uploadId || !originalFileName || (originalFileType === null || originalFileType === undefined)) {
+        if (!chunk || typeof chunk === 'string' || typeof chunk.arrayBuffer !== 'function' || !uploadId || !originalFileName) {
             return createResponse('Error: Missing chunk upload parameters', { status: 400 });
         }
 
@@ -506,10 +528,13 @@ export async function handleChunkUpload(context) {
         const sessionInfo = JSON.parse(sessionData);
 
         // 验证会话信息
-        if (sessionInfo.originalFileName !== originalFileName ||
-            sessionInfo.totalChunks !== totalChunks) {
-            return createResponse('Error: Session parameters mismatch', { status: 400 });
-        }
+        const binding = validateUploadSessionBinding(sessionInfo, {
+            originalFileName, originalFileType, totalChunks, uploadChannel: url.searchParams.get('uploadChannel'),
+        });
+        if (!binding.ok) return createUploadPolicyResponse(binding);
+        const policy = validateUploadChunk(sessionInfo, chunkIndex, chunk.size, env);
+        if (!policy.ok) return createUploadPolicyResponse(policy);
+        originalFileType = resolveContentType(sessionInfo.originalFileName, sessionInfo.originalFileType);
 
         // 检查会话是否过期
         if (Date.now() > sessionInfo.expiresAt) {
@@ -517,7 +542,7 @@ export async function handleChunkUpload(context) {
         }
 
         // 获取上传渠道
-        const uploadChannel = url.searchParams.get('uploadChannel') || sessionInfo.uploadChannel || 'telegram';
+        const uploadChannel = normalizeUploadChannel(sessionInfo.uploadChannel || 'telegram');
         // 获取指定的渠道名称
         const channelName = sessionInfo.channelName || url.searchParams.get('channelName') || '';
 
@@ -600,13 +625,9 @@ export async function handleChunkUpload(context) {
             // 而前端一直以为全部成功。如实返回失败让前端重传该分片
             // （前端对分片请求本就有重试），这是唯一能真正恢复的路径。
             if (!uploadOutcome.dataPersisted) {
-                return createUploadJsonResponse({
-                    success: false,
-                    message: `Chunk ${chunkIndex + 1}/${totalChunks} upload failed and could not be persisted for retry`,
-                    uploadId,
-                    chunkIndex,
-                    error: uploadOutcome.error || 'Unknown upload error'
-                }, 500);
+                return createServerErrorResponse(env, new Error(uploadOutcome.error || 'Chunk upload failed without persisted retry data'), {
+                    pathname: url.pathname,
+                });
             }
 
             return createUploadJsonResponse({
@@ -615,7 +636,7 @@ export async function handleChunkUpload(context) {
                 uploadId,
                 chunkIndex,
                 deferred: true,
-                deferredReason: uploadOutcome.error || 'Unknown upload error'
+                deferredReason: 'Storage upload failed; retry scheduled during merge'
             });
         }
 
@@ -627,7 +648,8 @@ export async function handleChunkUpload(context) {
         });
 
     } catch (error) {
-        return createResponse(`Error: Failed to upload chunk - ${error.message}`, { status: 500 });
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        return createServerErrorResponse(env, error, { pathname: url.pathname });
     }
 }
 
@@ -636,14 +658,9 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
     const { env } = context;
 
     try {
-        if (!uploadId) {
-            return createUploadJsonResponse({
-                error: 'Missing uploadId parameter'
-            }, 400);
-        }
-
         // 强制清理所有相关数据
         const cleanupResult = await forceCleanupUpload(context, uploadId, totalChunks);
+        if (cleanupResult.ok === false) return createUploadPolicyResponse(cleanupResult);
 
         if (cleanupResult?.skipped && cleanupResult.reason === 'MERGE_IN_PROGRESS') {
             return createUploadJsonResponse({
@@ -653,21 +670,18 @@ export async function handleCleanupRequest(context, uploadId, totalChunks) {
                 uploadId,
                 retryAfterMs: 5000,
                 mergeLastStatusSummary: cleanupResult.sessionInfo?.mergeLastStatusSummary || {}
-            }, 409);
+            }, 409, { 'Cache-Control': 'no-store' });
         }
 
         return createUploadJsonResponse({
             success: true,
             message: `Cleanup completed for upload ${uploadId}`,
             uploadId: uploadId,
-            cleanedChunks: totalChunks
-        });
+            cleanedChunks: cleanupResult.cleanedChunks
+        }, 200, { 'Cache-Control': 'no-store' });
 
     } catch (error) {
-        return createUploadJsonResponse({
-            error: `Cleanup failed: ${error.message}`,
-            uploadId: uploadId
-        }, 500);
+        return createServerErrorResponse(env, error, { pathname: context.url?.pathname || '/upload' });
     }
 }
 
@@ -983,7 +997,9 @@ async function uploadSingleChunkToR2Multipart(context, chunkData, chunkIndex, to
         // already present.
         if (!multipartInfoData && chunkIndex === 0) {
             const finalFileId = await buildUniqueFileId(context, originalFileName, originalFileType);
-            const multipartUpload = await R2DataBase.createMultipartUpload(finalFileId);
+            const multipartUpload = await R2DataBase.createMultipartUpload(finalFileId, {
+                httpMetadata: { contentType: resolveContentType(originalFileName, originalFileType) },
+            });
             const multipartInfo = {
                 backend: 'cfr2',
                 uploadId: multipartUpload.uploadId,
@@ -1684,7 +1700,7 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
 
 // 清理失败的multipart upload
 export async function cleanupFailedMultipartUploads(context, uploadId, uploadChannel) {
-    const { env, uploadConfig } = context;
+    const { env } = context;
     const db = getDatabase(env);
 
     try {
@@ -1696,6 +1712,10 @@ export async function cleanupFailedMultipartUploads(context, uploadId, uploadCha
         }
 
         const multipartInfo = JSON.parse(multipartInfoData);
+        if (!multipartInfo || typeof multipartInfo.key !== 'string' || !multipartInfo.key
+            || typeof multipartInfo.uploadId !== 'string' || !multipartInfo.uploadId) {
+            throw new Error('Invalid stored multipart upload');
+        }
 
         if (uploadChannel === 'cfr2') {
             // 清理R2 multipart upload
@@ -1705,20 +1725,22 @@ export async function cleanupFailedMultipartUploads(context, uploadId, uploadCha
 
         } else if (uploadChannel === 's3') {
             // 清理S3 multipart upload
+            const uploadConfig = await ensureUploadConfig(context);
             const s3Settings = uploadConfig.s3;
-            const s3Channels = s3Settings.channels;
+            const s3Channels = s3Settings?.channels || [];
             
             // 优先使用指定的渠道名称
             let s3Channel;
-            const specifiedChannelName = context.specifiedChannelName;
+            const specifiedChannelName = multipartInfo.channelName || context.specifiedChannelName;
             if (specifiedChannelName) {
                 s3Channel = s3Channels.find(ch => ch.name === specifiedChannelName);
-            }
-            if (!s3Channel) {
-                s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings.loadBalance.enabled);
+            } else {
+                s3Channel = selectConsistentChannel(s3Channels, uploadId, s3Settings?.loadBalance?.enabled);
             }
 
-            if (s3Channel) {
+            if (!s3Channel) {
+                throw new Error('The multipart upload channel is no longer available');
+            } else {
                 const { endpoint, pathStyle, accessKeyId, secretAccessKey, bucketName, region } = s3Channel;
 
                 const s3Client = new S3Client({
@@ -1734,6 +1756,8 @@ export async function cleanupFailedMultipartUploads(context, uploadId, uploadCha
                     UploadId: multipartInfo.uploadId
                 }));
             }
+        } else {
+            throw new Error('Invalid stored multipart upload channel');
         }
 
         // 清理multipart info
@@ -1741,7 +1765,12 @@ export async function cleanupFailedMultipartUploads(context, uploadId, uploadCha
         console.log(`Cleaned up failed multipart upload for ${uploadId}`);
 
     } catch (error) {
-        console.error(`Failed to cleanup multipart upload for ${uploadId}:`, error);
+        // A previous abort may have succeeded before deleting the state failed.
+        if (error?.name === 'NoSuchUpload' || error?.code === 'NoSuchUpload') {
+            await db.delete(`multipart_${uploadId}`);
+            return;
+        }
+        throw error;
     }
 }
 
@@ -1753,7 +1782,8 @@ export async function checkChunkUploadStatuses(env, uploadId, totalChunks) {
 
     const db = getDatabase(env);
 
-    const CHUNK_STATUS_CONCURRENCY = 12;
+    // Failed parts may still hold 25 MiB values; twelve reads exceed isolate memory.
+    const CHUNK_STATUS_CONCURRENCY = 2;
     for (let offset = 0; offset < totalChunks; offset += CHUNK_STATUS_CONCURRENCY) {
         const indices = [];
         for (let i = offset; i < Math.min(offset + CHUNK_STATUS_CONCURRENCY, totalChunks); i++) {
@@ -1979,70 +2009,82 @@ export async function cleanupUploadSession(env, uploadId) {
     }
 }
 
-// 强制清理所有相关数据（用于彻底清理失败的上传）
+function validateCleanupParameters(uploadId, totalChunks) {
+    if (typeof uploadId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(uploadId)) {
+        return { ok: false, status: 400, code: 'INVALID_UPLOAD_ID', message: 'A valid uploadId is required' };
+    }
+    if (totalChunks === undefined || totalChunks === null) return { ok: true };
+    const count = typeof totalChunks === 'number' || (typeof totalChunks === 'string' && /^\d+$/.test(totalChunks))
+        ? Number(totalChunks) : NaN;
+    if (!Number.isSafeInteger(count) || count < 0 || count > MAX_MULTIPART_CHUNKS) {
+        return { ok: false, status: 400, code: 'INVALID_TOTAL_CHUNKS', message: 'Invalid cleanup chunk count' };
+    }
+    // Older clients send zero when the count is unknown. Never use it as a deletion bound.
+    return { ok: true, requestedChunks: count || undefined };
+}
+
+async function deleteStoredChunkRecords(db, uploadId, totalChunks) {
+    for (let offset = 0; offset < totalChunks; offset += CLEANUP_DELETE_CONCURRENCY) {
+        const pending = [];
+        for (let i = offset; i < Math.min(offset + CLEANUP_DELETE_CONCURRENCY, totalChunks); i++) {
+            pending.push(Promise.resolve().then(() => db.delete(`chunk_${uploadId}_${i.toString().padStart(3, '0')}`)));
+        }
+        const results = await Promise.allSettled(pending);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+    }
+}
+
+// Caller metadata can only validate a cleanup, never determine its workload.
 export async function forceCleanupUpload(context, uploadId, totalChunks, options = {}) {
+    const parameters = validateCleanupParameters(uploadId, totalChunks);
+    if (!parameters.ok) return parameters;
     const { env } = context;
     const db = getDatabase(env);
     const { ignoreMergeProtection = false } = options;
 
-    try {
-        if (!ignoreMergeProtection) {
-            const { blocked, sessionInfo } = await isCleanupBlockedByActiveMerge(env, uploadId);
-            if (blocked) {
-                console.log(`Skip forceCleanupUpload for ${uploadId}: merge is still in progress`);
-                return {
-                    skipped: true,
-                    reason: 'MERGE_IN_PROGRESS',
-                    sessionInfo
-                };
-            }
+    const sessionKey = `upload_session_${uploadId}`;
+    const sessionRecord = await db.get(sessionKey);
+    if (!sessionRecord) return { skipped: false, cleanedChunks: 0 };
+    const sessionInfo = JSON.parse(sessionRecord);
+    const layout = validateChunkInitialization(sessionInfo);
+    if (!sessionInfo || Array.isArray(sessionInfo) || sessionInfo.uploadId !== uploadId || !layout.ok
+        || !CLEANUP_SESSION_STATUSES.has(sessionInfo.status)) {
+        throw new Error('Invalid stored upload session');
+    }
+    for (const field of ['mergeLeaseUntil', 'mergeHeartbeatAt', 'mergeResumeAfter', 'lastUpdatedAt', 'updatedAt', 'mergeStartedAt']) {
+        const value = sessionInfo[field];
+        if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+            throw new Error('Invalid stored upload merge timing');
         }
-
-        // 读取 session 信息
-        const sessionKey = `upload_session_${uploadId}`;
-        const sessionRecord = await db.get(sessionKey);
-        const uploadChannel = sessionRecord ? JSON.parse(sessionRecord).uploadChannel : 'cfr2'; // 默认使用 cfr2
-
-        // 清理 multipart upload信息
-        await cleanupFailedMultipartUploads(context, uploadId, uploadChannel);
-
-        const cleanupPromises = [];
-
-        // 清理所有分块
-        for (let i = 0; i < totalChunks; i++) {
-            const chunkKey = `chunk_${uploadId}_${i.toString().padStart(3, '0')}`;
-            cleanupPromises.push(db.delete(chunkKey).catch(err =>
-                console.warn(`Failed to delete chunk ${i}:`, err)
-            ));
-        }
-
-        // 清理相关的键
-        const keysToCleanup = [
-            `upload_session_${uploadId}`,
-            `multipart_${uploadId}`,
-            getUploadManifestKey(uploadId)
-        ];
-
-        keysToCleanup.forEach(key => {
-            cleanupPromises.push(db.delete(key).catch(err =>
-                console.warn(`Failed to delete key ${key}:`, err)
-            ));
-        });
-
-        await Promise.allSettled(cleanupPromises);
-        console.log(`Force cleanup completed for ${uploadId}`);
-
+    }
+    if ((sessionInfo.status === 'merging' && !getEffectiveMergeLeaseUntil(sessionInfo))
+        || (sessionInfo.status === 'waiting_chunks' && !sessionInfo.mergeResumeAfter)) {
+        throw new Error('Missing stored upload merge timing');
+    }
+    if (parameters.requestedChunks !== undefined && parameters.requestedChunks !== layout.totalChunks) {
         return {
-            skipped: false
-        };
-
-    } catch (cleanupError) {
-        console.warn('Failed to force cleanup upload:', cleanupError);
-        return {
-            skipped: false,
-            error: cleanupError.message
+            ok: false, status: 400, code: 'SESSION_PARAMETERS_MISMATCH',
+            message: 'Cleanup chunk count does not match the upload session',
         };
     }
+    if (!ignoreMergeProtection && isCleanupProtectedByMerge(sessionInfo, Date.now())) {
+        return { skipped: true, reason: 'MERGE_IN_PROGRESS', sessionInfo };
+    }
+
+    // Keep successful sessions/receipts for idempotent merge retries, and never abort a finalized upload.
+    const merged = sessionInfo.status === 'merge_success';
+    if (!merged) {
+        await cleanupFailedMultipartUploads({
+            ...context, specifiedChannelName: sessionInfo.channelName || context.specifiedChannelName,
+        }, uploadId, normalizeUploadChannel(sessionInfo.uploadChannel || 'telegram'));
+    }
+    await deleteStoredChunkRecords(db, uploadId, layout.totalChunks);
+    if (merged) await db.delete(`multipart_${uploadId}`);
+    await db.delete(getUploadManifestKey(uploadId));
+    // Delete the session last so failed cleanup remains discoverable and retryable.
+    if (!merged) await db.delete(sessionKey);
+    return { skipped: false, cleanedChunks: layout.totalChunks };
 }
 
 /* ======= 单个大文件大文件分块上传到Telegram ======= */

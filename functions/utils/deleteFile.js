@@ -3,41 +3,50 @@ import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from
 import { getDatabase } from './databaseAdapter.js';
 import { DiscordAPI } from './discordAPI.js';
 import { HuggingFaceAPI } from './huggingfaceAPI.js';
-import { resolveHfChannelConfig } from './sysConfig.js';
+import { WebDAVAPI } from './storage/webdavAPI.js';
+import {
+    resolveDiscordCredentials,
+    resolveHuggingFaceCredentials,
+    resolveS3Credentials,
+    resolveWebDAVCredentials,
+} from './metadata/channelCredentials.js';
 
+const MAX_DISCORD_CHUNKS = 10000;
+const MAX_DISCORD_MANIFEST_LENGTH = 4 * 1024 * 1024;
+
+// A false result leaves metadata intact; callers must remove index entries only on true.
 export async function deleteStoredFile(env, fileId, cdnUrl, url) {
+    if (typeof fileId !== 'string' || !fileId || fileId.startsWith('manage@') || /^chunk_.+_\d+$/.test(fileId)) {
+        return false;
+    }
     try {
         const db = getDatabase(env);
         const img = await db.getWithMetadata(fileId);
 
-        if (!img) {
-            console.warn(`File ${fileId} not found in database, skipping delete`);
+        // KV returns an object containing nulls for a missing key, not just null.
+        if (!img || (img.value === null && img.metadata == null)) {
             return true;
         }
 
-        if (img.metadata?.Channel === 'CloudflareR2') {
-            const R2DataBase = env.img_r2;
-            await R2DataBase.delete(fileId);
-        }
-
-        if (img.metadata?.Channel === 'S3') {
-            await deleteS3File(img);
-        }
-
-        if (img.metadata?.Channel === 'Discord') {
-            await deleteDiscordFile(img);
-        }
-
-        if (img.metadata?.Channel === 'HuggingFace') {
-            await deleteHuggingFaceFile(env, img);
+        if (!await deleteRemoteFile(db, env, fileId, img)) {
+            console.error(`Remote delete failed for ${fileId}; keeping metadata for retry`);
+            return false;
         }
 
         await db.delete(fileId);
-        await purgeCFCache(env, cdnUrl);
 
+        // Cache outages cannot undo the committed delete or suppress its index update.
         const normalizedFolder = fileId.split('/').slice(0, -1).join('/');
-        await purgeRandomFileListCache(url.origin, normalizedFolder);
-        await purgePublicFileListCache(url.origin, normalizedFolder);
+        const invalidations = await Promise.allSettled([
+            purgeCFCache(env, cdnUrl),
+            purgeRandomFileListCache(url.origin, normalizedFolder),
+            purgePublicFileListCache(url.origin, normalizedFolder),
+        ]);
+        for (const result of invalidations) {
+            if (result.status === 'rejected') {
+                console.error(`Cache invalidation failed after deleting ${fileId}:`, result.reason);
+            }
+        }
 
         return true;
     } catch (e) {
@@ -46,79 +55,159 @@ export async function deleteStoredFile(env, fileId, cdnUrl, url) {
     }
 }
 
-async function deleteS3File(img) {
-    const s3Client = new S3Client({
-        region: img.metadata?.S3Region || 'auto',
-        endpoint: img.metadata?.S3Endpoint,
-        credentials: {
-            accessKeyId: img.metadata?.S3AccessKeyId,
-            secretAccessKey: img.metadata?.S3SecretAccessKey
-        },
-        forcePathStyle: img.metadata?.S3PathStyle || false
-    });
+async function deleteRemoteFile(db, env, fileId, img) {
+    switch (img.metadata?.Channel) {
+        case 'CloudflareR2':
+            await env.img_r2.delete(fileId);
+            return true;
+        case 'S3':
+            return deleteS3File(db, env, img.metadata);
+        case 'Discord':
+            return deleteDiscordFile(db, env, img);
+        case 'HuggingFace':
+            return deleteHuggingFaceFile(db, env, img.metadata);
+        case 'WebDAV':
+            return deleteWebDAVFile(db, env, img.metadata);
+        case 'Telegram':
+        case 'TelegramNew':
+        case 'External':
+        case undefined:
+        case null:
+        case '':
+            // These legacy channels expose no supported remote object-delete operation.
+            return true;
+        default:
+            return false;
+    }
+}
 
-    const bucketName = img.metadata?.S3BucketName;
-    const key = img.metadata?.S3FileKey;
+async function deleteS3File(db, env, metadata) {
+    const credentials = await resolveS3Credentials(db, env, metadata);
+    if (!credentials.accessKeyId || !credentials.secretAccessKey || !credentials.bucketName || !credentials.key ||
+        !matchesStoredIdentity(metadata.S3BucketName, credentials.bucketName) ||
+        !matchesStoredUrl(metadata.S3Endpoint, credentials.endpoint)) {
+        return false;
+    }
+
+    const s3Client = new S3Client({
+        region: credentials.region || 'auto',
+        endpoint: credentials.endpoint || undefined,
+        credentials: {
+            accessKeyId: credentials.accessKeyId,
+            secretAccessKey: credentials.secretAccessKey,
+        },
+        forcePathStyle: credentials.pathStyle || false,
+    });
 
     try {
         await s3Client.send(new DeleteObjectCommand({
-            Bucket: bucketName,
-            Key: key,
+            Bucket: credentials.bucketName,
+            Key: credentials.key,
         }));
         return true;
-    } catch (error) {
-        console.error('S3 Delete Failed:', error);
+    } finally {
+        s3Client.destroy();
+    }
+}
+
+async function deleteDiscordFile(db, env, img) {
+    const credentials = await resolveDiscordCredentials(db, env, img.metadata);
+    if (!credentials.botToken || !credentials.channelId ||
+        !matchesStoredIdentity(img.metadata?.DiscordChannelId, credentials.channelId)) {
+        return false;
+    }
+
+    const messageIds = discordMessageIds(img, credentials.messageId);
+    if (!messageIds) return false;
+
+    const discordAPI = new DiscordAPI(credentials.botToken);
+    // Keep the complete manifest on failure. Retrying missing messages is idempotent.
+    for (const messageId of messageIds) {
+        if (await discordAPI.deleteMessage(credentials.channelId, messageId) !== true) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function discordMessageIds(img, messageId) {
+    if (img.metadata?.IsChunked !== true) {
+        return typeof messageId === 'string' && messageId.trim() ? [messageId] : null;
+    }
+
+    if (typeof img.value !== 'string' || img.value.length > MAX_DISCORD_MANIFEST_LENGTH) return null;
+    let chunks;
+    try {
+        chunks = JSON.parse(img.value);
+    } catch {
+        return null;
+    }
+    if (!Array.isArray(chunks) || !chunks.length || chunks.length > MAX_DISCORD_CHUNKS) return null;
+    if (img.metadata.TotalChunks !== undefined &&
+        (!Number.isSafeInteger(img.metadata.TotalChunks) || img.metadata.TotalChunks !== chunks.length)) {
+        return null;
+    }
+
+    const indexes = new Set();
+    const messageIds = new Set();
+    // Validate the entire manifest before the first irreversible provider operation.
+    for (const chunk of chunks) {
+        if (!chunk || !Number.isSafeInteger(chunk.index) || chunk.index < 0 || chunk.index >= chunks.length ||
+            indexes.has(chunk.index) || typeof chunk.messageId !== 'string' || !chunk.messageId.trim() ||
+            messageIds.has(chunk.messageId)) {
+            return null;
+        }
+        indexes.add(chunk.index);
+        messageIds.add(chunk.messageId);
+    }
+    return chunks.sort((left, right) => left.index - right.index).map(chunk => chunk.messageId);
+}
+
+async function deleteHuggingFaceFile(db, env, metadata) {
+    const credentials = await resolveHuggingFaceCredentials(db, env, metadata);
+    if (!credentials.token || !credentials.repo || !credentials.filePath) {
+        return false;
+    }
+
+    const huggingfaceAPI = new HuggingFaceAPI(credentials.token, credentials.repo, credentials.isPrivate || false);
+    return await huggingfaceAPI.deleteFile(credentials.filePath, `Delete ${credentials.filePath}`) === true;
+}
+
+async function deleteWebDAVFile(db, env, metadata) {
+    const credentials = await resolveWebDAVCredentials(db, env, metadata);
+    if (!credentials.baseUrl || !credentials.filePath ||
+        !matchesStoredUrl(metadata.WebDAVBaseUrl, credentials.baseUrl)) {
+        return false;
+    }
+
+    const webdavAPI = new WebDAVAPI(credentials);
+    return await webdavAPI.deleteFile(credentials.filePath) === true;
+}
+
+function matchesStoredIdentity(stored, configured) {
+    return stored === undefined || stored === null || stored === '' ||
+        String(stored).trim() === String(configured ?? '').trim();
+}
+
+function matchesStoredUrl(stored, configured) {
+    if (stored === undefined || stored === null || stored === '') return true;
+    try {
+        return normalizeObjectUrl(stored) === normalizeObjectUrl(configured);
+    } catch {
         return false;
     }
 }
 
-async function deleteDiscordFile(img) {
-    const botToken = img.metadata?.DiscordBotToken;
-    const channelId = img.metadata?.DiscordChannelId;
-    const messageId = img.metadata?.DiscordMessageId;
-
-    if (!botToken || !channelId || !messageId) {
-        console.warn('Discord file missing required metadata for deletion');
-        return false;
+function normalizeObjectUrl(value) {
+    const text = String(value ?? '').trim();
+    if (!text) throw new Error('Missing storage URL');
+    const url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+        throw new Error('Invalid storage URL');
     }
-
-    try {
-        const discordAPI = new DiscordAPI(botToken);
-        const success = await discordAPI.deleteMessage(channelId, messageId);
-        if (!success) {
-            console.error('Discord Delete Failed: API returned false');
-        }
-        return success;
-    } catch (error) {
-        console.error('Discord Delete Failed:', error);
-        return false;
-    }
-}
-
-async function deleteHuggingFaceFile(env, img) {
-    const repo = img.metadata?.HfRepo;
-    const filePath = img.metadata?.HfFilePath;
-
-    if (!repo || !filePath) {
-        console.warn('HuggingFace file missing required metadata for deletion');
-        return false;
-    }
-
-    const channelConfig = await resolveHfChannelConfig(env, img.metadata);
-    if (!channelConfig?.token) {
-        console.warn('HuggingFace delete: no token found in config or metadata');
-        return false;
-    }
-
-    try {
-        const huggingfaceAPI = new HuggingFaceAPI(channelConfig.token, channelConfig.repo || repo, channelConfig.isPrivate || false);
-        const success = await huggingfaceAPI.deleteFile(filePath, `Delete ${filePath}`);
-        if (!success) {
-            console.error('HuggingFace Delete Failed: API returned false');
-        }
-        return success;
-    } catch (error) {
-        console.error('HuggingFace Delete Failed:', error);
-        return false;
-    }
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    if (!url.pathname.endsWith('/')) url.pathname += '/';
+    return url.toString();
 }

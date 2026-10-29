@@ -34,6 +34,8 @@ import { onRequest as onChunkStatusRequest }    from '../functions/upload/chunkS
 // ── file / temp ───────────────────────────────────────────────────────────────
 import { onRequest as onFileRequest }           from '../functions/file/[[path]].js';
 import { onRequest as onTempLinkAccessRequest } from '../functions/temp/[[path]].js';
+import { buildPreflightResponse, FILE_ALLOWED_HEADERS, FILE_ALLOWED_METHODS, FILE_EXPOSED_HEADERS } from '../functions/utils/cors.js';
+import { getUploadRequestMethodRejection } from './uploadRequestRouting.js';
 
 // ── api 顶层 ──────────────────────────────────────────────────────────────────
 // login.js / huggingface/*.js 只导出 onRequestPost（Pages Functions HTTP 方法约定）
@@ -111,13 +113,39 @@ import { onRequest as onDavRequest }           from '../functions/dav/[[path]].j
 // ── 中间件链 ──────────────────────────────────────────────────────────────────
 
 // /upload 路由中间件链
-const uploadMiddleware = [checkDatabaseConfig, forwardToUploadDO];
+async function uploadRequestMethods(context) {
+    if (context.request.method === 'OPTIONS') {
+        return buildPreflightResponse({ methods: 'GET, POST, OPTIONS', request: context.request, env: context.env });
+    }
+    return getUploadRequestMethodRejection(context.request) || context.next();
+}
+
+async function fileRequestMethods(context) {
+    if (context.request.method === 'OPTIONS') {
+        return buildPreflightResponse({
+            methods: FILE_ALLOWED_METHODS,
+            headers: FILE_ALLOWED_HEADERS,
+            exposeHeaders: FILE_EXPOSED_HEADERS,
+            request: context.request,
+            env: context.env,
+        });
+    }
+    if (!['GET', 'HEAD'].includes(context.request.method)) {
+        return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+            status: 405,
+            headers: { 'Content-Type': 'application/json', Allow: FILE_ALLOWED_METHODS, 'Cache-Control': 'no-store' },
+        });
+    }
+    return context.next();
+}
+
+const uploadMiddleware = [uploadRequestMethods, checkDatabaseConfig, forwardToUploadDO];
 
 // /file 路由中间件链
-const fileMiddleware = [checkDatabaseConfig, onFileRequest];
+const fileMiddleware = [fileRequestMethods, checkDatabaseConfig, onFileRequest];
 
 // /temp 路由中间件链（公开临时链接访问端点，无需鉴权）
-const tempAccessMiddleware = [checkDatabaseConfig, onTempLinkAccessRequest];
+const tempAccessMiddleware = [fileRequestMethods, checkDatabaseConfig, onTempLinkAccessRequest];
 
 // /dav 路由中间件链
 const davMiddleware = [checkDatabaseConfig, onDavRequest];
@@ -169,7 +197,7 @@ const STATIC_ROUTES = new Map([
     ['/api/login',                         [checkDatabaseConfig, postOnly(onLoginPost)]],
     ['/api/userConfig',                    [checkDatabaseConfig, onUserConfigRequest]],
     ['/api/channels',                      [checkDatabaseConfig, onChannelsRequest]],
-    ['/api/fetchRes',                      [checkDatabaseConfig, onFetchResRequest]],
+    ['/api/fetchRes',                      [checkDatabaseConfig, postOnly(onFetchResRequest)]],
     ['/api/public/list',                   [checkDatabaseConfig, onPublicListRequest]],
     ['/api/directoryTree',                 [checkDatabaseConfig, getOnly(onDirectoryTreeGet)]],
     ['/api/bing/wallpaper',                [checkDatabaseConfig, onBingWallpaperRequest]],

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "skipLibCheck": true
+  },
+  "files": [
+    "functions/utils/contracts.d.ts",
+    "functions/utils/cors.js",
+    "functions/utils/urlSafety.js",
+    "functions/utils/requestLimits.js",
+    "functions/utils/fileTypes.js",
+    "functions/upload/huggingface/multipartProtocol.js",
+    "functions/upload/chunkProtocol.js",
+    "functions/upload/uploadPolicy.js"
+  ]
+}

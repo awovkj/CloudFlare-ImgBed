@@ -1,3 +1,5 @@
+import { limitRequestBody, RequestBodyTooLargeError, isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../functions/utils/requestLimits.js';
+
 export class RouteUploadIdMismatchError extends Error {
     constructor(message = 'Route uploadId does not match request uploadId') {
         super(message);
@@ -63,17 +65,16 @@ export async function extractUploadId(request) {
         return routeUploadId;
     }
 
-    // 安全守卫：仅当 Content-Length 明确超过上限时才跳过解析。
-    // Content-Length 缺失（chunked 编码）或未超限时，合并请求 body 始终可以安全解析。
+    // Bound actual bytes too: a missing Content-Length does not imply a small metadata body.
     const contentLengthHeader = request.headers.get('content-length');
     const contentLength = Number(contentLengthHeader);
     if (contentLengthHeader !== null
         && Number.isInteger(contentLength)
         && contentLength > MAX_MERGE_FORM_DATA_BYTES) {
-        return routeUploadId;
+        throw new RequestBodyTooLargeError(MAX_MERGE_FORM_DATA_BYTES);
     }
 
-    const formData = await request.clone().formData();
+    const formData = await limitRequestBody(request.clone(), MAX_MERGE_FORM_DATA_BYTES).formData();
     const bodyUploadId = formData.get('uploadId');
     const normalizedBodyUploadId = typeof bodyUploadId === 'string' && bodyUploadId ? bodyUploadId : null;
     assertRouteUploadIdMatches(routeUploadId, normalizedBodyUploadId);
@@ -131,6 +132,7 @@ export async function dispatchUploadToDurableObject(stub, request) {
     try {
         return await stub.fetch(request);
     } catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         console.error('[worker] Upload Durable Object fetch failed:', error.message);
         return new Response(JSON.stringify({
             success: false,
@@ -159,6 +161,6 @@ export function getUploadRequestMethodRejection(request) {
     }
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
         status: 405,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Allow: 'GET, POST, OPTIONS', 'Cache-Control': 'no-store' },
     });
 }

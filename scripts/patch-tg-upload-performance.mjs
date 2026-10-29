@@ -71,6 +71,38 @@ let changedFiles = 0;
         'let b=0;const v="telegram"===o?3:5;while(b<v)',
         'Telegram request retry count'
     );
+    // Upload admission is unrestricted; retain provider-specific chunking and optional image compression.
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'this.compressBar,i=s.size/1024/1024<=102400||"telegram"!==this.uploadChannel,n=(e,o)=>',
+        'this.compressBar,n=(e,o)=>',
+        'Remove Telegram file-size admission limit'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'mt.compressAccurately(s,1024*this.compressQuality).then(t=>{t.size/1024/1024>102400&&"telegram"===this.uploadChannel&&(this.$message.error(s.name+"压缩后文件过大，无法上传!"),o("文件过大")),this.uploading=!0;',
+        'mt.compressAccurately(s,1024*this.compressQuality).then(t=>{this.uploading=!0;',
+        'Remove compressed-file size admission limit'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        'this.$message.error(s.name+"压缩失败，无法上传!"),o(e)});else if(i){this.uploading=!0;',
+        'this.$message.error(s.name+"压缩失败，无法上传!"),o(e)});else{this.uploading=!0;',
+        'Admit every uncompressed upload'
+    );
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        '300*e)}else this.$message.error(s.name+"文件过大，无法上传!"),o("文件过大")})},handleProgress(e){',
+        '300*e)}' + '})},handleProgress(e){',
+        'Remove rejected-file size branch'
+    );
+    // Declare exact byte layout for session integrity, not an application upload-size cap.
+    patchedBundle = replaceExactlyOnce(
+        patchedBundle,
+        't.append("totalChunks",i.toString());const p=',
+        't.append("totalChunks",i.toString()),t.append("fileSize",a.toString()),t.append("chunkSize",l.toString());const p=',
+        'Chunk upload size declarations'
+    );
 
     // 分片请求带上 uploadId，让它落到 Durable Object 上。
     //

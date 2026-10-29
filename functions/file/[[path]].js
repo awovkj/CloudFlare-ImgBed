@@ -1,18 +1,20 @@
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { fetchSecurityConfig } from "../utils/sysConfig.js";
 import { createServerErrorResponse } from '../utils/response.js';
+import { validateHttpUrl } from '../utils/urlSafety.js';
 import { TelegramAPI } from "../utils/telegramAPI.js";
 import { DiscordAPI } from "../utils/discordAPI.js";
-import { HuggingFaceAPI } from "../utils/huggingfaceAPI.js";
 import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI.js";
 import {
     setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL,
     createFixedLengthBody, resolveResponseLength, parseSingleRange,
-    resolveContentType, resolveDispositionIntent
+    resolveContentType, resolveDispositionIntent, buildUpstreamHeaders
 } from './fileTools.js';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
+import { validateSession } from '../utils/auth/sessionManager.js';
+import { validateApiToken } from '../utils/auth/tokenValidator.js';
 import {
     resolveDiscordCredentials,
     resolveHuggingFaceCredentials,
@@ -23,15 +25,15 @@ import {
 import { buildCdnFileUrl } from '../utils/metadata/metadataView.js';
 
 
-export async function onRequest(context) {  // Contents of context object
-    const {
-        request, // same as existing Worker API
-        env, // same as existing Worker API
-        params, // if filename includes [id] or [[path]]
-        waitUntil, // same as ctx.waitUntil in existing Worker API
-        next, // used for middleware or to fetch assets
-        data, // arbitrary space for passing data between middlewares
-    } = context;
+export async function onRequest(context) {
+    const { request, env, params } = context;
+
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('Method Not Allowed', {
+            status: 405,
+            headers: { 'Allow': 'GET, HEAD, OPTIONS', 'Cache-Control': 'no-store' },
+        });
+    }
 
     // 瑙ｇ爜鏂囦欢ID
     let fileId = '';
@@ -39,7 +41,7 @@ export async function onRequest(context) {  // Contents of context object
         params.path = decodeURIComponent(params.path);
         fileId = params.path.split(',').join('/');
     } catch (e) {
-        return new Response('Error: Decode Image ID Failed', { status: 400 });
+        return new Response('Error: Decode Image ID Failed', { status: 400, headers: { 'Cache-Control': 'no-store' } });
     }
 
     const url = new URL(request.url);
@@ -52,9 +54,10 @@ export async function onRequest(context) {  // Contents of context object
 
     // Fetch security config, admin-preview auth and file record in parallel
     // (independent KV round-trips on the hot file-serving path)
+    const securityConfigPromise = fetchSecurityConfig(env);
     const [securityConfig, fileAccess, imgRecord] = await Promise.all([
-        fetchSecurityConfig(env),
-        buildFileAccessContext(context),
+        securityConfigPromise,
+        buildFileAccessContext(context, securityConfigPromise),
         db.getWithMetadata(fileId),
     ]);
     context.securityConfig = securityConfig;
@@ -69,11 +72,12 @@ export async function onRequest(context) {  // Contents of context object
 
     // 临时链接访问跳过域名白名单检查（链接本身即是访问凭据）
     if (!context.skipDomainCheck && !isDomainAllowed(context)) {
-        return await returnBlockImg(url);
+        const blocked = await returnBlockImg(url);
+        return request.method === 'HEAD' ? new Response(null, blocked) : blocked;
     }
 
-    if (!imgRecord) {
-        return new Response('Error: Image Not Found', { status: 404 });
+    if (!imgRecord || (imgRecord.value === null && imgRecord.metadata === null)) {
+        return new Response('Error: Image Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
 
     // 濡傛灉metadata涓嶅瓨鍦紝鍙彲鑳芥槸涔嬪墠鏈缃甂V锛屼笖瀛樺偍鍦═elegraph涓婄殑鍥剧墖
@@ -82,7 +86,8 @@ export async function onRequest(context) {  // Contents of context object
     }
 
     const fileName = imgRecord.metadata?.FileName || fileId;
-    const encodedFileName = encodeURIComponent(fileName);
+    const encodedFileName = encodeURIComponent(fileName).replace(/['()*]/g, character =>
+        `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
     // 以扩展名为准解析 Content-Type：metadata.FileType 常为 octet-stream/空串，
     // 配合 nosniff 会让 PDF/文本等文件只能下载而无法在线预览。
     const fileType = resolveContentType(fileName, imgRecord.metadata?.FileType, fileId);
@@ -90,7 +95,7 @@ export async function onRequest(context) {  // Contents of context object
     // 妫€鏌ユ枃浠跺彲璁块棶鐘舵€?
     let accessRes = await returnWithCheck(context, imgRecord);
     if (accessRes.status !== 200) {
-        return accessRes; // 濡傛灉涓嶅彲璁块棶锛岀洿鎺ヨ繑鍥?
+        return request.method === 'HEAD' ? new Response(null, accessRes) : accessRes;
     }
 
     /* Cloudflare R2娓犻亾 */
@@ -127,11 +132,12 @@ export async function onRequest(context) {  // Contents of context object
         // 仅允许 http/https 外链重定向，防止历史数据中的 javascript:/data: 等协议造成开放重定向或 XSS
         const externalLink = imgRecord.metadata?.ExternalLink;
         try {
-            const parsed = new URL(String(externalLink));
-            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-                return new Response('Error: Invalid external link', { status: 400 });
-            }
-            return Response.redirect(parsed.toString(), 302);
+            const checked = validateHttpUrl(String(externalLink), { allowedHosts: env.EXTERNAL_ALLOWED_HOSTS });
+            if (!checked.ok) return new Response('Error: Invalid external link', { status: 400, headers: { 'Cache-Control': 'no-store' } });
+            return new Response(null, {
+                status: 302,
+                headers: { 'Location': checked.parsed.toString(), 'Cache-Control': getFileCacheControl(context) || 'no-store' },
+            });
         } catch {
             return new Response('Error: Invalid external link', { status: 400 });
         }
@@ -186,35 +192,18 @@ export async function onRequest(context) {  // Contents of context object
             return await return404(url);
         }
 
-        const headers = new Headers(response.headers);
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-        if (response.status === 304) {
-            return new Response(null, { status: 304, headers });
-        }
-
-        const fallbackSize = response.status === 206
-            ? null
-            : getMetadataFileSize(imgRecord.metadata);
-        const body = prepareFileBody(headers, response.body, fallbackSize);
-
-        const newRes = new Response(body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers,
-        });
-
-        return newRes;
+        return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(imgRecord.metadata));
     } catch (error) {
         return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
-async function buildFileAccessContext(context) {
+async function buildFileAccessContext(context, securityConfigPromise) {
     const { request, env, url } = context;
-    const fromAdmin = url.searchParams.get('from') === 'admin';
+    const hasAdminCookie = /(?:^|;)\s*admin_session\s*=/.test(request.headers.get('Cookie') || '');
+    const hasAuthorization = Boolean(request.headers.get('Authorization')?.trim());
     const fileAccess = {
-        isAdminPreview: fromAdmin,
+        isAdminPreview: !context.fileAccess?.isTempLinkAccess && (hasAdminCookie || hasAuthorization),
         adminAuthResult: { authorized: false, authType: null },
         cacheControl: undefined,
         disposition: resolveDispositionIntent(url),
@@ -222,12 +211,21 @@ async function buildFileAccessContext(context) {
 
     if (fileAccess.isAdminPreview) {
         try {
-            fileAccess.adminAuthResult = await authenticate({
-                env,
-                request,
-                requiredPermission: 'manage',
-                authScope: AUTH_SCOPE.ADMIN,
-            });
+            const session = hasAdminCookie ? await validateSession(env, request, 'admin') : { valid: false };
+            if (session.valid) {
+                fileAccess.adminAuthResult = { authorized: true, authType: 'admin' };
+            } else if (hasAuthorization) {
+                const security = await securityConfigPromise;
+                const configured = Boolean(security?.auth?.admin?.adminUsername?.trim() || security?.auth?.admin?.adminPassword?.trim());
+                if (configured) {
+                    fileAccess.adminAuthResult = await authenticate({ env, request, requiredPermission: 'admin', authScope: AUTH_SCOPE.ADMIN });
+                } else {
+                    // authCore's intentionally open setup mode must not turn an
+                    // arbitrary Authorization header into access to blocked files.
+                    const token = await validateApiToken(request, getDatabase(env), 'admin');
+                    fileAccess.adminAuthResult = { authorized: token.valid, authType: token.valid ? 'admin' : null };
+                }
+            }
         } catch (e) {
             // 鉴权异常（如安全配置加载失败）不应阻断文件请求；
             // 标记为未授权，交由 returnWithCheck 的同源 Referer 兜底处理。
@@ -249,7 +247,7 @@ function getFileHeaderOptions(context) {
 }
 
 // 本服务自有的响应控制参数，不应转发给第三方上游
-const LOCAL_ONLY_SEARCH_PARAMS = ['preview', 'download', 'disposition'];
+const LOCAL_ONLY_SEARCH_PARAMS = ['preview', 'download', 'disposition', 'from', 'authCode'];
 
 function buildUpstreamSearch(url) {
     const params = new URLSearchParams(url.search);
@@ -288,22 +286,120 @@ function prepareFileBody(headers, body, fallbackSize = null) {
     return body ? createFixedLengthBody(body, contentLength) : body;
 }
 
-function rangeNotSatisfiable(totalSize) {
-    const headers = new Headers({
-        'Accept-Ranges': 'bytes',
-        'Content-Range': `bytes */${totalSize}`,
-        'Content-Length': '0',
-    });
+function rangeNotSatisfiable(totalSize, fileHeaders = null) {
+    const headers = new Headers(fileHeaders);
+    headers.set('Accept-Ranges', 'bytes');
+    headers.set('Content-Range', `bytes */${totalSize}`);
+    headers.set('Content-Length', '0');
+    headers.set('Cache-Control', FILE_CACHE_CONTROL.NO_STORE);
     return new Response(null, { status: 416, headers });
+}
+
+function isNotModified(request, etag, lastModified = null) {
+    const ifNoneMatch = request.headers.get('If-None-Match');
+    if (ifNoneMatch !== null) {
+        return ifNoneMatch.split(',').some(value => value.trim() === '*'
+            || (etag && value.trim().replace(/^W\//, '') === etag.replace(/^W\//, '')));
+    }
+    const since = Date.parse(request.headers.get('If-Modified-Since') || '');
+    const modified = Date.parse(lastModified || '');
+    return Number.isFinite(since) && Number.isFinite(modified) && modified <= since;
+}
+
+function matchesIfRange(request, etag, lastModified = null) {
+    const ifRange = request.headers.get('If-Range');
+    if (!ifRange) return true;
+    if (ifRange.startsWith('"') || ifRange.startsWith('W/')) {
+        return Boolean(etag) && !ifRange.startsWith('W/') && ifRange === etag;
+    }
+    const date = Date.parse(ifRange);
+    const modified = Date.parse(lastModified || '');
+    return Number.isFinite(date) && Number.isFinite(modified) && modified <= date;
+}
+
+function notModifiedResponse(headers) {
+    headers.delete('Content-Length');
+    headers.delete('Content-Range');
+    return new Response(null, { status: 304, headers });
+}
+
+// Preserve the upstream status: an ignored Range is a complete 200, never 206.
+function createUpstreamFileResponse(context, response, encodedFileName, fileType, fallbackSize = null) {
+    const headers = new Headers();
+    for (const name of ['Content-Length', 'Content-Range', 'ETag', 'Last-Modified', 'Content-Encoding', 'Accept-Ranges', 'Vary']) {
+        const value = response.headers.get(name);
+        if (value !== null) headers.set(name, value);
+    }
+    setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
+    if (response.headers.get('Accept-Ranges') === 'none') headers.set('Accept-Ranges', 'none');
+    if (response.status === 304) return notModifiedResponse(headers);
+    if (response.status === 416 || response.status === 412) {
+        response.body?.cancel().catch(() => {});
+        headers.set('Cache-Control', FILE_CACHE_CONTROL.NO_STORE);
+        headers.set('Content-Length', '0');
+        return new Response(null, { status: response.status, headers });
+    }
+    const contentRange = (headers.get('Content-Range') || '').match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+    const validRange = contentRange && Number.isSafeInteger(Number(contentRange[1]))
+        && Number.isSafeInteger(Number(contentRange[2])) && Number(contentRange[2]) >= Number(contentRange[1])
+        && (contentRange[3] === '*' || (Number.isSafeInteger(Number(contentRange[3])) && Number(contentRange[2]) < Number(contentRange[3])));
+    if (response.status === 206 && !validRange) {
+        response.body?.cancel().catch(() => {});
+        return new Response('Error: Invalid upstream partial response', {
+            status: 502,
+            headers: { 'Cache-Control': 'no-store' },
+        });
+    }
+    if (response.status !== 206) headers.delete('Content-Range');
+    const size = response.status === 206 || !response.ok ? null : fallbackSize;
+    if (!response.ok) headers.set('Cache-Control', FILE_CACHE_CONTROL.NO_STORE);
+    if (context.request.method === 'HEAD') {
+        response.body?.cancel().catch(() => {});
+        const length = resolveResponseLength(headers, size);
+        if (length !== null) headers.set('Content-Length', String(length));
+        return new Response(null, { status: response.status, headers });
+    }
+    return new Response(prepareFileBody(headers, response.body, size), {
+        status: response.status,
+        headers,
+    });
+}
+
+// Read only one bounded chunk per pull; slow/cancelled clients must not queue
+// the entire reconstructed file in Worker memory.
+function createChunkedBody(chunks, rangeStart, rangeEnd, fetchChunk) {
+    let index = 0;
+    let position = 0;
+    let cancelled = false;
+    return new ReadableStream({
+        async pull(controller) {
+            while (index < chunks.length) {
+                const chunk = chunks[index++];
+                const start = position;
+                position += chunk.size;
+                if (position <= rangeStart) continue;
+                if (start > rangeEnd) break;
+                const bytes = await fetchChunk(chunk);
+                if (cancelled) return;
+                if (!bytes) throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
+                controller.enqueue(bytes.subarray(Math.max(0, rangeStart - start), Math.min(chunk.size, rangeEnd - start + 1)));
+                if (position > rangeEnd || index === chunks.length) controller.close();
+                return;
+            }
+            controller.close();
+        },
+        cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
 }
 
 function normalizeChunkList(chunks) {
     let totalSize = 0;
     const normalizedChunks = [];
 
-    for (const chunk of chunks) {
+    for (let index = 0; index < chunks.length; index++) {
+        const chunk = chunks[index];
         const size = Number(chunk?.size);
-        if (!Number.isSafeInteger(size) || size <= 0) return null;
+        if (Number(chunk?.index) !== index || !Number.isSafeInteger(size) || size <= 0 || size > 32 * 1024 * 1024) return null;
         totalSize += size;
         if (!Number.isSafeInteger(totalSize)) return null;
         normalizedChunks.push({ ...chunk, size });
@@ -312,167 +408,103 @@ function normalizeChunkList(chunks) {
     return { chunks: normalizedChunks, totalSize };
 }
 
-
-// 澶勭悊 Telegram 娓犻亾鍒嗙墖鏂囦欢璇诲彇
-async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fileType) {
-    const { env, request, url, Referer } = context;
-
-    const metadata = imgRecord.metadata;
-    const db = getDatabase(env);
-    const tgCredentials = await resolveTelegramCredentials(db, env, metadata);
-    const fallbackTgBotToken = tgCredentials.botToken;
-    const fallbackTgProxyUrl = tgCredentials.proxyUrl || '';
-
-    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?
-    let chunks = [];
+// Telegram/Discord chunks are at most 25 MiB. Never arrayBuffer() an unbounded
+// upstream response before checking its size; that can exceed Worker memory.
+async function readChunkBytes(response, expectedSize) {
+    const length = response.headers.get('Content-Length');
+    if (length !== null && Number(length) !== expectedSize) {
+        response.body?.cancel().catch(() => {});
+        throw new Error(`size mismatch: expected ${expectedSize}, got ${length}`);
+    }
+    if (!response.body) throw new Error('Missing upstream chunk body');
+    const bytes = new Uint8Array(expectedSize);
+    const reader = response.body.getReader();
+    let offset = 0;
     try {
-        if (imgRecord.value) {
-            chunks = JSON.parse(imgRecord.value);
-            chunks.sort((a, b) => a.index - b.index);
-        }
-    } catch (parseError) {
-        console.error('Failed to parse chunks data:', parseError);
-        return new Response('Error: Invalid chunks data', { status: 500 });
-    }
-
-    if (chunks.length === 0) {
-        return new Response('Error: No chunks found for this file', { status: 500 });
-    }
-
-    // 楠岃瘉鍒嗙墖瀹屾暣鎬?
-    const expectedChunks = metadata.TotalChunks || chunks.length;
-    if (chunks.length !== expectedChunks) {
-        return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
-    }
-
-    const normalized = normalizeChunkList(chunks);
-    if (!normalized || normalized.totalSize <= 0) {
-        return new Response('Error: Invalid chunk sizes', { status: 500 });
-    }
-    chunks = normalized.chunks;
-    const totalSize = normalized.totalSize;
-
-    // 鏋勫缓鍝嶅簲澶?
-    const headers = new Headers();
-    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context), getFileHeaderOptions(context));
-    headers.set('Content-Length', totalSize.toString());
-
-    // 娣诲姞ETag鏀寔
-    const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
-    headers.set('ETag', etag);
-
-    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?
-    const ifNoneMatch = request.headers.get('If-None-Match');
-    if (ifNoneMatch && ifNoneMatch === etag) {
-        return new Response(null, {
-            status: 304,
-            headers: {
-                'ETag': etag,
-                'Cache-Control': headers.get('Cache-Control'),
-                'Accept-Ranges': 'bytes'
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (offset + value.byteLength > expectedSize) {
+                await reader.cancel();
+                throw new Error(`size mismatch: upstream chunk exceeds ${expectedSize} bytes`);
             }
-        });
-    }
-
-    // 妫€鏌ange璇锋眰澶?
-    const range = request.headers.get('Range');
-    let rangeStart = 0;
-    let rangeEnd = totalSize - 1;
-    let isRangeRequest = false;
-
-    if (range) {
-        const parsedRange = parseSingleRange(range, totalSize);
-        if (!parsedRange) return rangeNotSatisfiable(totalSize);
-        rangeStart = parsedRange.start;
-        rangeEnd = parsedRange.end;
-        isRangeRequest = true;
-    }
-
-    // 澶勭悊HEAD璇锋眰
-    if (request.method === 'HEAD') {
-        return handleHeadRequest(headers, etag);
-    }
-
-    try {
-        // 鍒涘缓鏀寔Range璇锋眰鐨勬祦
-        const stream = new ReadableStream({
-            async start(controller) {
-                try {
-                    let currentPosition = 0;
-
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
-                        const chunkSize = chunk.size || 0;
-
-                        // 濡傛灉褰撳墠鍒嗙墖瀹屽叏鍦ㄨ姹傝寖鍥翠箣鍓嶏紝璺宠繃
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 濡傛灉褰撳墠鍒嗙墖瀹屽叏鍦ㄨ姹傝寖鍥翠箣鍚庯紝缁撴潫
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
-
-                        // 鑾峰彇鍒嗙墖鏁版嵁锛堟敮鎸佷唬鐞嗗煙鍚嶏級
-                        // Compatibility for historical uploads whose chunks were
-                        // spread across multiple bots. Telegram file_ids are
-                        // bot-scoped, so each chunk must use its original token.
-                        const chunkBotToken = chunk.tgBotToken || fallbackTgBotToken;
-                        const chunkProxyUrl = typeof chunk.tgProxyUrl === 'string'
-                            ? chunk.tgProxyUrl
-                            : fallbackTgProxyUrl;
-                        const chunkData = await fetchTelegramChunkWithRetry(chunkBotToken, chunk, chunkProxyUrl, 3);
-                        if (!chunkData) {
-                            throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
-                        }
-
-                        // 璁＄畻鍦ㄥ綋鍓嶅垎鐗囦腑鐨勮捣濮嬪拰缁撴潫浣嶇疆
-                        const chunkStart = Math.max(0, rangeStart - currentPosition);
-                        const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
-
-                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?
-                        if (chunkStart > 0 || chunkEnd < chunkSize) {
-                            const partialData = chunkData.slice(chunkStart, chunkEnd);
-                            controller.enqueue(partialData);
-                        } else {
-                            controller.enqueue(chunkData);
-                        }
-
-                        currentPosition += chunkSize;
-                    }
-
-                    controller.close();
-                } catch (error) {
-                    controller.error(error);
-                }
-            }
-        });
-
-        // 璁剧疆Range鐩稿叧澶撮儴
-        if (isRangeRequest) {
-            setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
-
-            return new Response(prepareFileBody(headers, stream), {
-                status: 206, // Partial Content
-                headers,
-            });
-        } else {
-            headers.set('Cache-Control', getChunkedFileCacheControl(context)); // CDN 涓嶇紦瀛樺畬鏁存枃浠讹紝閬垮厤 CDN 涓嶆敮鎸?Range 璇锋眰
-
-            return new Response(prepareFileBody(headers, stream, totalSize), {
-                status: 200,
-                headers,
-            });
+            bytes.set(value, offset);
+            offset += value.byteLength;
         }
-
-    } catch (error) {
-        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
+        if (offset !== expectedSize) throw new Error(`size mismatch: expected ${expectedSize}, got ${offset}`);
+        return bytes;
+    } finally {
+        reader.releaseLock();
     }
 }
 
-// 甯﹂噸璇曟満鍒剁殑Telegram鍒嗙墖鑾峰彇鍑芥暟锛堟敮鎸佷唬鐞嗗煙鍚嶏級
+
+// 澶勭悊 Telegram 娓犻亾鍒嗙墖鏂囦欢璇诲彇
+async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fileType) {
+    const db = getDatabase(context.env);
+    const credentials = await resolveTelegramCredentials(db, context.env, imgRecord.metadata);
+    return serveChunkedFile(context, imgRecord, encodedFileName, fileType, chunk => {
+        // Historical file_ids are bot-scoped; retain each chunk's original bot.
+        const botToken = chunk.tgBotToken || credentials.botToken;
+        const proxyUrl = typeof chunk.tgProxyUrl === 'string' ? chunk.tgProxyUrl : (credentials.proxyUrl || '');
+        return fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl, 3);
+    });
+}
+
+async function serveChunkedFile(context, imgRecord, encodedFileName, fileType, fetchChunk) {
+    const { request } = context;
+    const metadata = imgRecord.metadata;
+    let chunks;
+    try {
+        chunks = JSON.parse(imgRecord.value || '[]');
+        if (!Array.isArray(chunks)) throw new Error('Invalid chunk manifest');
+        chunks.sort((a, b) => a.index - b.index);
+    } catch {
+        return new Response('Error: Invalid chunks data', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    }
+    const expectedChunks = Number(metadata.TotalChunks || chunks.length);
+    if (!chunks.length || !Number.isSafeInteger(expectedChunks) || chunks.length !== expectedChunks) {
+        return new Response('Error: Missing chunks', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    }
+    const normalized = normalizeChunkList(chunks);
+    if (!normalized || normalized.totalSize <= 0) {
+        return new Response('Error: Invalid chunk sizes', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    }
+    chunks = normalized.chunks;
+    const totalSize = normalized.totalSize;
+    const headers = new Headers();
+    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context), getFileHeaderOptions(context));
+    headers.set('Content-Length', String(totalSize));
+    let etag;
+    const timestamp = Number(metadata.TimeStamp);
+    if (Number.isSafeInteger(timestamp) && timestamp > 0) {
+        etag = '"' + timestamp + '-' + totalSize + '"';
+    } else {
+        const manifest = chunks.map(chunk => [chunk.index, chunk.fileId || chunk.messageId, chunk.size].join(':')).join('|');
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(manifest));
+        etag = '"' + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('') + '"';
+    }
+    headers.set('ETag', etag);
+    const modified = Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toUTCString() : null;
+    if (modified && modified !== 'Invalid Date') headers.set('Last-Modified', modified);
+    const precondition = filePreconditionResponse(request, headers);
+    if (precondition) return precondition;
+    // RFC 9110: Range applies to GET, not HEAD.
+    if (request.method === 'HEAD') return handleHeadRequest(headers, etag);
+    const range = matchesIfRange(request, etag, modified) ? request.headers.get('Range') : null;
+    let rangeStart = 0;
+    let rangeEnd = totalSize - 1;
+    if (range) {
+        const parsed = parseSingleRange(range, totalSize);
+        if (!parsed) return rangeNotSatisfiable(totalSize, headers);
+        rangeStart = parsed.start;
+        rangeEnd = parsed.end;
+        setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
+    }
+    const stream = createChunkedBody(chunks, rangeStart, rangeEnd, fetchChunk);
+    return new Response(prepareFileBody(headers, stream), { status: range ? 206 : 200, headers });
+}
+
 async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRetries = 3) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
@@ -481,20 +513,11 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
             const response = await tgApi.getFileContent(chunk.fileId);
 
             if (!response.ok) {
+                response.body?.cancel().catch(() => {});
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            // 楠岃瘉鍒嗙墖澶у皬鏄惁鍖归厤
-            const chunkData = await response.arrayBuffer();
-            const actualSize = chunkData.byteLength;
-
-            // A short/overlong upstream response must not be appended to the
-            // reconstructed file. Retry it; otherwise archives are corrupted.
-            if (actualSize !== chunk.size) {
-                throw new Error(`size mismatch: expected ${chunk.size}, got ${actualSize}`);
-            }
-
-            return new Uint8Array(chunkData);
+            return await readChunkBytes(response, chunk.size);
 
         } catch (error) {
             console.warn(`Chunk ${chunk.index} fetch attempt ${attempt + 1} failed:`, error.message);
@@ -513,158 +536,12 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
 
 // 澶勭悊 Discord 娓犻亾鍒嗙墖鏂囦欢璇诲彇
 async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fileType) {
-    const { env, request, url, Referer } = context;
-
-    const metadata = imgRecord.metadata;
-    const db = getDatabase(env);
-    const discordCredentials = await resolveDiscordCredentials(db, env, metadata);
-    const botToken = discordCredentials.botToken;
-    const channelId = discordCredentials.channelId;
-    const proxyUrl = discordCredentials.proxyUrl;
-
-    // 浠嶬V鐨剉alue涓鍙栧垎鐗囦俊鎭?
-    let chunks = [];
-    try {
-        if (imgRecord.value) {
-            chunks = JSON.parse(imgRecord.value);
-            chunks.sort((a, b) => a.index - b.index);
-        }
-    } catch (parseError) {
-        console.error('Failed to parse Discord chunks data:', parseError);
-        return new Response('Error: Invalid chunks data', { status: 500 });
-    }
-
-    if (chunks.length === 0) {
-        return new Response('Error: No chunks found for this file', { status: 500 });
-    }
-
-    // 楠岃瘉鍒嗙墖瀹屾暣鎬?
-    const expectedChunks = metadata.TotalChunks || chunks.length;
-    if (chunks.length !== expectedChunks) {
-        return new Response(`Error: Missing chunks, expected ${expectedChunks}, got ${chunks.length}`, { status: 500 });
-    }
-
-    const normalized = normalizeChunkList(chunks);
-    if (!normalized || normalized.totalSize <= 0) {
-        return new Response('Error: Invalid chunk sizes', { status: 500 });
-    }
-    chunks = normalized.chunks;
-    const totalSize = normalized.totalSize;
-
-    // 鏋勫缓鍝嶅簲澶?
-    const headers = new Headers();
-    setCommonHeaders(headers, encodedFileName, fileType, getChunkedFileCacheControl(context), getFileHeaderOptions(context));
-    headers.set('Content-Length', totalSize.toString());
-
-    // 娣诲姞ETag鏀寔
-    const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
-    headers.set('ETag', etag);
-
-    // 妫€鏌f-None-Match澶达紙304缂撳瓨锛?
-    const ifNoneMatch = request.headers.get('If-None-Match');
-    if (ifNoneMatch && ifNoneMatch === etag) {
-        return new Response(null, {
-            status: 304,
-            headers: {
-                'ETag': etag,
-                'Cache-Control': headers.get('Cache-Control'),
-                'Accept-Ranges': 'bytes'
-            }
-        });
-    }
-
-    // 妫€鏌ange璇锋眰澶?
-    const range = request.headers.get('Range');
-    let rangeStart = 0;
-    let rangeEnd = totalSize - 1;
-    let isRangeRequest = false;
-
-    if (range) {
-        const parsedRange = parseSingleRange(range, totalSize);
-        if (!parsedRange) return rangeNotSatisfiable(totalSize);
-        rangeStart = parsedRange.start;
-        rangeEnd = parsedRange.end;
-        isRangeRequest = true;
-    }
-
-    // 澶勭悊HEAD璇锋眰
-    if (request.method === 'HEAD') {
-        return handleHeadRequest(headers, etag);
-    }
-
-    try {
-        // 鍒涘缓鏀寔Range璇锋眰鐨勬祦
-        const stream = new ReadableStream({
-            async start(controller) {
-                try {
-                    let currentPosition = 0;
-
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
-                        const chunkSize = chunk.size || 0;
-
-                        // 濡傛灉褰撳墠鍒嗙墖瀹屽叏鍦ㄨ姹傝寖鍥翠箣鍓嶏紝璺宠繃
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 濡傛灉褰撳墠鍒嗙墖瀹屽叏鍦ㄨ姹傝寖鍥翠箣鍚庯紝缁撴潫
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
-
-                        // 鑾峰彇鍒嗙墖鏁版嵁锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?
-                        const chunkData = await fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 3);
-                        if (!chunkData) {
-                            throw new Error(`Failed to fetch Discord chunk ${chunk.index} after retries`);
-                        }
-
-                        // 璁＄畻鍦ㄥ綋鍓嶅垎鐗囦腑鐨勮捣濮嬪拰缁撴潫浣嶇疆
-                        const chunkStart = Math.max(0, rangeStart - currentPosition);
-                        const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
-
-                        // 濡傛灉闇€瑕侀儴鍒嗗垎鐗囨暟鎹?
-                        if (chunkStart > 0 || chunkEnd < chunkSize) {
-                            const partialData = chunkData.slice(chunkStart, chunkEnd);
-                            controller.enqueue(partialData);
-                        } else {
-                            controller.enqueue(chunkData);
-                        }
-
-                        currentPosition += chunkSize;
-                    }
-
-                    controller.close();
-                } catch (error) {
-                    controller.error(error);
-                }
-            }
-        });
-
-        // 璁剧疆Range鐩稿叧澶撮儴
-        if (isRangeRequest) {
-            setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
-
-            return new Response(prepareFileBody(headers, stream), {
-                status: 206, // Partial Content
-                headers,
-            });
-        } else {
-            headers.set('Cache-Control', getChunkedFileCacheControl(context));
-
-            return new Response(prepareFileBody(headers, stream, totalSize), {
-                status: 200,
-                headers,
-            });
-        }
-
-    } catch (error) {
-        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
-    }
+    const db = getDatabase(context.env);
+    const credentials = await resolveDiscordCredentials(db, context.env, imgRecord.metadata);
+    return serveChunkedFile(context, imgRecord, encodedFileName, fileType, chunk =>
+        fetchDiscordChunkWithRetry(credentials.botToken, credentials.channelId, chunk, credentials.proxyUrl, 3));
 }
 
-// 甯﹂噸璇曟満鍒剁殑Discord鍒嗙墖鑾峰彇鍑芥暟锛堟瘡娆￠€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛?
 async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, maxRetries = 3) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
@@ -684,20 +561,11 @@ async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 
             const response = await fetch(fileUrl);
 
             if (!response.ok) {
+                response.body?.cancel().catch(() => {});
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            // 楠岃瘉鍒嗙墖澶у皬鏄惁鍖归厤
-            const chunkData = await response.arrayBuffer();
-            const actualSize = chunkData.byteLength;
-
-            // Reject incomplete CDN reads instead of silently assembling a
-            // corrupt file. The surrounding loop will retry with a fresh URL.
-            if (actualSize !== chunk.size) {
-                throw new Error(`size mismatch: expected ${chunk.size}, got ${actualSize}`);
-            }
-
-            return new Uint8Array(chunkData);
+            return await readChunkBytes(response, chunk.size);
 
         } catch (error) {
             console.warn(`Discord chunk ${chunk.index} fetch attempt ${attempt + 1} failed:`, error.message);
@@ -715,149 +583,111 @@ async function fetchDiscordChunkWithRetry(botToken, channelId, chunk, proxyUrl, 
 }
 
 // 澶勭悊R2鏂囦欢璇诲彇
+function buildR2Headers(context, object, encodedFileName, fileType) {
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
+    headers.set('Content-Length', String(object.size));
+    const etag = object.httpEtag || (object.etag ? '"' + object.etag + '"' : null);
+    if (etag) headers.set('ETag', etag);
+    if (object.uploaded) {
+        const modified = new Date(object.uploaded).toUTCString();
+        if (modified !== 'Invalid Date') headers.set('Last-Modified', modified);
+    }
+    return headers;
+}
+
+function cancelUnusedBody(object) {
+    object?.body?.cancel().catch(() => {});
+}
+
+function filePreconditionResponse(request, headers) {
+    const etag = headers.get('ETag');
+    const ifMatch = request.headers.get('If-Match');
+    const ifUnmodifiedSince = Date.parse(request.headers.get('If-Unmodified-Since') || '');
+    const modified = Date.parse(headers.get('Last-Modified') || '');
+    const failedMatch = ifMatch !== null && !ifMatch.split(',').some(value => value.trim() === '*'
+        || (etag && !value.trim().startsWith('W/') && value.trim() === etag));
+    const failedDate = ifMatch === null && Number.isFinite(ifUnmodifiedSince)
+        && Number.isFinite(modified) && modified > ifUnmodifiedSince;
+    if (failedMatch || failedDate) {
+        headers.set('Content-Length', '0');
+        headers.set('Cache-Control', FILE_CACHE_CONTROL.NO_STORE);
+        return new Response(null, { status: 412, headers });
+    }
+    if (isNotModified(request, etag, headers.get('Last-Modified'))) return notModifiedResponse(headers);
+    return null;
+}
+
 async function handleR2File(context, fileId, encodedFileName, fileType) {
-    const { env, request, url, Referer } = context;
-
+    const { env, request } = context;
     try {
-        // 妫€鏌ユ槸鍚﹂厤缃簡R2
-        if (typeof env.img_r2 == "undefined" || env.img_r2 == null || env.img_r2 == "") {
-            return new Response('Error: Please configure R2 database', { status: 500 });
+        const bucket = env.img_r2;
+        if (!bucket) return new Response('Error: Please configure R2 database', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+        const requestedRange = request.method === 'GET' ? request.headers.get('Range') : null;
+        const hasConditions = ['If-Match', 'If-None-Match', 'If-Modified-Since', 'If-Unmodified-Since'].some(name => request.headers.has(name));
+        const needsMetadata = request.method === 'HEAD' || requestedRange || hasConditions;
+        // HEAD must not open a large object stream. The fallback supports legacy
+        // adapters without head(); its unused stream is explicitly cancelled.
+        let object = needsMetadata && typeof bucket.head === 'function'
+            ? await bucket.head(fileId) : await bucket.get(fileId);
+        if (!object) return new Response('Error: File Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+        let headers = buildR2Headers(context, object, encodedFileName, fileType);
+        const precondition = filePreconditionResponse(request, headers);
+        if (precondition) { cancelUnusedBody(object); return precondition; }
+        if (request.method === 'HEAD') { cancelUnusedBody(object); return handleHeadRequest(headers); }
+        const range = requestedRange && matchesIfRange(request, headers.get('ETag'), headers.get('Last-Modified'))
+            ? parseSingleRange(requestedRange, object.size) : null;
+        if (requestedRange && matchesIfRange(request, headers.get('ETag'), headers.get('Last-Modified')) && !range) {
+            cancelUnusedBody(object);
+            return rangeNotSatisfiable(object.size, headers);
         }
-
-        const R2DataBase = env.img_r2;
-
-        // 妫€鏌ange璇锋眰澶?
-        const range = request.headers.get('Range');
-        let object;
-
-        if (range) {
-            // 澶勭悊Range璇锋眰
-            const matches = range.match(/bytes=(\d+)-(\d*)/);
-            if (matches) {
-                const start = parseInt(matches[1]);
-                const end = matches[2] ? parseInt(matches[2]) : undefined;
-
-                const rangeOptions = {
-                    range: {
-                        offset: start
-                    }
-                };
-                if (end !== undefined) {
-                    rangeOptions.range.length = end - start + 1;
-                }
-
-                object = await R2DataBase.get(fileId, rangeOptions);
-            } else {
-                object = await R2DataBase.get(fileId);
+        let partial = Boolean(range);
+        if (partial) {
+            cancelUnusedBody(object);
+            const options = { range: { offset: range.start, length: range.length } };
+            // Prevent an overwrite between head() and get() from mixing versions.
+            if (object.etag) options.onlyIf = { etagMatches: object.etag };
+            object = await bucket.get(fileId, options);
+            if (object && (!('body' in object) || !object.range)) {
+                cancelUnusedBody(object);
+                object = await bucket.get(fileId);
+                partial = false;
             }
-        } else {
-            object = await R2DataBase.get(fileId);
+        } else if (!('body' in object)) {
+            object = await bucket.get(fileId);
         }
-
-        if (object === null) {
-            return new Response('Error: Failed to fetch file', { status: 500 });
+        if (!object) return new Response('Error: File Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+        headers = buildR2Headers(context, object, encodedFileName, fileType);
+        const changedPrecondition = filePreconditionResponse(request, headers);
+        if (changedPrecondition) { cancelUnusedBody(object); return changedPrecondition; }
+        if (partial) {
+            setRangeHeaders(headers, object.range.offset, object.range.offset + object.range.length - 1, object.size);
         }
-
-        const headers = new Headers();
-        object.writeHttpMetadata(headers);
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-        headers.set('Content-Length', object.size.toString());
-
-        // 澶勭悊HEAD璇锋眰
-        if (request.method === 'HEAD') {
-            return handleHeadRequest(headers);
-        }
-
-        // 濡傛灉鏄疪ange璇锋眰锛岃缃浉搴旂殑鐘舵€佺爜鍜屽ご
-        if (range && object.range) {
-            headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
-            headers.set('Content-Length', object.range.length.toString());
-
-            return new Response(prepareFileBody(headers, object.body), {
-                status: 206, // Partial Content
-                headers,
-            });
-        }
-
-        // 姝ｅ父璇锋眰
-        return new Response(prepareFileBody(headers, object.body, object.size), {
-            status: 200,
-            headers,
-        });
+        return new Response(prepareFileBody(headers, object.body), { status: partial ? 206 : 200, headers });
     } catch (error) {
         return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
-// 澶勭悊S3鏂囦欢璇诲彇
 async function handleS3File(context, metadata, encodedFileName, fileType) {
-    const { Referer, url, request } = context;
-
-    // 妫€鏌ユ槸鍚﹂厤缃簡 CDN 鏂囦欢瀹屾暣璺緞
     const cdnFileUrl = await getS3CdnFileUrl(context.env, metadata);
-
-    // 濡傛灉閰嶇疆浜?CDN 鏂囦欢璺緞锛岄€氳繃 CDN 璇诲彇鏂囦欢
     if (cdnFileUrl) {
         try {
-            // 澶勭悊 HEAD 璇锋眰
-            if (request.method === 'HEAD') {
-                const headers = new Headers();
-                setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-                const fileSize = getMetadataFileSize(metadata);
-                if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
-                return handleHeadRequest(headers);
-            }
-
-            // 鏋勫缓璇锋眰澶?
-            const fetchHeaders = {};
-
-            // 鏀寔 Range 璇锋眰
-            const range = request.headers.get('Range');
-            if (range) {
-                fetchHeaders['Range'] = range;
-            }
-
-            // 閫氳繃 CDN 鑾峰彇鏂囦欢锛堢洿鎺ヤ娇鐢ㄥ畬鏁磋矾寰勶紝鏃犻渶鎷兼帴锛?
             const response = await fetch(cdnFileUrl, {
-                method: 'GET',
-                headers: fetchHeaders
+                method: context.request.method,
+                headers: buildUpstreamHeaders(context.request),
             });
-
-            if (!response.ok && response.status !== 206) {
-                // CDN 璇诲彇澶辫触锛屽洖閫€鍒?S3 API
-                console.warn(`CDN fetch failed (${response.status}), falling back to S3 API`);
-                return await handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
+            if (response.ok || [304, 412, 416].includes(response.status)) {
+                return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(metadata));
             }
-
-            // 鏋勫缓鍝嶅簲澶?
-            const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-            // 澶嶅埗鐩稿叧澶撮儴
-            if (response.headers.get('Content-Length')) {
-                headers.set('Content-Length', response.headers.get('Content-Length'));
-            }
-            if (response.headers.get('Content-Range')) {
-                headers.set('Content-Range', response.headers.get('Content-Range'));
-            }
-
-            const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
-            const body = prepareFileBody(headers, response.body, fallbackSize);
-
-            return new Response(body, {
-                status: response.status,
-                headers
-            });
-
-        } catch (error) {
-            // CDN 璇诲彇鍑洪敊锛屽洖閫€鍒?S3 API
-            console.error(`CDN fetch error: ${error.message}, falling back to S3 API`);
-            return await handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
+            response.body?.cancel().catch(() => {});
+            console.warn('S3 CDN fetch failed; falling back to S3 API:', response.status);
+        } catch {
+            console.warn('S3 CDN fetch failed; falling back to S3 API');
         }
     }
-
-    // 娌℃湁閰嶇疆 CDN 鏂囦欢璺緞锛屼娇鐢?S3 API
-    return await handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
+    return handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
 }
 
 async function getS3CdnFileUrl(env, metadata) {
@@ -873,311 +703,159 @@ async function getS3CdnFileUrl(env, metadata) {
 
 // 閫氳繃 S3 API 璇诲彇鏂囦欢
 async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) {
-    const { Referer, url, request, env } = context;
-    const db = getDatabase(env);
-    const s3Credentials = await resolveS3Credentials(db, env, metadata);
-
-    const s3Client = new S3Client({
-        region: s3Credentials.region || "auto",
-        endpoint: s3Credentials.endpoint,
-        credentials: {
-            accessKeyId: s3Credentials.accessKeyId,
-            secretAccessKey: s3Credentials.secretAccessKey
-        },
-        forcePathStyle: s3Credentials.pathStyle || false
-    });
-
-    const bucketName = s3Credentials.bucketName;
-    const key = s3Credentials.key;
-
-    try {
-        // 妫€鏌ange璇锋眰澶?
-        const range = request.headers.get('Range');
-        const commandParams = {
-            Bucket: bucketName,
-            Key: key
-        };
-
-        if (range) {
-            // 娣诲姞Range鍙傛暟鐢ㄤ簬閮ㄥ垎鍐呭璇锋眰
-            commandParams.Range = range;
-        }
-
-        const command = new GetObjectCommand(commandParams);
-        const response = await s3Client.send(command);
-
-        // 璁剧疆鍝嶅簲澶?
-        const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-        // 璁剧疆Content-Length鍜孋ontent-Range澶?
-        if (response.ContentLength !== undefined && response.ContentLength !== null) {
-            headers.set('Content-Length', response.ContentLength.toString());
-        }
-
-        if (response.ContentRange) {
-            headers.set('Content-Range', response.ContentRange);
-        }
-
-        const isPartialResponse = Boolean(response.ContentRange);
-        const fallbackSize = isPartialResponse ? null : getMetadataFileSize(metadata);
-        const contentLength = resolveResponseLength(headers, fallbackSize);
-        if (contentLength !== null) headers.set('Content-Length', contentLength.toString());
-
-        // 澶勭悊HEAD璇锋眰
-        if (request.method === 'HEAD') {
-            return handleHeadRequest(headers);
-        }
-
-        // 杩斿洖鍝嶅簲锛屾敮鎸佹祦寮忎紶杈?
-        const statusCode = isPartialResponse ? 206 : 200;
-        return new Response(prepareFileBody(headers, response.Body, fallbackSize), {
-            status: statusCode,
-            headers
-        });
-
-    } catch (error) {
-        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
-    }
-}
-
-
-// 澶勭悊 Discord 鏂囦欢璇诲彇
-async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
-    const { env, request, url, Referer } = context;
-
+    const { request, env } = context;
     try {
         const db = getDatabase(env);
-        const discordCredentials = await resolveDiscordCredentials(db, env, metadata);
-        // 姣忔璇诲彇閮介€氳繃 API 鑾峰彇鏂扮殑闄勪欢 URL锛堝洜涓?Discord 闄勪欢 URL 浼氬湪绾?4灏忔椂鍚庤繃鏈燂級
-        let fileUrl = null;
-        if (discordCredentials.messageId && discordCredentials.channelId && discordCredentials.botToken) {
-            const discordAPI = new DiscordAPI(discordCredentials.botToken);
-            fileUrl = await discordAPI.getFileURL(discordCredentials.channelId, discordCredentials.messageId);
-        }
-
-        if (!fileUrl) {
-            return new Response('Error: Discord file URL not found', { status: 500 });
-        }
-
-        // 濡傛灉閰嶇疆浜嗕唬鐞?URL锛屾浛鎹?Discord CDN 鍩熷悕
-        if (discordCredentials.proxyUrl) {
-            fileUrl = fileUrl.replace('https://cdn.discordapp.com', `https://${discordCredentials.proxyUrl}`);
-        }
-
-        // 澶勭悊 HEAD 璇锋眰
-        if (request.method === 'HEAD') {
-            const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-            const fileSize = getMetadataFileSize(metadata);
-            if (fileSize !== null) headers.set('Content-Length', fileSize.toString());
-            return handleHeadRequest(headers);
-        }
-
-        // 鑾峰彇鏂囦欢鍐呭锛堟敮鎸?Range 璇锋眰锛?
-        const fetchHeaders = {};
-        const range = request.headers.get('Range');
+        const credentials = await resolveS3Credentials(db, env, metadata);
+        const client = new S3Client({
+            region: credentials.region || 'auto',
+            endpoint: credentials.endpoint,
+            credentials: { accessKeyId: credentials.accessKeyId, secretAccessKey: credentials.secretAccessKey },
+            forcePathStyle: credentials.pathStyle || false,
+        });
+        const params = { Bucket: credentials.bucketName, Key: credentials.key };
+        const range = request.method === 'GET' ? request.headers.get('Range') : null;
         if (range) {
-            fetchHeaders['Range'] = range;
-        }
-
-        const response = await fetch(fileUrl, {
-            method: 'GET',
-            headers: fetchHeaders
-        });
-
-        if (!response.ok && response.status !== 206) {
-            return new Response(`Error: Failed to fetch from Discord - ${response.status}`, { status: response.status });
-        }
-
-        // 鏋勫缓鍝嶅簲澶?
-        const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-        // 澶嶅埗鐩稿叧澶撮儴
-        if (response.headers.get('Content-Length')) {
-            headers.set('Content-Length', response.headers.get('Content-Length'));
-        }
-        if (response.headers.get('Content-Range')) {
-            headers.set('Content-Range', response.headers.get('Content-Range'));
-        }
-
-        const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
-        const body = prepareFileBody(headers, response.body, fallbackSize);
-
-        return new Response(body, {
-            status: response.status,
-            headers
-        });
-
-    } catch (error) {
-        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
-    }
-}
-
-
-// 澶勭悊 HuggingFace 鏂囦欢璇诲彇
-async function handleHuggingFaceFile(context, metadata, encodedFileName, fileType) {
-    const { env, request, url, Referer } = context;
-
-    try {
-        const db = getDatabase(env);
-        const hfCredentials = await resolveHuggingFaceCredentials(db, env, metadata);
-        const hfRepo = hfCredentials.repo;
-        const hfFilePath = hfCredentials.filePath;
-        const hfToken = hfCredentials.token;
-        const hfIsPrivate = hfCredentials.isPrivate || false;
-
-        if (!hfRepo || !hfFilePath) {
-            return new Response('Error: HuggingFace file info not found', { status: 500 });
-        }
-
-        // 鏋勫缓鏂囦欢 URL
-        const fileUrl = `https://huggingface.co/datasets/${hfRepo}/resolve/main/${hfFilePath}`;
-        const fileSize = HuggingFaceAPI.getMetadataFileSize(metadata);
-
-        // 澶勭悊 HEAD 璇锋眰
-        if (request.method === 'HEAD') {
-            const headers = new Headers();
-            setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-            if (fileSize) {
-                headers.set('Content-Length', fileSize.toString());
+            if (request.headers.has('If-Range')) {
+                const head = await client.send(new HeadObjectCommand(params));
+                if (matchesIfRange(request, head.ETag, head.LastModified?.toUTCString())) params.Range = range;
+            } else {
+                params.Range = range;
             }
-            return handleHeadRequest(headers);
         }
-
-        // 鏋勫缓璇锋眰澶?
-        const fetchHeaders = {};
-
-        // 绉佹湁浠撳簱闇€瑕?Authorization
-        if (hfIsPrivate && hfToken) {
-            fetchHeaders['Authorization'] = `Bearer ${hfToken}`;
+        for (const [header, field] of [['If-Match', 'IfMatch'], ['If-None-Match', 'IfNoneMatch']]) {
+            const value = request.headers.get(header);
+            if (value) params[field] = value;
         }
-
-        // 鏀寔 Range 璇锋眰
-        const range = request.headers.get('Range');
-        if (range) {
-            fetchHeaders['Range'] = range;
+        for (const [header, field] of [['If-Modified-Since', 'IfModifiedSince'], ['If-Unmodified-Since', 'IfUnmodifiedSince']]) {
+            const value = Date.parse(request.headers.get(header) || '');
+            if (Number.isFinite(value)) params[field] = new Date(value);
         }
-
-        const response = await fetch(fileUrl, {
-            method: 'GET',
-            headers: fetchHeaders
-        });
-
-        if (!response.ok && response.status !== 206) {
-            return new Response(`Error: Failed to fetch from HuggingFace - ${response.status}`, { status: response.status });
-        }
-
-        // 鏋勫缓鍝嶅簲澶?
+        const Command = request.method === 'HEAD' ? HeadObjectCommand : GetObjectCommand;
+        const object = await client.send(new Command(params));
+        const headers = new Headers();
+        if (object.ContentLength !== undefined && object.ContentLength !== null) headers.set('Content-Length', String(object.ContentLength));
+        if (object.ContentRange) headers.set('Content-Range', object.ContentRange);
+        if (object.ETag) headers.set('ETag', object.ETag);
+        if (object.LastModified) headers.set('Last-Modified', object.LastModified.toUTCString());
+        let body = request.method === 'HEAD' ? null : object.Body;
+        if (body?.transformToWebStream) body = body.transformToWebStream();
+        const response = new Response(body, { status: object.ContentRange ? 206 : 200, headers });
+        return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(metadata));
+    } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
         const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-        // 澶嶅埗鐩稿叧澶撮儴
-        if (response.headers.get('Content-Length')) {
-            headers.set('Content-Length', response.headers.get('Content-Length'));
+        if (status === 304) return notModifiedResponse(headers);
+        if (status === 416) {
+            const size = getMetadataFileSize(metadata);
+            if (size !== null) return rangeNotSatisfiable(size, headers);
         }
-        if (response.headers.get('Content-Range')) {
-            headers.set('Content-Range', response.headers.get('Content-Range'));
+        if ([404, 412, 416].includes(status)) {
+            headers.set('Cache-Control', FILE_CACHE_CONTROL.NO_STORE);
+            headers.set('Content-Length', '0');
+            return new Response(null, { status, headers });
         }
-
-        const fallbackSize = response.status === 206 ? null : fileSize;
-        const body = prepareFileBody(headers, response.body, fallbackSize);
-
-        return new Response(body, {
-            status: response.status,
-            headers
-        });
-
-    } catch (error) {
         return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
 }
 
-
-// 澶勭悊 WebDAV 鏂囦欢璇诲彇
-async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
-    const { request, url, Referer } = context;
-
+async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
     try {
         const db = getDatabase(context.env);
-        const webdavCredentials = await resolveWebDAVCredentials(db, context.env, metadata);
-        const filePath = webdavCredentials.filePath;
-        const publicUrl = getWebDAVPublicFileUrl(webdavCredentials, filePath);
-
-        if (!filePath && !publicUrl) {
-            return new Response('Error: WebDAV file info not found', { status: 500 });
+        const credentials = await resolveDiscordCredentials(db, context.env, metadata);
+        let fileUrl = null;
+        if (credentials.messageId && credentials.channelId && credentials.botToken) {
+            const api = new DiscordAPI(credentials.botToken);
+            fileUrl = await api.getFileURL(credentials.channelId, credentials.messageId);
         }
-
-        const headers = new Headers();
-        setCommonHeaders(headers, encodedFileName, fileType, getFileCacheControl(context), getFileHeaderOptions(context));
-
-        const fetchHeaders = {};
-        const range = request.headers.get('Range');
-        if (range) {
-            fetchHeaders['Range'] = range;
+        if (!fileUrl) return new Response('Error: Discord file URL not found', { status: 502, headers: { 'Cache-Control': 'no-store' } });
+        if (credentials.proxyUrl) fileUrl = fileUrl.replace('https://cdn.discordapp.com', 'https://' + credentials.proxyUrl);
+        const response = await fetch(fileUrl, { method: context.request.method, headers: buildUpstreamHeaders(context.request) });
+        if (!response.ok && ![304, 412, 416].includes(response.status)) {
+            response.body?.cancel().catch(() => {});
+            return new Response('Error: Failed to fetch from Discord', { status: response.status, headers: { 'Cache-Control': 'no-store' } });
         }
+        return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(metadata));
+    } catch (error) {
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
+    }
+}
 
+async function handleHuggingFaceFile(context, metadata, encodedFileName, fileType) {
+    try {
+        const db = getDatabase(context.env);
+        const credentials = await resolveHuggingFaceCredentials(db, context.env, metadata);
+        if (!credentials.repo || !credentials.filePath) {
+            return new Response('Error: HuggingFace file info not found', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+        }
+        const fileUrl = 'https://huggingface.co/datasets/' + credentials.repo + '/resolve/main/' + credentials.filePath;
+        const headers = buildUpstreamHeaders(context.request);
+        if (credentials.isPrivate && credentials.token) headers.set('Authorization', 'Bearer ' + credentials.token);
+        const response = await fetchHuggingFaceContent(fileUrl, { method: context.request.method, headers });
+        if (!response.ok && ![304, 412, 416].includes(response.status)) {
+            response.body?.cancel().catch(() => {});
+            return new Response('Error: Failed to fetch from HuggingFace', { status: response.status, headers: { 'Cache-Control': 'no-store' } });
+        }
+        return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(metadata));
+    } catch (error) {
+        return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
+    }
+}
+
+async function fetchHuggingFaceContent(fileUrl, { method, headers }, maxRedirects = 5) {
+    const failure = () => new Response(null, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+    let checked = validateHttpUrl(fileUrl);
+    if (!checked.ok || checked.parsed.protocol !== 'https:') return failure();
+    let current = checked.parsed;
+    const forwarded = new Headers(headers);
+    for (let hop = 0; hop <= maxRedirects; hop++) {
+        // Workers may forward credentials on automatic cross-origin redirects.
+        // Follow explicitly so private Hub tokens never reach its storage CDN.
+        const response = await fetch(current.toString(), { method, headers: new Headers(forwarded), redirect: 'manual' });
+        if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+        const location = response.headers.get('Location');
+        await response.body?.cancel().catch(() => {});
+        if (!location || hop === maxRedirects) return failure();
+        let nextUrl;
+        try { nextUrl = new URL(location, current).toString(); }
+        catch { return failure(); }
+        checked = validateHttpUrl(nextUrl);
+        if (!checked.ok || checked.parsed.protocol !== 'https:') return failure();
+        if (checked.parsed.origin !== current.origin) {
+            for (const name of ['Authorization', 'Cookie', 'Proxy-Authorization']) forwarded.delete(name);
+        }
+        current = checked.parsed;
+    }
+    return failure();
+}
+
+async function handleWebDAVFile(context, metadata, encodedFileName, fileType) {
+    const { request } = context;
+    try {
+        const db = getDatabase(context.env);
+        const credentials = await resolveWebDAVCredentials(db, context.env, metadata);
+        const filePath = credentials.filePath;
+        const publicUrl = getWebDAVPublicFileUrl(credentials, filePath);
+        const options = { method: request.method, headers: Object.fromEntries(buildUpstreamHeaders(request)) };
         let response;
         if (publicUrl) {
-            response = await fetch(publicUrl, {
-                method: request.method === 'HEAD' ? 'HEAD' : 'GET',
-                headers: fetchHeaders,
-            });
-
-            if (!response.ok && response.status !== 206 && response.status !== 304 && webdavCredentials.baseUrl && filePath) {
-                try {
-                    const webdavAPI = new WebDAVAPI(webdavCredentials);
-                    response = await webdavAPI.getFile(filePath, {
-                        method: request.method === 'HEAD' ? 'HEAD' : 'GET',
-                        headers: fetchHeaders,
-                    });
-                } catch (fallbackError) {
-                    console.warn('WebDAV public URL fallback failed:', fallbackError.message);
-                }
+            response = await fetch(publicUrl, options);
+            if (!response.ok && ![304, 412, 416].includes(response.status) && credentials.baseUrl && filePath) {
+                response.body?.cancel().catch(() => {});
+                response = await new WebDAVAPI(credentials).getFile(filePath, options);
             }
         } else {
-            if (!webdavCredentials.baseUrl || !filePath) {
-                return new Response('Error: WebDAV channel config not found', { status: 500 });
+            if (!credentials.baseUrl || !filePath) {
+                return new Response('Error: WebDAV channel config not found', { status: 500, headers: { 'Cache-Control': 'no-store' } });
             }
-
-            const webdavAPI = new WebDAVAPI(webdavCredentials);
-            response = await webdavAPI.getFile(filePath, {
-                method: request.method === 'HEAD' ? 'HEAD' : 'GET',
-                headers: fetchHeaders,
-            });
+            response = await new WebDAVAPI(credentials).getFile(filePath, options);
         }
-
-        if (!response.ok && response.status !== 206 && response.status !== 304) {
-            return new Response(`Error: Failed to fetch from WebDAV - ${response.status}`, { status: response.status });
+        if (!response.ok && ![304, 412, 416].includes(response.status)) {
+            response.body?.cancel().catch(() => {});
+            return new Response('Error: Failed to fetch from WebDAV', { status: response.status, headers: { 'Cache-Control': 'no-store' } });
         }
-
-        if (response.headers.get('Content-Length')) {
-            headers.set('Content-Length', response.headers.get('Content-Length'));
-        }
-        if (response.headers.get('Content-Range')) {
-            headers.set('Content-Range', response.headers.get('Content-Range'));
-        }
-        if (response.headers.get('ETag')) {
-            headers.set('ETag', response.headers.get('ETag'));
-        }
-        if (response.status === 304) {
-            return new Response(null, { status: 304, headers });
-        }
-
-        const fallbackSize = response.status === 206 ? null : getMetadataFileSize(metadata);
-        const contentLength = resolveResponseLength(headers, fallbackSize);
-        if (contentLength !== null) headers.set('Content-Length', contentLength.toString());
-
-        if (request.method === 'HEAD') {
-            return handleHeadRequest(headers, response.headers.get('ETag'));
-        }
-
-        return new Response(prepareFileBody(headers, response.body, fallbackSize), {
-            status: response.status,
-            headers
-        });
-
+        return createUpstreamFileResponse(context, response, encodedFileName, fileType, getMetadataFileSize(metadata));
     } catch (error) {
         return createServerErrorResponse(context.env, error, { pathname: context.url?.pathname });
     }
@@ -1194,5 +872,3 @@ function getWebDAVPublicFileUrl(webdavCredentials, filePath) {
 
     return '';
 }
-
-// upstream-274-safe-integration: HuggingFace HEAD Content-Length uses metadata.FileSizeBytes when present.

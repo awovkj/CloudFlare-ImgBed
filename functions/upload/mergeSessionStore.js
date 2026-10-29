@@ -21,13 +21,19 @@ function buildUpdatedUploadSession(sessionInfo, patch = {}, options = {}, now = 
     };
 }
 
-async function persistUploadSession(db, uploadId, sessionInfo) {
+async function persistUploadSession(db, uploadId, sessionInfo, now = Date.now) {
     const sessionKey = `upload_session_${uploadId}`;
+    const expiresAt = Number(sessionInfo.expiresAt);
+    const expirationTtl = Number.isFinite(expiresAt) && expiresAt > 0
+        ? Math.max(60, Math.ceil((expiresAt - now()) / 1000))
+        : 3600;
     await db.put(sessionKey, JSON.stringify(sessionInfo), {
-        expirationTtl: 3600
+        expirationTtl
     });
 }
 
+// These revisions guard the coordinator snapshot, not an atomic KV CAS.
+// Concurrent merge callers must be serialized by the same upload Durable Object.
 export function createUploadSessionCoordinator(db, uploadId, initialSession, now = Date.now) {
     let currentSession = initialSession;
 
@@ -37,7 +43,7 @@ export function createUploadSessionCoordinator(db, uploadId, initialSession, now
             return false;
         }
 
-        await persistUploadSession(db, uploadId, updatedSession);
+        await persistUploadSession(db, uploadId, updatedSession, now);
         currentSession = updatedSession;
         return true;
     };

@@ -10,6 +10,11 @@ import { getDatabase } from '../../utils/databaseAdapter.js';
 import { moderateContent, endUpload, getUploadIp, getIPAddress, sanitizeUploadFolder, createResponse } from '../uploadTools.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
 import { cleanPersistedMetadataInPlace } from '../../utils/metadata/metadataSecurity.js';
+import { createUploadPolicyResponse, validateUploadFile } from '../uploadPolicy.js';
+import { createJsonResponse, createServerErrorResponse } from '../../utils/response.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
+import { getDirectUploadSession, validateDirectUploadSession, validateDirectUploadChannel, completeDirectUploadSession, ensureDirectMultipartCompletion } from './directUploadSession.js';
+import { MultipartProtocolError, readHfJsonBody, validateMultipartOid, validateMultipartParts } from './multipartProtocol.js';
 
 export async function onRequestPost(context) {
     const { request, env, waitUntil } = context;
@@ -22,8 +27,10 @@ export async function onRequestPost(context) {
             return UnauthorizedResponse('Unauthorized');
         }
 
-        const body = await request.json();
+        const body = await readHfJsonBody(request);
         const { fullId, filePath, sha256, fileSize, fileName, fileType, channelName } = body;
+        const policy = validateUploadFile({ fileName, fileType, fileSize }, env, { chunked: true });
+        if (!policy.ok) return createUploadPolicyResponse(policy);
 
         if (!fullId || !filePath || !sha256 || !fileSize) {
             return createResponse(JSON.stringify({
@@ -44,6 +51,20 @@ export async function onRequestPost(context) {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
+        const issued = await getDirectUploadSession(env, fullId);
+        const binding = validateDirectUploadSession(issued, body);
+        if (!binding.ok) return createUploadPolicyResponse(binding);
+        if (body.oid !== undefined) validateMultipartOid(body.oid, issued.sha256);
+        if (!issued.multipart && (body.multipartParts !== undefined || body.uploadAction?.header?.chunk_size)) {
+            return createUploadPolicyResponse({ code: 'DIRECT_UPLOAD_SESSION_REQUIRED', status: 409,
+                message: 'Request a new upload URL before completing this multipart upload' });
+        }
+        if (issued.response) {
+            if (issued.multipart && body.multipartParts !== undefined) {
+                validateMultipartParts(issued.sha256, body.multipartParts, { expectedCount: issued.multipart.partCount });
+            }
+            return createJsonResponse(issued.response, { headers: { 'Cache-Control': 'no-store' } });
+        }
 
         // 获取 HuggingFace 配置
         const uploadConfig = await fetchUploadConfig(env);
@@ -62,7 +83,9 @@ export async function onRequestPost(context) {
             hfChannel = hfSettings.channels.find(c => c.name === channelName);
         }
         if (!hfChannel) {
-            hfChannel = hfSettings.channels[0];
+            return createJsonResponse({ success: false, error: 'The issued upload channel is no longer available' }, {
+                status: 409, headers: { 'Cache-Control': 'no-store' },
+            });
         }
 
         if (!hfChannel || !hfChannel.token || !hfChannel.repo) {
@@ -75,14 +98,17 @@ export async function onRequestPost(context) {
         const huggingfaceAPI = new HuggingFaceAPI(hfChannel.token, hfChannel.repo, hfChannel.isPrivate || false);
 
         // 提交 LFS 文件引用
+        const channelBinding = validateDirectUploadChannel(issued, hfChannel);
+        if (!channelBinding.ok) return createUploadPolicyResponse(channelBinding);
+        await ensureDirectMultipartCompletion(env, issued, body.multipartParts, huggingfaceAPI, body.uploadAction);
         console.log('Committing LFS file...');
-        const commitResult = await huggingfaceAPI.commitLfsFile(
+        await huggingfaceAPI.commitLfsFile(
             filePath,
             sha256,
-            fileSize,
+            Number(fileSize),
             `Upload ${fileName || fullId}`
         );
-        console.log('Commit result:', JSON.stringify(commitResult));
+        console.log('LFS commit completed');
 
         // 构建文件 URL
         const fileUrl = `https://huggingface.co/datasets/${hfChannel.repo}/resolve/main/${filePath}`;
@@ -98,15 +124,17 @@ export async function onRequestPost(context) {
         // 构建 metadata
         const metadata = {
             FileName: fileName || fullId,
-            FileType: fileType || '',
+            FileType: policy.fileType,
             Channel: "HuggingFace",
             ChannelName: hfChannel.name || "HuggingFace_env",
             FileSize: (fileSize / 1024 / 1024).toFixed(2),
-            FileSizeBytes: fileSize,
+            FileSizeBytes: Number(fileSize),
             UploadIP: uploadIp,
             UploadAddress: uploadAddress,
             ListType: "None",
             HfFilePath: filePath,
+            HfObjectRepo: issued.repo,
+            HfObjectPrivate: issued.isPrivate,
             TimeStamp: Date.now(),
             Label: "None",
             Directory: normalizedDirectory,
@@ -153,16 +181,15 @@ export async function onRequestPost(context) {
             responseBody.publicUrl = `${urlPrefix.replace(/\/+$/, '')}/${fullId}`;
         }
 
+        await completeDirectUploadSession(env, issued, responseBody);
         return createResponse(JSON.stringify(responseBody), {
             status: 200,
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
         });
 
     } catch (error) {
-        console.error('commitUpload error:', error.message);
-        return createResponse(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        if (error instanceof MultipartProtocolError) return createUploadPolicyResponse(error);
+        return createServerErrorResponse(env, error, { pathname: '/upload/huggingface/commitUpload' });
     }
 }

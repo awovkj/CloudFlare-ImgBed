@@ -15,6 +15,13 @@
  */
 
 import { buildPreflightResponse } from '../functions/utils/cors.js';
+import { createJsonResponse } from '../functions/utils/response.js';
+
+function methodNotAllowed(allow) {
+    return createJsonResponse({ error: 'Method Not Allowed' }, {
+        status: 405, headers: { Allow: allow, 'Cache-Control': 'no-store' },
+    });
+}
 
 /** 构造 Pages Functions context 对象 */
 export function makeContext(request, env, ctx, params = {}, data = {}, nextFn = null) {
@@ -54,10 +61,10 @@ export async function runMiddlewareChain(request, env, ctx, params, middlewares)
 export function postOnly(handler) {
     return async function(context) {
         if (context.request.method === 'OPTIONS') {
-            return buildPreflightResponse({ methods: 'POST, OPTIONS' });
+            return buildPreflightResponse({ methods: 'POST, OPTIONS', request: context.request, env: context.env });
         }
         if (context.request.method !== 'POST') {
-            return new Response('Method Not Allowed', { status: 405 });
+            return methodNotAllowed('POST, OPTIONS');
         }
         return handler(context);
     };
@@ -69,10 +76,12 @@ export function getOnly(handler) {
             return buildPreflightResponse({
                 methods: 'GET, OPTIONS',
                 headers: 'Content-Type, Authorization, authCode',
+                request: context.request,
+                env: context.env,
             });
         }
         if (context.request.method !== 'GET') {
-            return new Response('Method Not Allowed', { status: 405 });
+            return methodNotAllowed('GET, OPTIONS');
         }
         return handler(context);
     };
@@ -117,7 +126,7 @@ export function resolveModuleHandler(mod, method) {
 
 export function collectAllowedMethods(mod) {
     const allowedMethods = [];
-    const methodMap = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+    const methodMap = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
     for (const method of methodMap) {
         const handlerName = `onRequest${method.charAt(0)}${method.slice(1).toLowerCase()}`;
@@ -133,7 +142,7 @@ export function collectAllowedMethods(mod) {
     return allowedMethods;
 }
 
-export function buildGeneratedOptionsResponse(mod) {
+export function buildGeneratedOptionsResponse(mod, request, env) {
     const allowedMethods = collectAllowedMethods(mod);
     const allowHeaders = new Set(['Content-Type', 'Authorization']);
 
@@ -144,17 +153,19 @@ export function buildGeneratedOptionsResponse(mod) {
     return buildPreflightResponse({
         methods: [...allowedMethods, 'OPTIONS'].join(', '),
         headers: [...allowHeaders].join(', '),
+        request,
+        env,
     });
 }
 
 export async function runGeneratedRoute(request, env, ctx, route) {
     if (request.method === 'OPTIONS') {
-        return buildGeneratedOptionsResponse(route.module);
+        return buildGeneratedOptionsResponse(route.module, request, env);
     }
 
     const handler = resolveModuleHandler(route.module, request.method);
     if (!handler) {
-        return new Response('Method Not Allowed', { status: 405 });
+        return methodNotAllowed([...collectAllowedMethods(route.module), 'OPTIONS'].join(', '));
     }
 
     const middlewares = collectModuleMiddlewares(route.middlewares);

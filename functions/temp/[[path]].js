@@ -63,7 +63,7 @@ export async function onRequest(context) {
     }
 
     const fileId = linkData.fileId;
-    if (!fileId) {
+    if (typeof fileId !== 'string' || !fileId) {
         return new Response('Invalid temporary link.', {
             status: 500,
             headers: { 'Cache-Control': 'no-store' },
@@ -85,7 +85,7 @@ export async function onRequest(context) {
 
     // 构造内部请求 URL：将 /temp/{token} 改写为 /file/{fileId}
     const originalUrl = new URL(request.url);
-    const fileUrl = new URL(originalUrl.origin + '/file/' + fileId.split('/').join(','));
+    const fileUrl = new URL(originalUrl.origin + '/file/' + encodeURIComponent(fileId.split('/').join(',')));
     // 保留必要的查询参数（如下载标识等），但丢弃 admin 预览标识以防绕过
     for (const [k, v] of originalUrl.searchParams) {
         if (k === 'from') continue;
@@ -104,19 +104,19 @@ export async function onRequest(context) {
     const internalContext = {
         request: internalRequest,
         env,
-        params: { path: fileId.split('/').join(',') },
+        params: { path: encodeURIComponent(fileId.split('/').join(',')) },
         data: {},
         waitUntil: context.waitUntil,
         passThroughOnException: context.passThroughOnException,
         next: () => new Response('Not Found', { status: 404 }),
         url: fileUrl,
         Referer: request.headers.get('Referer'),
-        // 临时链接访问标记：绕过 block/white/白名单域名检查，使用公开缓存
+        // Every request must re-check the bearer token after expiry/revocation.
         fileAccess: {
             isTempLinkAccess: true,
             isAdminPreview: false,
             adminAuthResult: { authorized: false, authType: null },
-            cacheControl: FILE_CACHE_CONTROL.PUBLIC,
+            cacheControl: FILE_CACHE_CONTROL.NO_STORE,
         },
         // 跳过 securityConfig 中的域名白名单检查
         skipDomainCheck: true,

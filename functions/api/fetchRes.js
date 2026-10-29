@@ -1,165 +1,135 @@
-import { dualAuthCheck } from '../utils/auth/dualAuth.js';
+import { userAuthCheck, UnauthorizedResponse } from '../utils/auth/userAuth.js';
+import { buildPreflightResponse } from '../utils/cors.js';
+import { createJsonResponse } from '../utils/response.js';
+import { validateHttpUrl } from '../utils/urlSafety.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../utils/requestLimits.js';
 
-// 代理限制
-const FETCH_TIMEOUT_MS = 10000;              // 上游请求超时
-const MAX_RESPONSE_BYTES = 25 * 1024 * 1024; // 最大代理响应体，25MB
-const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
+const FETCH_TIMEOUT_MS = 10000;
+const MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
+const MAX_REDIRECTS = 3;
 
-// 私有/保留/回环/链路本地地址，禁止代理访问以防 SSRF
-function isBlockedHost(hostname) {
-    const host = hostname.toLowerCase().replace(/^\[|\]$/g, ''); // 去掉 IPv6 方括号
-
-    if (host === 'localhost' || host === 'ip6-localhost' || host === 'ip6-loopback') return true;
-    if (host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return true;
-    if (host === '0.0.0.0' || host === '::' || host === '::1') return true;
-
-    // 云元数据服务主机名（GCP 元数据可按域名访问，不只 169.254.169.254）
-    if (host === 'metadata.google.internal' || host === 'metadata.goog') return true;
-
-    // IPv4 私有/保留段
-    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (ipv4) {
-        const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
-        if (a === 10) return true;                          // 10.0.0.0/8
-        if (a === 127) return true;                         // 127.0.0.0/8 回环
-        if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
-        if (a === 192 && b === 168) return true;            // 192.168.0.0/16
-        if (a === 169 && b === 254) return true;            // 169.254.0.0/16 链路本地（含云元数据）
-        if (a === 100 && b >= 64 && b <= 127) return true;  // 100.64.0.0/10 CGNAT
-        if (a === 0) return true;                           // 0.0.0.0/8
-        if (a >= 224) return true;                          // 组播/保留段
-    }
-
-    // IPv6 唯一本地/链路本地
-    if (host.startsWith('fc') || host.startsWith('fd')) return true; // fc00::/7
-    if (host.startsWith('fe80')) return true;                        // 链路本地
-
-    // IPv4-mapped IPv6 (::ffff:a.b.c.d) 递归按 IPv4 规则检查
-    const mapped = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-    if (mapped) return isBlockedHost(mapped[1]);
-
-    return false;
+function proxyError(error, status) {
+    return createJsonResponse({ success: false, error }, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-function validateTargetUrl(rawUrl) {
-    let parsed;
-    try {
-        parsed = new URL(rawUrl);
-    } catch {
-        return { ok: false, error: 'Invalid URL' };
-    }
-    if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
-        return { ok: false, error: 'Only http/https URLs are allowed' };
-    }
-    if (isBlockedHost(parsed.hostname)) {
-        return { ok: false, error: 'Target host is not allowed' };
-    }
-    return { ok: true, parsed };
-}
-
-// 用计数 TransformStream 限制响应体大小，超限即中止
-function limitBodySize(body, maxBytes) {
+/** Keep the timeout alive through body consumption; cancellation reaches the upstream reader. */
+export function createBoundedProxyBody(body, maxBytes, abortController, timeout) {
+    const reader = body.getReader();
     let received = 0;
-    return body.pipeThrough(new TransformStream({
-        transform(chunk, controller) {
-            received += chunk.byteLength;
-            if (received > maxBytes) {
-                controller.error(new Error('Response too large'));
-                return;
+    let finished = false;
+    let destination;
+    const finish = error => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        abortController.signal.removeEventListener('abort', onAbort);
+        if (error) destination.error(error);
+        else destination.close();
+    };
+    const onAbort = () => {
+        finish(abortController.signal.reason || new Error('Proxy request timed out'));
+        reader.cancel().catch(() => {});
+    };
+    return new ReadableStream({
+        start(controller) {
+            destination = controller;
+            abortController.signal.addEventListener('abort', onAbort, { once: true });
+            if (abortController.signal.aborted) onAbort();
+        },
+        async pull() {
+            if (finished) return;
+            try {
+                const { done, value } = await reader.read();
+                if (finished) return;
+                if (done) return finish();
+                received += value.byteLength;
+                if (received > maxBytes) {
+                    finish(new Error('Proxy response is too large'));
+                    abortController.abort();
+                    reader.cancel().catch(() => {});
+                    return;
+                }
+                destination.enqueue(value);
+            } catch (error) {
+                finish(error);
             }
-            controller.enqueue(chunk);
-        }
-    }));
+        },
+        cancel(reason) {
+            finished = true;
+            clearTimeout(timeout);
+            abortController.signal.removeEventListener('abort', onAbort);
+            abortController.abort(reason);
+            return reader.cancel(reason).catch(() => {});
+        },
+    });
 }
 
 export async function onRequest(context) {
     const { request, env } = context;
-    const requestUrl = new URL(request.url);
-
-    const { authorized } = await dualAuthCheck(env, requestUrl, request);
-    if (!authorized) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+    if (request.method === 'OPTIONS') return buildPreflightResponse({ request, env, methods: 'POST, OPTIONS' });
+    if (request.method !== 'POST') {
+        return createJsonResponse({ error: 'Method Not Allowed' }, {
+            status: 405, headers: { Allow: 'POST, OPTIONS', 'Cache-Control': 'no-store' },
         });
     }
+    const requestUrl = new URL(request.url);
+    if (!await userAuthCheck(env, requestUrl, request, 'upload')) return UnauthorizedResponse('Unauthorized');
 
-    let jsonRequest;
-    try {
-        jsonRequest = await request.json();
-    } catch {
-        return new Response('Invalid request body', { status: 400, headers: { 'Cache-Control': 'no-store' } });
+    let body;
+    try { body = await request.json(); }
+    catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        return proxyError('Invalid request body', 400);
     }
+    if (typeof body?.url !== 'string' || !body.url.trim()) return proxyError('URL is required', 400);
 
-    const targetUrl = jsonRequest.url;
-    if (typeof targetUrl !== 'string' || targetUrl === '') {
-        return new Response('URL is required', { status: 400, headers: { 'Cache-Control': 'no-store' } });
-    }
+    // Workers fetch cannot pin public DNS to a validated address. Only trusted, administrator-owned
+    // hostnames may be allowlisted; a blacklist alone cannot prevent DNS rebinding.
+    const options = { allowedHosts: env.FETCH_ALLOWED_HOSTS, requireAllowlist: true };
+    const validation = validateHttpUrl(body.url, options);
+    if (!validation.ok) return proxyError(validation.error, 400);
 
-    const validation = validateTargetUrl(targetUrl);
-    if (!validation.ok) {
-        return new Response(validation.error, { status: 400, headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    // 超时控制
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    // 手动跟随重定向并对每一跳重新校验，防止通过 302 跳转到内网地址绕过 SSRF 校验
-    const MAX_REDIRECTS = 3;
+    const timeout = setTimeout(() => controller.abort(new Error('Proxy request timed out')), FETCH_TIMEOUT_MS);
     let currentUrl = validation.parsed.toString();
     let response;
     try {
         for (let hop = 0; ; hop++) {
-            response = await fetch(currentUrl, {
-                method: 'GET',
-                redirect: 'manual',
-                signal: controller.signal,
-            });
-
-            // 非重定向响应，结束跟随
-            if (response.status < 300 || response.status >= 400) break;
-
+            response = await fetch(currentUrl, { method: 'GET', redirect: 'manual', signal: controller.signal });
+            if (response.status < 300 || response.status >= 400 || !response.headers.get('Location')) break;
             const location = response.headers.get('Location');
-            if (!location) break; // 无 Location，按普通响应处理
-
+            response.body?.cancel().catch(() => {});
             if (hop >= MAX_REDIRECTS) {
                 clearTimeout(timeout);
-                return new Response('Too many redirects', { status: 502, headers: { 'Cache-Control': 'no-store' } });
+                return proxyError('Too many redirects', 502);
             }
-
-            // 相对跳转基于当前 URL 解析，再次校验协议与目标主机
-            const nextUrl = new URL(location, currentUrl);
-            const hopValidation = validateTargetUrl(nextUrl.toString());
+            const hopValidation = validateHttpUrl(new URL(location, currentUrl).toString(), options);
             if (!hopValidation.ok) {
                 clearTimeout(timeout);
-                return new Response('Redirect target is not allowed', { status: 400, headers: { 'Cache-Control': 'no-store' } });
+                return proxyError('Redirect target is not allowed', 400);
             }
             currentUrl = hopValidation.parsed.toString();
         }
-    } catch (error) {
+    } catch {
         clearTimeout(timeout);
-        return new Response('Failed to fetch target resource', { status: 502, headers: { 'Cache-Control': 'no-store' } });
+        controller.abort();
+        return proxyError('Failed to fetch target resource', 502);
     }
-    clearTimeout(timeout);
-
-    // 预检 Content-Length
-    const contentLength = Number(response.headers.get('Content-Length'));
-    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
-        return new Response('Response too large', { status: 502, headers: { 'Cache-Control': 'no-store' } });
+    const declaredSize = Number(response.headers.get('Content-Length'));
+    if (Number.isFinite(declaredSize) && declaredSize > MAX_RESPONSE_BYTES) {
+        clearTimeout(timeout);
+        controller.abort();
+        response.body?.cancel().catch(() => {});
+        return proxyError('Response is too large', 502);
     }
-
-    // 仅透传安全的响应头，避免回传上游敏感头
-    const outHeaders = new Headers();
-    const contentType = response.headers.get('Content-Type');
-    if (contentType) outHeaders.set('Content-Type', contentType);
-    outHeaders.set('X-Content-Type-Options', 'nosniff');
-    outHeaders.set('Content-Disposition', 'attachment');
-    outHeaders.set('Cache-Control', 'no-store');
-
-    const limitedBody = response.body ? limitBodySize(response.body, MAX_RESPONSE_BYTES) : null;
-    return new Response(limitedBody, {
-        status: response.status,
-        headers: outHeaders,
+    const headers = new Headers({
+        'Content-Type': response.headers.get('Content-Type') || 'application/octet-stream',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Disposition': 'attachment',
+        'Cache-Control': 'no-store',
+    });
+    if (!response.body) clearTimeout(timeout);
+    return new Response(response.body ? createBoundedProxyBody(response.body, MAX_RESPONSE_BYTES, controller, timeout) : null, {
+        status: response.status, headers,
     });
 }

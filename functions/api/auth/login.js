@@ -2,6 +2,7 @@ import { fetchSecurityConfig } from "../../utils/sysConfig.js";
 import { verifyPassword, rehashIfNeeded } from "../../utils/auth/passwordHash.js";
 import { createSession } from "../../utils/auth/sessionManager.js";
 import { getDatabase } from "../../utils/databaseAdapter.js";
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -10,7 +11,11 @@ export async function onRequestPost(context) {
     try {
         jsonRequest = await request.json();
     } catch (error) {
-        return new Response('Invalid request body', { status: 400 });
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        return new Response('Invalid request body', { status: 400, headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (!jsonRequest || typeof jsonRequest !== 'object' || Array.isArray(jsonRequest)) {
+        return new Response('Invalid request body', { status: 400, headers: { 'Cache-Control': 'no-store' } });
     }
     const authCode = jsonRequest.authCode;
 

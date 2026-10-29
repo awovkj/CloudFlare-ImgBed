@@ -274,7 +274,7 @@ async function handleDelete(request, env) {
     const isFolder = path.endsWith('/');
     const cleanPath = isFolder ? path.slice(0, -1) : path;
     
-    const deleteUrl = new URL(`/api/manage/delete/${cleanPath}`, request.url);
+    const deleteUrl = new URL(`/api/manage/delete/${encodeURIComponent(cleanPath)}`, request.url);
     if (isFolder) deleteUrl.searchParams.set('folder', 'true');
 
     try {
@@ -282,16 +282,28 @@ async function handleDelete(request, env) {
             method: 'DELETE',
             headers: await getApiHeaders(env)
         });
-        const result = await response.json();
-        if (result.success) {
+        if (await confirmedDeletion(response)) {
             return new Response(null, { status: 204 }); // No Content
         } else {
-            console.error('Delete API error:', JSON.stringify(result));
-            return new Response(`Deletion failed: ${result.error || 'API error'}`, { status: 500 });
+            return new Response('Deletion failed', { status: 500, headers: { 'Cache-Control': 'no-store' } });
         }
     } catch (error) {
         console.error('Delete operation failed:', error.stack);
-        return new Response(`Internal server error: ${error.message}`, { status: 500 });
+        return new Response('Deletion failed', { status: 500, headers: { 'Cache-Control': 'no-store' } });
+    }
+}
+
+async function confirmedDeletion(response) {
+    if (response.status !== 200) {
+        await response.body?.cancel().catch(() => {});
+        return false;
+    }
+    try {
+        const result = await response.json();
+        return result?.success === true &&
+            (result.failed === undefined || (Array.isArray(result.failed) && result.failed.length === 0));
+    } catch {
+        return false;
     }
 }
 
@@ -415,7 +427,7 @@ async function handleMove(request, env, context) {
                 method: 'DELETE',
                 headers: await getApiHeaders(env)
             });
-            if (!deleteResponse.ok) {
+            if (!await confirmedDeletion(deleteResponse)) {
                 return new Response('Failed to delete existing destination file', { status: 500 });
             }
         } else {
@@ -431,7 +443,7 @@ async function handleMove(request, env, context) {
                     method: 'DELETE',
                     headers: await getApiHeaders(env)
                 });
-                if (!deleteResponse.ok) {
+                if (!await confirmedDeletion(deleteResponse)) {
                     return new Response('Failed to delete existing destination folder', { status: 500 });
                 }
             }

@@ -45,7 +45,7 @@ export function createServerErrorResponse(env, error, { pathname = '', headers =
     const requestId = crypto.randomUUID();
     console.error(`[error] requestId=${requestId} path=${pathname}`, error);
 
-    const payload = { error: 'Internal Server Error', requestId };
+    const payload = { success: false, code: 'INTERNAL_SERVER_ERROR', error: 'Internal Server Error', requestId };
     if (env?.dev_mode === 'true') {
         payload.message = String(error?.message || error);
     }

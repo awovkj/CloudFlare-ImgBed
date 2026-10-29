@@ -65,8 +65,9 @@ function enrichHuggingFaceMetadata(context, sourceMetadata, view) {
     const channel = findConfiguredChannel(context.uploadConfig, 'huggingface', sourceMetadata);
     if (!channel) return;
 
-    if (channel.repo && sourceMetadata.HfFilePath) {
-      view.HfFileUrl = `https://huggingface.co/datasets/${channel.repo}/resolve/main/${sourceMetadata.HfFilePath}`;
+    const repo = sourceMetadata.HfObjectRepo || sourceMetadata.HfRepo || channel.repo;
+    if (repo && sourceMetadata.HfFilePath) {
+      view.HfFileUrl = `https://huggingface.co/datasets/${repo}/resolve/main/${sourceMetadata.HfFilePath}`;
     }
   } catch (error) {
     console.warn('Failed to enrich HuggingFace metadata:', error.message);

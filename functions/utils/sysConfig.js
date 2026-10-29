@@ -176,7 +176,7 @@ export async function fetchOthersConfig(env) {
  */
 export async function resolveHfChannelConfig(env, metadata) {
     const channelName = metadata.ChannelName;
-    const hfRepo = metadata.HfRepo;
+    const hfRepo = metadata.HfObjectRepo || metadata.HfRepo;
 
     try {
         const uploadConfig = await fetchUploadConfig(env);
@@ -186,7 +186,7 @@ export async function resolveHfChannelConfig(env, metadata) {
         if (channelName) {
             const match = hfChannels.find(c => c.name === channelName);
             if (match?.token) {
-                return { token: match.token, repo: match.repo || hfRepo, isPrivate: match.isPrivate || false };
+                return { token: match.token, repo: hfRepo || match.repo, isPrivate: Boolean(metadata.HfObjectPrivate || metadata.HfIsPrivate || match.isPrivate) };
             }
         }
 
@@ -200,7 +200,7 @@ export async function resolveHfChannelConfig(env, metadata) {
 
         // 3. 如果只有一个渠道，直接使用
         if (hfChannels.length === 1 && hfChannels[0].token) {
-            return { token: hfChannels[0].token, repo: hfChannels[0].repo || hfRepo, isPrivate: hfChannels[0].isPrivate || false };
+            return { token: hfChannels[0].token, repo: hfRepo || hfChannels[0].repo, isPrivate: Boolean(metadata.HfObjectPrivate || metadata.HfIsPrivate || hfChannels[0].isPrivate) };
         }
     } catch (error) {
         console.warn('resolveHfChannelConfig: failed to fetch config, falling back to metadata:', error.message);

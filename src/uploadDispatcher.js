@@ -17,6 +17,8 @@
  */
 
 import { onRequest as onUploadRequest } from '../functions/upload/index.js';
+import { buildPreflightResponse } from '../functions/utils/cors.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../functions/utils/requestLimits.js';
 import {
     createRouteUploadIdMismatchResponse,
     dispatchUploadToDurableObject,
@@ -29,6 +31,10 @@ import {
 
 export async function forwardToUploadDO(context) {
     const { request, env } = context;
+
+    if (request.method === 'OPTIONS') {
+        return buildPreflightResponse({ methods: 'GET, POST, OPTIONS', request, env });
+    }
 
     const methodRejection = getUploadRequestMethodRejection(request);
     if (methodRejection) {
@@ -61,6 +67,7 @@ export async function forwardToUploadDO(context) {
         if (isRouteUploadIdMismatchError(error)) {
             return createRouteUploadIdMismatchResponse(error);
         }
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         // 仅 dispatch 前的解析/namespace 错误可安全回退，原始 body 尚未发送。
         console.error('[worker] DO routing failed, falling back to Worker:', error.message);
         return onUploadRequest(context);

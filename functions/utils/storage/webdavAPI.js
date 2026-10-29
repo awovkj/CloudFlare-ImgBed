@@ -91,7 +91,7 @@ export class WebDAVAPI {
             redirect: 'manual',
         });
 
-        if (!isSuccessStatus(response.status) && response.status !== 304) {
+        if (!isSuccessStatus(response.status) && ![304, 412, 416].includes(response.status)) {
             const detail = await safeReadResponseText(response);
             throw new Error(`WebDAV ${options.method || 'GET'} failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`);
         }
@@ -111,11 +111,12 @@ export class WebDAVAPI {
             redirect: 'manual',
         });
 
-        if (!isSuccessStatus(response.status)) {
+        if (![200, 201, 204].includes(response.status)) {
             const detail = await safeReadResponseText(response);
             throw new Error(`WebDAV MOVE failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`);
         }
 
+        await response.body?.cancel().catch(() => {});
         return true;
     }
 
@@ -126,14 +127,13 @@ export class WebDAVAPI {
             redirect: 'manual',
         });
 
-        // DELETE is idempotent for app semantics; a missing remote object should not block DB cleanup.
-        if (response.status === 404) return true;
-
-        if (!isSuccessStatus(response.status)) {
+        // 202 is not committed; 207 can contain per-resource failures. Neither confirms deletion.
+        if (![200, 204, 404].includes(response.status)) {
             const detail = await safeReadResponseText(response);
             throw new Error(`WebDAV DELETE failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`);
         }
 
+        await response.body?.cancel().catch(() => {});
         return true;
     }
 }

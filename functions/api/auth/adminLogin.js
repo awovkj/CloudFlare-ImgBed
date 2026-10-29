@@ -2,6 +2,7 @@ import { fetchSecurityConfig } from "../../utils/sysConfig.js";
 import { verifyPassword, rehashIfNeeded } from "../../utils/auth/passwordHash.js";
 import { createSession } from "../../utils/auth/sessionManager.js";
 import { getDatabase } from "../../utils/databaseAdapter.js";
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -10,6 +11,7 @@ export async function onRequestPost(context) {
     try {
         ({ username, password } = await request.json());
     } catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         return new Response(JSON.stringify({ error: 'Invalid request body' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json' },

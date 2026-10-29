@@ -1,38 +1,33 @@
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { getChunkUploadStatusesWithManifest } from './chunkUpload.js';
+import { userAuthCheck, UnauthorizedResponse } from '../utils/auth/userAuth.js';
+import { validateChunkInitialization } from './chunkProtocol.js';
+import { buildPreflightResponse } from '../utils/cors.js';
+import { createJsonResponse, createServerErrorResponse } from '../utils/response.js';
+
+const json = (body, status = 200) => createJsonResponse(body, { status, headers: { 'Cache-Control': 'no-store' } });
 
 export async function onRequest(context) {
     const { request, env } = context;
     
     if (request.method === 'OPTIONS') {
-        return new Response(null, {
-            status: 204,
-            headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-                'Access-Control-Max-Age': '86400',
-            },
-        });
+        return buildPreflightResponse({ request, env, methods: 'GET, OPTIONS' });
     }
 
     if (request.method !== 'GET') {
-        return new Response('Method Not Allowed', { status: 405 });
+        return createJsonResponse({ error: 'Method Not Allowed' }, {
+            status: 405, headers: { Allow: 'GET, OPTIONS', 'Cache-Control': 'no-store' },
+        });
     }
 
     try {
         const url = new URL(request.url);
+        if (!await userAuthCheck(env, url, request, 'upload')) return UnauthorizedResponse('Unauthorized');
         const uploadId = url.searchParams.get('uploadId');
-        const totalChunks = parseInt(url.searchParams.get('totalChunks')) || 0;
+        const requestedChunks = url.searchParams.get('totalChunks');
 
-        if (!uploadId) {
-            return new Response(JSON.stringify({ 
-                success: false, 
-                error: 'Missing uploadId' 
-            }), { 
-                status: 400,
-                headers: { 'Content-Type': 'application/json' }
-            });
+        if (!uploadId || !/^[A-Za-z0-9_-]{1,128}$/.test(uploadId)) {
+            return json({ success: false, error: 'A valid uploadId is required' }, 400);
         }
 
         const db = getDatabase(env);
@@ -41,29 +36,23 @@ export async function onRequest(context) {
         const sessionData = await db.get(sessionKey);
         
         if (!sessionData) {
-            return new Response(JSON.stringify({ 
+            return json({
                 success: false, 
                 error: 'Upload session not found or expired',
                 uploadedChunks: []
-            }), { 
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
             });
         }
 
         const sessionInfo = JSON.parse(sessionData);
-        const chunks = totalChunks || sessionInfo.totalChunks || 0;
-
-        if (chunks === 0) {
-            return new Response(JSON.stringify({ 
-                success: true, 
-                uploadedChunks: [],
-                sessionInfo
-            }), { 
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
-            });
+        const layout = validateChunkInitialization({ totalChunks: sessionInfo.totalChunks });
+        const incoming = requestedChunks === null ? layout : validateChunkInitialization({ totalChunks: requestedChunks });
+        if (!layout.ok || !incoming.ok || incoming.totalChunks !== layout.totalChunks) {
+            return json({ success: false, error: 'Invalid or mismatched totalChunks' }, 400);
         }
+        if (!Number.isFinite(sessionInfo.expiresAt) || Date.now() >= sessionInfo.expiresAt) {
+            return json({ success: false, error: 'Upload session expired', uploadedChunks: [] }, 410);
+        }
+        const chunks = layout.totalChunks;
 
         const chunkStatuses = await getChunkUploadStatusesWithManifest(env, uploadId, chunks);
         
@@ -75,7 +64,7 @@ export async function onRequest(context) {
             .filter(chunk => ['failed', 'timeout', 'retry_failed'].includes(chunk.status))
             .map(chunk => chunk.index);
 
-        return new Response(JSON.stringify({
+        return json({
             success: true,
             uploadId,
             totalChunks: chunks,
@@ -86,23 +75,9 @@ export async function onRequest(context) {
                 originalFileName: sessionInfo.originalFileName,
                 uploadChannel: sessionInfo.uploadChannel
             }
-        }), {
-            status: 200,
-            headers: { 
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            }
         });
 
     } catch (error) {
-        console.error('Failed to get chunk status:', error);
-        return new Response(JSON.stringify({ 
-            success: false, 
-            error: error.message,
-            uploadedChunks: []
-        }), { 
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        return createServerErrorResponse(env, error, { pathname: '/upload/chunkStatus' });
     }
 }

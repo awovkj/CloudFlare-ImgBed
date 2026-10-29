@@ -5,20 +5,18 @@ import { normalizeWebDAVHeaders } from '../../../utils/storage/webdavAPI.js';
 // （渠道凭据解析、配置加载等），只缓存原始 KV 字符串，配置对象每次重建，
 // 避免调用方（如 fetchUploadConfig 的渠道过滤）修改共享对象造成串扰
 const UPLOAD_SETTINGS_CACHE_TTL_MS = 5000;
-let uploadSettingsCache = {
-    value: null,
-    expiresAt: 0
-};
+const uploadSettingsCache = new WeakMap();
 
 async function getUploadSettingsStr(db) {
-    if (uploadSettingsCache.expiresAt > Date.now()) {
-        return uploadSettingsCache.value;
+    const cached = uploadSettingsCache.get(db);
+    if (cached?.expiresAt > Date.now()) {
+        return cached.value;
     }
     const settingsStr = await db.get('manage@sysConfig@upload');
-    uploadSettingsCache = {
+    uploadSettingsCache.set(db, {
         value: settingsStr,
         expiresAt: Date.now() + UPLOAD_SETTINGS_CACHE_TTL_MS
-    };
+    });
     return settingsStr;
 }
 
@@ -53,7 +51,7 @@ export async function onRequest(context) {
 
         // 写入数据库
         await db.put('manage@sysConfig@upload', JSON.stringify(settings))
-        uploadSettingsCache = { value: null, expiresAt: 0 }
+        uploadSettingsCache.delete(db)
 
         return new Response(JSON.stringify(settings), {
             headers: {

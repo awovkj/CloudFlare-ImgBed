@@ -24,6 +24,20 @@ package.json
 package-lock.json
 .assetsignore
 .gitignore
+dist/
+build/
+coverage/
+frontend-dist/
+*.log
+*.tsbuildinfo
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+tsconfig*.json
+*.md
+**/*.md
 
 
 # 文档
@@ -57,6 +71,7 @@ docs/
 
 # README/文档用截图（仅 README 引用，约 43MB，禁止作为站点资源上传）
 static/readme/
+img/海报.png
 
 # 未被任何页面引用的历史截图
 screenshot-home.png

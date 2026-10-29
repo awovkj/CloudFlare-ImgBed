@@ -1,0 +1,18 @@
+# Local development only. Never copy credentials from examples into production.
+# Set BASIC_USER/BASIC_PASS and AUTH_CODE with strong values before exposing the service.
+# Unconfigured administrator authentication intentionally leaves management APIs open.
+# Production secrets: npx wrangler secret put BASIC_PASS
+
+CORS_ALLOWED_ORIGINS=http://localhost:8788,https://img.example.com
+CORS_ALLOW_CREDENTIALS=false
+
+# Exact trusted hostnames, comma separated. Empty disables the URL-fetch proxy.
+FETCH_ALLOWED_HOSTS=
+# Optional restriction for External redirects; private/reserved IPs are always blocked.
+EXTERNAL_ALLOWED_HOSTS=
+
+# No application upload size, extension or MIME caps are enforced.
+# Cloudflare request/runtime limits and each storage provider's limits still apply.
+UPLOAD_ALLOW_LEGACY_CHUNKS=false
+# Optional migration compatibility for old clients without exact size declarations.
+# New clients send fileSize/chunkSize for integrity checks, not to impose a quota.

@@ -1,5 +1,14 @@
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
-import { createResponse } from '../uploadTools.js';
+import { sanitizeUploadFolder } from '../uploadTools.js';
+import { createJsonResponse, createServerErrorResponse } from '../../utils/response.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
+import { createUploadPolicyResponse } from '../uploadPolicy.js';
+import { fetchUploadConfig } from '../../utils/sysConfig.js';
+import { HuggingFaceAPI } from '../../utils/huggingfaceAPI.js';
+import { getDirectUploadSession, validateDirectUploadSession, validateDirectUploadChannel, ensureDirectMultipartCompletion } from './directUploadSession.js';
+import { MultipartProtocolError, readHfJsonBody, isValidCompletionTarget, validateMultipartOid, validateMultipartParts } from './multipartProtocol.js';
+
+export { isValidCompletionTarget } from './multipartProtocol.js';
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -11,78 +20,48 @@ export async function onRequestPost(context) {
             return UnauthorizedResponse('Unauthorized');
         }
 
+        const fullId = url.searchParams.get('fullId');
+        if (!fullId || fullId.length > 4096 || sanitizeUploadFolder(fullId) !== fullId) {
+            throw new MultipartProtocolError('DIRECT_UPLOAD_SESSION_REQUIRED', 'An issued upload session is required', 409);
+        }
+        const issued = await getDirectUploadSession(env, fullId);
+        const binding = validateDirectUploadSession(issued, { ...issued, fullId });
+        if (!binding.ok) return createUploadPolicyResponse(binding);
+        if (!issued.multipart) {
+            throw new MultipartProtocolError('DIRECT_UPLOAD_SESSION_REQUIRED', 'Request a new multipart upload URL first', 409);
+        }
         const target = url.searchParams.get('target');
-        if (!target) {
-            return createResponse(JSON.stringify({ error: 'Missing target URL' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json' }
-            });
+        if (target !== null) {
+            let parsed;
+            try { parsed = new URL(target); } catch { /* Rejected below. */ }
+            if (!isValidCompletionTarget(parsed) || parsed.href !== issued.multipart.completionUrl) {
+                throw new MultipartProtocolError('MULTIPART_COMPLETION_MISMATCH', 'Completion target does not match the issued upload');
+            }
         }
 
-        let targetUrl;
-        try {
-            targetUrl = new URL(target);
-        } catch {
-            return jsonError('Invalid multipart completion target', 400);
+        const body = await readHfJsonBody(request);
+        validateMultipartOid(body.oid, issued.sha256);
+        for (const [key, value] of Object.entries(body)) {
+            if (key === 'oid' || key === 'parts') continue;
+            const expected = key === 'fullId' ? fullId : issued.multipart.metadata[key];
+            if (expected === undefined || value !== expected) {
+                throw new MultipartProtocolError('MULTIPART_COMPLETION_MISMATCH', 'Completion metadata does not match the issued upload');
+            }
         }
-
-        if (!isValidCompletionTarget(targetUrl)) {
-            return jsonError('Invalid multipart completion target', 400);
-        }
-
-        const body = await request.text();
-        try {
-            validateMultipartBody(body);
-        } catch (error) {
-            return jsonError(error.message, 400);
-        }
-
-        const completeResponse = await fetch(targetUrl.toString(), {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/vnd.git-lfs+json',
-                'Content-Type': 'application/vnd.git-lfs+json'
-            },
-            body
-        });
-
-        const responseText = await completeResponse.text();
-        if (!completeResponse.ok) {
-            const contentType = completeResponse.headers.get('Content-Type') || 'application/json';
-            const errorBody = responseText || JSON.stringify({
-                error: `Multipart complete failed: ${completeResponse.status}`
-            });
-            return createResponse(errorBody, {
-                status: completeResponse.status,
-                headers: { 'Content-Type': contentType }
-            });
-        }
-
-        return createResponse(responseText || JSON.stringify({ success: true }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        const uploadConfig = await fetchUploadConfig(env);
+        const channel = uploadConfig.huggingface?.channels?.find(item => item.name === issued.channelName);
+        const channelBinding = validateDirectUploadChannel(issued, channel);
+        if (!channelBinding.ok) return createUploadPolicyResponse(channelBinding);
+        if (!channel.token) throw new MultipartProtocolError('DIRECT_UPLOAD_CHANNEL_CHANGED', 'The issued upload channel is no longer available', 409);
+        const provider = new HuggingFaceAPI(channel.token, channel.repo, channel.isPrivate || false);
+        await ensureDirectMultipartCompletion(env, issued, body.parts, provider);
+        return createJsonResponse({ success: true, fullId }, { headers: { 'Cache-Control': 'no-store' } });
 
     } catch (error) {
-        console.error('completeMultipart error:', error.message);
-        return createResponse(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        if (error instanceof MultipartProtocolError) return createUploadPolicyResponse(error);
+        return createServerErrorResponse(env, error, { pathname: '/upload/huggingface/completeMultipart' });
     }
-}
-
-function jsonError(message, status) {
-    return createResponse(JSON.stringify({ error: message }), {
-        status,
-        headers: { 'Content-Type': 'application/json' }
-    });
-}
-
-export function isValidCompletionTarget(targetUrl) {
-    return targetUrl.protocol === 'https:' &&
-        targetUrl.hostname === 'huggingface.co' &&
-        targetUrl.pathname === '/api/complete_multipart';
 }
 
 export function validateMultipartBody(body) {
@@ -93,19 +72,5 @@ export function validateMultipartBody(body) {
         throw new Error('Invalid multipart completion body');
     }
 
-    if (!parsed || typeof parsed.oid !== 'string' || !Array.isArray(parsed.parts)) {
-        throw new Error('Invalid multipart completion payload');
-    }
-
-    const hasInvalidPart = parsed.parts.some(part =>
-        !part ||
-        !Number.isInteger(Number(part.partNumber)) ||
-        Number(part.partNumber) <= 0 ||
-        typeof part.etag !== 'string' ||
-        part.etag.length === 0
-    );
-
-    if (hasInvalidPart) {
-        throw new Error('Invalid multipart parts');
-    }
+    return validateMultipartParts(parsed?.oid, parsed?.parts);
 }

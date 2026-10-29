@@ -10,6 +10,7 @@ const SENSITIVE_METADATA_KEYS = [
 ];
 
 const CONFIG_DERIVED_METADATA_KEYS = [
+  // HfObjectRepo/HfObjectPrivate are immutable object identity, not credential/config copies.
   'S3Location',
   'S3Endpoint',
   'S3PathStyle',

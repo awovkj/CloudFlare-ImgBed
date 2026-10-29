@@ -14,6 +14,11 @@ import { HuggingFaceAPI } from '../../utils/huggingfaceAPI.js';
 import { fetchUploadConfig } from '../../utils/sysConfig.js';
 import { userAuthCheck, UnauthorizedResponse } from '../../utils/auth/userAuth.js';
 import { buildUniqueFileId, getUploadIp, isBlockedUploadIp, createResponse } from '../uploadTools.js';
+import { createUploadPolicyResponse, validateUploadFile } from '../uploadPolicy.js';
+import { createJsonResponse, createServerErrorResponse } from '../../utils/response.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
+import { issueDirectUploadSession } from './directUploadSession.js';
+import { extractIssuedMultipartDescriptor, readHfJsonBody, MultipartProtocolError } from './multipartProtocol.js';
 
 export async function onRequestPost(context) {
     const { request, env } = context;
@@ -36,9 +41,11 @@ export async function onRequestPost(context) {
             });
         }
 
-        const body = await request.json();
+        const body = await readHfJsonBody(request, 64 * 1024);
         const { fileSize, fileName, fileType, sha256, fileSample, channelName, uploadNameType, uploadFolder } = body;
-        const normalizedFileType = fileType || 'application/octet-stream';
+        const policy = validateUploadFile({ fileSize, fileName, fileType }, env, { chunked: true });
+        if (!policy.ok) return createUploadPolicyResponse(policy);
+        const normalizedFileType = policy.fileType;
 
         if (!fileSize || !fileName || !sha256 || !fileSample) {
             return createResponse(JSON.stringify({
@@ -46,6 +53,12 @@ export async function onRequestPost(context) {
             }), {
                 status: 400,
                 headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(sha256)
+            || typeof fileSample !== 'string' || fileSample.length > 4096 || !/^[a-z0-9+/]+={0,2}$/i.test(fileSample)) {
+            return createJsonResponse({ success: false, error: 'Invalid SHA256 or file sample' }, {
+                status: 400, headers: { 'Cache-Control': 'no-store' },
             });
         }
 
@@ -87,19 +100,29 @@ export async function onRequestPost(context) {
         }
 
         // 使用统一的文件命名函数生成文件ID
-        const fullId = await buildUniqueFileId(context, fileName, normalizedFileType);
+        const candidateId = await buildUniqueFileId(context, fileName, normalizedFileType);
 
         // 生成唯一标识符前缀（UUID格式），加在文件名前面
         const uniquePrefix = crypto.randomUUID();
-        const lastSlashIndex = fullId.lastIndexOf('/');
-        const filePath = lastSlashIndex === -1
-            ? `${uniquePrefix}_${fullId}`
-            : `${fullId.substring(0, lastSlashIndex + 1)}${uniquePrefix}_${fullId.substring(lastSlashIndex + 1)}`;
+        const lastSlashIndex = candidateId.lastIndexOf('/');
+        // Pending uploads do not occupy final KV keys. Randomize the public ID too,
+        // so concurrent origin-name uploads cannot overwrite each other's session or file.
+        const fullId = lastSlashIndex === -1
+            ? `${uniquePrefix}_${candidateId}`
+            : `${candidateId.substring(0, lastSlashIndex + 1)}${uniquePrefix}_${candidateId.substring(lastSlashIndex + 1)}`;
+        const filePath = fullId;
 
         // 获取 LFS 上传信息
         const huggingfaceAPI = new HuggingFaceAPI(hfChannel.token, hfChannel.repo, hfChannel.isPrivate || false);
-        const uploadInfo = await huggingfaceAPI.getLfsUploadInfo(fileSize, filePath, sha256, fileSample);
-        rewriteMultipartCompletionUrl(url, uploadInfo);
+        const uploadInfo = await huggingfaceAPI.getLfsUploadInfo(Number(fileSize), filePath, sha256.toLowerCase(), fileSample);
+        const multipart = extractIssuedMultipartDescriptor(uploadInfo, Number(fileSize), sha256.toLowerCase());
+        await issueDirectUploadSession(env, {
+            fullId, filePath, fileName, fileType: normalizedFileType,
+            fileSize: Number(fileSize), sha256: sha256.toLowerCase(), channelName: hfChannel.name,
+            repo: hfChannel.repo, isPrivate: Boolean(hfChannel.isPrivate),
+            multipart, uploadMode: multipart ? 'multipart' : uploadInfo.alreadyExists ? 'already-exists' : 'basic',
+        });
+        rewriteMultipartCompletionUrl(url, uploadInfo, fullId);
 
         // 返回上传信息
         return createResponse(JSON.stringify({
@@ -112,24 +135,21 @@ export async function onRequestPost(context) {
             ...uploadInfo
         }), {
             status: 200,
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
         });
 
     } catch (error) {
-        console.error('getUploadUrl error:', error.message);
-        return createResponse(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
+        if (error instanceof MultipartProtocolError && error.code === 'INVALID_REQUEST_BODY') return createUploadPolicyResponse(error);
+        return createServerErrorResponse(env, error, { pathname: '/upload/huggingface/getUploadUrl' });
     }
 }
 
-function rewriteMultipartCompletionUrl(requestUrl, uploadInfo) {
+function rewriteMultipartCompletionUrl(requestUrl, uploadInfo, fullId) {
     const uploadAction = uploadInfo?.uploadAction;
     if (!uploadAction?.header?.chunk_size || !uploadAction.href) {
         return;
     }
 
-    const originalCompletionUrl = uploadAction.href;
-    uploadAction.href = `${requestUrl.origin}/upload/huggingface/completeMultipart?target=${encodeURIComponent(originalCompletionUrl)}`;
+    uploadAction.href = `${requestUrl.origin}/upload/huggingface/completeMultipart?fullId=${encodeURIComponent(fullId)}`;
 }

@@ -1,3 +1,6 @@
+import { normalizeMime } from '../utils/fileTypes.js';
+export { resolveContentType } from '../utils/fileTypes.js';
+
 /* ======== 文件读取工具函数 ======== */
 
 /**
@@ -106,8 +109,8 @@ let _domainRegexCache = null;
 let _domainRegexCacheKey = null;
 
 export const FILE_CACHE_CONTROL = {
-    PUBLIC: 'public, max-age=2592000',
-    PRIVATE: 'private, max-age=86400',
+    PUBLIC: 'public, max-age=300, s-maxage=3600',
+    PRIVATE: 'private, max-age=300',
     NO_STORE: 'private, no-store, max-age=0',
 };
 
@@ -180,149 +183,8 @@ const FORCE_DOWNLOAD_TYPES = new Set([
     'text/html', 'application/xhtml+xml',
     'application/javascript', 'text/javascript', 'application/x-javascript',
     'text/ecmascript', 'application/ecmascript',
+    'text/css',
 ]);
-
-/**
- * 扩展名 → 规范 MIME 映射。
- *
- * 为什么以扩展名而不是 metadata.FileType 为准：
- *   FileType 存的是上传时浏览器给出的 file.type，可靠性很差 ——
- *   分片上传缺省写入 'application/octet-stream'（chunkUpload.js / chunkMerge.js），
- *   HuggingFace/WebDAV 等通道可能写入空串，部分 Windows 浏览器把 .docx 报成
- *   'application/x-zip-compressed'。而响应始终带 X-Content-Type-Options: nosniff，
- *   Content-Type 一旦是 octet-stream，浏览器就只会下载，PDF/文本无法在线预览
- *   ——即"文档预览点开后仍然是下载"的根因。
- *
- * 安全取向：扩展名比上传时的 MIME 更可信（后者是 multipart 里的用户可控字段），
- *   且这里对脚本/样式类源码统一映射为 text/plain，配合 nosniff 后浏览器
- *   拒绝把它们当 script/stylesheet 加载，比映射成 text/javascript 更安全，
- *   同时又能直接在浏览器里以纯文本预览。
- */
-const TEXT_PLAIN = 'text/plain; charset=utf-8';
-const EXT_MIME_MAP = {
-    // ── 文档 ──
-    pdf: 'application/pdf',
-    doc: 'application/msword',
-    dot: 'application/msword',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    xls: 'application/vnd.ms-excel',
-    xlt: 'application/vnd.ms-excel',
-    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ppt: 'application/vnd.ms-powerpoint',
-    pps: 'application/vnd.ms-powerpoint',
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    rtf: 'application/rtf',
-    odt: 'application/vnd.oasis.opendocument.text',
-    ods: 'application/vnd.oasis.opendocument.spreadsheet',
-    odp: 'application/vnd.oasis.opendocument.presentation',
-    // epub 的规范 MIME 含 "zip" 子串，会被 isArchiveType 判为压缩包而强制下载；
-    // 浏览器本身也无法内联渲染 epub，attachment 正是期望结果。
-    epub: 'application/epub+zip',
-
-    // ── 纯文本 / 结构化文本 ──
-    // md 故意映射为 text/plain 而非 text/markdown：浏览器不渲染 text/markdown
-    // 会直接下载，text/plain 才能直接看（与 GitHub raw 的做法一致）。
-    txt: TEXT_PLAIN, text: TEXT_PLAIN, log: TEXT_PLAIN, md: TEXT_PLAIN,
-    markdown: TEXT_PLAIN, mdown: TEXT_PLAIN, rst: TEXT_PLAIN, srt: TEXT_PLAIN,
-    vtt: 'text/vtt; charset=utf-8',
-    json: 'application/json; charset=utf-8',
-    jsonl: TEXT_PLAIN, ndjson: TEXT_PLAIN, json5: TEXT_PLAIN,
-    // xml/svg 走 SANDBOX_INLINE_TYPES：保留 inline，但加沙箱 CSP 中和脚本
-    xml: 'application/xml; charset=utf-8',
-    yml: TEXT_PLAIN, yaml: TEXT_PLAIN, toml: TEXT_PLAIN, ini: TEXT_PLAIN,
-    conf: TEXT_PLAIN, cfg: TEXT_PLAIN, env: TEXT_PLAIN, properties: TEXT_PLAIN,
-    csv: 'text/csv; charset=utf-8',
-    tsv: 'text/tab-separated-values; charset=utf-8',
-
-    // ── 源码：统一 text/plain（配合 nosniff 既可预览又不可被当作脚本加载）──
-    js: TEXT_PLAIN, mjs: TEXT_PLAIN, cjs: TEXT_PLAIN, jsx: TEXT_PLAIN,
-    tsx: TEXT_PLAIN, vue: TEXT_PLAIN, css: TEXT_PLAIN, scss: TEXT_PLAIN,
-    less: TEXT_PLAIN, sass: TEXT_PLAIN, py: TEXT_PLAIN, java: TEXT_PLAIN,
-    kt: TEXT_PLAIN, c: TEXT_PLAIN, h: TEXT_PLAIN, cpp: TEXT_PLAIN,
-    hpp: TEXT_PLAIN, cc: TEXT_PLAIN, cs: TEXT_PLAIN, go: TEXT_PLAIN,
-    rs: TEXT_PLAIN, rb: TEXT_PLAIN, php: TEXT_PLAIN, pl: TEXT_PLAIN,
-    lua: TEXT_PLAIN, swift: TEXT_PLAIN, sh: TEXT_PLAIN, bash: TEXT_PLAIN,
-    zsh: TEXT_PLAIN, bat: TEXT_PLAIN, cmd: TEXT_PLAIN, ps1: TEXT_PLAIN,
-    sql: TEXT_PLAIN, dockerfile: TEXT_PLAIN, gradle: TEXT_PLAIN,
-    patch: TEXT_PLAIN, diff: TEXT_PLAIN,
-
-    // ── 页面型活跃内容：命中 FORCE_DOWNLOAD_TYPES → attachment ──
-    html: 'text/html; charset=utf-8',
-    htm: 'text/html; charset=utf-8',
-    xhtml: 'application/xhtml+xml; charset=utf-8',
-
-    // ── 图片 ──
-    png: 'image/png', apng: 'image/apng', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    jpe: 'image/jpeg', jfif: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
-    bmp: 'image/bmp', ico: 'image/x-icon', cur: 'image/x-icon',
-    avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
-    tif: 'image/tiff', tiff: 'image/tiff', svg: 'image/svg+xml',
-
-    // ── 音频 ──
-    mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac', aac: 'audio/aac',
-    m4a: 'audio/mp4', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
-    wma: 'audio/x-ms-wma', mid: 'audio/midi', midi: 'audio/midi',
-    amr: 'audio/amr', ape: 'audio/x-ape',
-
-    // ── 视频（.ts 有歧义：既可能是 TypeScript 也可能是 MPEG-TS，故不收录）──
-    mp4: 'video/mp4', m4v: 'video/x-m4v', webm: 'video/webm', ogv: 'video/ogg',
-    mov: 'video/quicktime', avi: 'video/x-msvideo', mkv: 'video/x-matroska',
-    flv: 'video/x-flv', wmv: 'video/x-ms-wmv', mpg: 'video/mpeg',
-    mpeg: 'video/mpeg', '3gp': 'video/3gpp', mts: 'video/mp2t', m2ts: 'video/mp2t',
-
-    // ── 压缩包：命中 isArchiveType → attachment ──
-    zip: 'application/zip', rar: 'application/x-rar-compressed',
-    '7z': 'application/x-7z-compressed', tar: 'application/x-tar',
-    gz: 'application/gzip', tgz: 'application/gzip',
-    bz2: 'application/x-bzip2', xz: 'application/x-xz',
-    zst: 'application/zstd',
-
-    // ── 二进制安装包/镜像：明确 octet-stream，交给浏览器下载 ──
-    exe: 'application/octet-stream', msi: 'application/octet-stream',
-    apk: 'application/vnd.android.package-archive',
-    dmg: 'application/octet-stream', iso: 'application/octet-stream',
-    deb: 'application/octet-stream', rpm: 'application/octet-stream',
-    jar: 'application/java-archive', bin: 'application/octet-stream',
-
-    // ── 字体 ──
-    woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
-    eot: 'application/vnd.ms-fontobject',
-};
-
-// 视为"没有有效类型"的 MIME：出现这些值时优先用扩展名推断
-const GENERIC_MIME_TYPES = new Set([
-    '', 'application/octet-stream', 'binary/octet-stream', 'application/binary',
-    'application/download', 'application/force-download', 'application/x-download',
-    'application/unknown', '*/*', 'unknown', 'null', 'undefined',
-]);
-
-function extractExtension(name) {
-    if (!name) return '';
-    const base = String(name).split('/').pop().split('\\').pop();
-    const dot = base.lastIndexOf('.');
-    if (dot <= 0 || dot === base.length - 1) return '';
-    return base.slice(dot + 1).toLowerCase();
-}
-
-/**
- * 解析响应用的 Content-Type。
- * 优先级：已知扩展名 → 上传时记录的具体 MIME → application/octet-stream
- *
- * @param {string} fileName - metadata.FileName
- * @param {string|null} storedType - metadata.FileType
- * @param {string} [fallbackName] - 文件 ID，FileName 无扩展名时兜底
- * @returns {string} 可直接写入 Content-Type 的值
- */
-export function resolveContentType(fileName, storedType, fallbackName = '') {
-    const ext = extractExtension(fileName) || extractExtension(fallbackName);
-    const mapped = ext ? EXT_MIME_MAP[ext] : undefined;
-    if (mapped) return mapped;
-
-    const stored = typeof storedType === 'string' ? storedType.trim() : '';
-    if (stored && !GENERIC_MIME_TYPES.has(normalizeMime(stored))) return stored;
-
-    return 'application/octet-stream';
-}
 
 /**
  * 解析请求中显式的 Content-Disposition 意图。
@@ -356,13 +218,8 @@ function isEnabledFlag(value) {
 // 可内联但需沙箱化的活跃内容：SVG/XML 直接导航时可能执行脚本，
 // 保留 inline 展示（图标/图片场景），用 CSP sandbox + script-src 'none' 中和脚本。
 const SANDBOX_INLINE_TYPES = new Set([
-    'image/svg+xml', 'text/xml', 'application/xml',
+    'image/svg+xml', 'text/xml', 'application/xml', 'text/xsl',
 ]);
-
-function normalizeMime(fileType) {
-    if (!fileType) return '';
-    return fileType.split(';')[0].trim().toLowerCase();
-}
 
 // 判断是否为压缩包文件 — 使用 Set O(1) 查找替代多次 includes()
 const ARCHIVE_TYPES = new Set([
@@ -402,12 +259,16 @@ export function setCommonHeaders(headers, encodedFileName, fileType, RefererOrCa
     // 禁止 MIME 嗅探，防止被当作可执行内容
     headers.set('X-Content-Type-Options', 'nosniff');
     // 对可内联的活跃内容加沙箱 CSP，直接导航时中和脚本执行（不影响 <img> 嵌入展示）
-    if (SANDBOX_INLINE_TYPES.has(mime)) {
+    if (SANDBOX_INLINE_TYPES.has(mime) || mime.endsWith('+xml') || mime.endsWith('/xml')) {
         headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     }
     headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Disposition, ETag, Last-Modified');
     headers.set('Accept-Ranges', 'bytes');
-    headers.set('Vary', 'Range');
+    const vary = headers.get('Vary');
+    if (vary !== '*' && !vary?.split(',').some(value => value.trim().toLowerCase() === 'range')) {
+        headers.set('Vary', vary ? `${vary}, Range` : 'Range');
+    }
 
     if (fileType) {
         headers.set('Content-Type', fileType);
@@ -462,11 +323,13 @@ export function handleHeadRequest(headers, etag = null) {
 
 // 转发到第三方上游（Telegram/Telegraph/Discord 等）时，仅保留必要的条件/范围请求头，
 // 绝不透传 Cookie、Authorization、authCode 等凭据，防止泄露给第三方。
-const FORWARDABLE_UPSTREAM_HEADERS = ['range', 'if-none-match', 'if-modified-since', 'accept', 'accept-encoding'];
+const FORWARDABLE_UPSTREAM_HEADERS = ['range', 'if-range', 'if-match', 'if-none-match', 'if-modified-since', 'if-unmodified-since', 'accept'];
 
-function buildUpstreamHeaders(request) {
-    const headers = new Headers();
+export function buildUpstreamHeaders(request) {
+    // Identity encoding keeps Range and Content-Length in original file bytes.
+    const headers = new Headers({ 'Accept-Encoding': 'identity' });
     for (const name of FORWARDABLE_UPSTREAM_HEADERS) {
+        if (request.method === 'HEAD' && (name === 'range' || name === 'if-range')) continue;
         const value = request.headers.get(name);
         if (value) headers.set(name, value);
     }
@@ -486,7 +349,7 @@ export async function getFileContent(request, targetUrl, max_retries = 2) {
                 headers: upstreamHeaders,
                 body: forwardBody,
             });
-            if (response.ok || response.status === 304) {
+            if (response.ok || response.status === 304 || response.status === 412 || response.status === 416) {
                 return response;
             } else if (response.status === 404) {
                 return new Response('Error: Image Not Found', { status: 404 });
@@ -512,7 +375,7 @@ export function isTgChannel(imgRecord) {
 
 // 图片可访问性检查
 export async function returnWithCheck(context, imgRecord) {
-    const { url, securityConfig, request } = context;
+    const { url, securityConfig } = context;
     const whiteListMode = securityConfig.access.whiteListMode;
     // ?from=admin 的预览必须通过管理端鉴权；不再信任可伪造的 Referer 头
     const isAdminPreview = context.fileAccess?.isAdminPreview === true;
@@ -522,47 +385,31 @@ export async function returnWithCheck(context, imgRecord) {
 
     const response = new Response('success', { status: 200 });
 
-    // 判断管理端预览权限是否有效（需通过会话鉴权或同源 Referer 兜底）。
-    // 鉴权失败时降级为普通访问，而非返回 401 —— 避免 IDM 等下载工具拦截带
-    // ?from=admin 的链接时，因不携带 Cookie/Referer 触发账号密码弹窗。
-    // from=admin 是可伪造的 URL 参数，真正的鉴权始终依赖会话 Cookie，
-    // 降级后普通文件正常下载，受限文件返回拦截图片（管理员可通过浏览器直接下载）。
-    let adminPreviewEffective = false;
-    if (isAdminPreview) {
-        if (adminAuthorized) {
-            adminPreviewEffective = true;
-        } else {
-            // 兜底：会话鉴权未通过时（如 cookie 未随 <img> 请求发送、会话过期、
-            // 或 authenticate 内部 fetchSecurityConfig 抛错被吞掉），
-            // 回退到同源 Referer 校验，保证后台预览可用，同时排除公开图库页面。
-            const referer = request?.headers.get('Referer');
-            if (referer && isSameOrigin(referer, url.origin) && !isFromPublicBrowse(referer, url.origin)) {
-                adminPreviewEffective = true;
-            }
-            // 鉴权失败且 Referer 不通过：降级为普通访问，继续走后续 block/white 检查
-        }
-    }
+    // Referer is a caller-controlled header, never an administrator credential.
+    // Unauthenticated admin links fall back to ordinary file access rules.
+    const adminPreviewEffective = isAdminPreview && adminAuthorized;
 
     const record = imgRecord;
     if (record.metadata === null) {
         if (context.fileAccess) {
-            context.fileAccess.cacheControl = (adminPreviewEffective || isTempLinkAccess) ? FILE_CACHE_CONTROL.PUBLIC : FILE_CACHE_CONTROL.PUBLIC;
+            context.fileAccess.cacheControl = (adminPreviewEffective || isTempLinkAccess)
+                ? FILE_CACHE_CONTROL.NO_STORE : FILE_CACHE_CONTROL.PUBLIC;
         }
         return response;
     }
 
-    // 已鉴权的管理端预览：可查看 Block/adult/白名单外文件，但响应仅私有缓存
+    // Access-controlled responses must be checked again after logout/revocation.
     if (adminPreviewEffective) {
         if (context.fileAccess) {
-            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PRIVATE;
+            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.NO_STORE;
         }
         return response;
     }
 
-    // 临时链接访问：绕过 block/white/白名单模式检查，使用公开缓存
+    // A temporary token must not outlive its expiry in a browser or edge cache.
     if (isTempLinkAccess) {
         if (context.fileAccess) {
-            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PUBLIC;
+            context.fileAccess.cacheControl = FILE_CACHE_CONTROL.NO_STORE;
         }
         return response;
     }
@@ -643,7 +490,7 @@ export async function returnBlockImg(url) {
             status: 302,
             headers: {
                 "Location": url.origin + "/blockimg",
-                "Cache-Control": "public, max-age=86400"
+                "Cache-Control": FILE_CACHE_CONTROL.NO_STORE
             }
         })
     } else {
@@ -652,7 +499,7 @@ export async function returnBlockImg(url) {
             headers: {
                 "Content-Type": "image/png",
                 "Content-Disposition": "inline",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": FILE_CACHE_CONTROL.NO_STORE,
             },
         });
     }
@@ -665,7 +512,7 @@ export async function returnWhiteListImg(url) {
             status: 302,
             headers: {
                 "Location": url.origin + "/whiteliston",
-                "Cache-Control": "public, max-age=86400"
+                "Cache-Control": FILE_CACHE_CONTROL.NO_STORE
             }
         })
     } else {
@@ -674,7 +521,7 @@ export async function returnWhiteListImg(url) {
             headers: {
                 "Content-Type": "image/png",
                 "Content-Disposition": "inline",
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": FILE_CACHE_CONTROL.NO_STORE,
             },
         });
     }

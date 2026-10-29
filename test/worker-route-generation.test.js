@@ -56,7 +56,8 @@ describe('worker route generation', () => {
     const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
     assert.equal(pkg.scripts['ci-test'], 'npm test');
     assert.equal(pkg.scripts['verify:worker-routes'], 'node deploy/worker/generate-routes.js --check');
-    assert.equal(pkg.scripts.test, 'npm run verify:worker-routes && mocha');
+    assert.equal(pkg.scripts.test, 'npm run verify:worker-routes && npm run typecheck && mocha');
+    assert.equal(pkg.scripts.typecheck, 'tsc -p tsconfig.audit.json');
     assert.equal(pkg.scripts.check, 'npm test');
   });
 });

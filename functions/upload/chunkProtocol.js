@@ -1,9 +1,15 @@
 export const MAX_MULTIPART_CHUNKS = 10000;
 
+function normalizeInteger(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return NaN;
+}
+
 function normalizeOptionalPositiveInteger(value, code) {
   if (value === undefined || value === null) return { ok: true };
 
-  const normalized = Number(value);
+  const normalized = normalizeInteger(value);
   if (!Number.isSafeInteger(normalized) || normalized < 1) {
     return { ok: false, code };
   }
@@ -12,7 +18,7 @@ function normalizeOptionalPositiveInteger(value, code) {
 }
 
 export function validateChunkInitialization(input) {
-  const totalChunks = Number(input?.totalChunks);
+  const totalChunks = normalizeInteger(input?.totalChunks);
   if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_MULTIPART_CHUNKS) {
     return { ok: false, code: 'INVALID_TOTAL_CHUNKS' };
   }
@@ -44,7 +50,7 @@ export function validateChunkRequest(input) {
   const totalChunksResult = validateChunkInitialization({ totalChunks: input?.totalChunks });
   if (!totalChunksResult.ok) return totalChunksResult;
 
-  const chunkIndex = Number(input?.chunkIndex);
+  const chunkIndex = normalizeInteger(input?.chunkIndex);
   const { totalChunks } = totalChunksResult;
   if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= totalChunks) {
     return { ok: false, code: 'INVALID_CHUNK_INDEX' };

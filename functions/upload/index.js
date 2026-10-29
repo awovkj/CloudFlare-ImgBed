@@ -16,6 +16,9 @@ import { getDatabase } from '../utils/databaseAdapter.js';
 import { buildUploadResults, createUploadJsonResponse, getNormalizedUploadFolder, resolveUploadChannel } from './uploadShared.js';
 import { applyChatTransferMetadata, isChatRequestFromUrl, isChatUploadChannel } from '../utils/chat.js';
 import { cleanPersistedMetadataInPlace } from '../utils/metadata/metadataSecurity.js';
+import { createUploadPolicyResponse, validateUploadFile } from './uploadPolicy.js';
+import { createServerErrorResponse } from '../utils/response.js';
+import { validateHttpUrl } from '../utils/urlSafety.js';
 
 // 持久化文件记录前统一清洗元数据：剥离 S3 密钥、Telegram/Discord/HF Token、WebDAV 凭据
 // 等敏感字段（服务端读取时会从系统配置按渠道名重新解析，无需存储）。
@@ -67,7 +70,7 @@ export async function onRequest(context) {  // Contents of context object
     const cleanupRequest = url.searchParams.get('cleanup') === 'true';
     if (cleanupRequest) {
         const uploadId = url.searchParams.get('uploadId');
-        const totalChunks = parseInt(url.searchParams.get('totalChunks')) || 0;
+        const totalChunks = url.searchParams.get('totalChunks');
         return await handleCleanupRequest(context, uploadId, totalChunks);
     }
 
@@ -136,7 +139,9 @@ async function processFileUpload(context, formdata = null) {
     if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
         return createResponse('Error: No file provided', { status: 400 });
     }
-    const fileType = file.type;
+    const policy = validateUploadFile({ fileName: file.name, fileType: file.type, fileSize: file.size }, env);
+    if (!policy.ok) return createUploadPolicyResponse(policy);
+    const fileType = policy.fileType;
     let fileName = file.name;
     const fileSizeBytes = file.size; // 文件大小，单位字节
     const fileSize = (fileSizeBytes / 1024 / 1024).toFixed(2); // 文件大小，单位MB
@@ -259,7 +264,9 @@ async function uploadFileToCloudflareR2(context, fullId, metadata, returnLink) {
     const R2DataBase = env.img_r2;
 
     // 写入R2数据库
-    await R2DataBase.put(fullId, formdata.get('file'));
+    await R2DataBase.put(fullId, formdata.get('file'), {
+        httpMetadata: { contentType: metadata.FileType },
+    });
 
     // 更新metadata
     metadata.Channel = "CloudflareR2";
@@ -384,7 +391,7 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
 
         return createUploadJsonResponse(await buildUploadResults(context, returnLink));
     } catch (error) {
-        return createResponse(`Error: Failed to upload to S3 - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(env, error, { pathname: url.pathname });
     }
 }
 
@@ -523,17 +530,9 @@ async function uploadFileToExternal(context, fullId, metadata, returnLink) {
     if (extUrl === null || extUrl === undefined) {
         return createResponse('Error: No url provided', { status: 400 });
     }
-    // 仅允许 http/https 外链，防止 javascript:/data: 等协议造成开放重定向或 XSS
-    let parsedExtUrl;
-    try {
-        parsedExtUrl = new URL(String(extUrl));
-    } catch {
-        return createResponse('Error: Invalid external url', { status: 400 });
-    }
-    if (parsedExtUrl.protocol !== 'http:' && parsedExtUrl.protocol !== 'https:') {
-        return createResponse('Error: Only http/https external urls are allowed', { status: 400 });
-    }
-    metadata.ExternalLink = parsedExtUrl.toString();
+    const validation = validateHttpUrl(String(extUrl), { allowedHosts: env.EXTERNAL_ALLOWED_HOSTS });
+    if (!validation.ok) return createResponse(`Error: ${validation.error}`, { status: 400 });
+    metadata.ExternalLink = validation.parsed.toString();
     // 写入KV数据库
     try {
         await persistMetadata(db, fullId, metadata);
@@ -551,7 +550,7 @@ async function uploadFileToExternal(context, fullId, metadata, returnLink) {
 
 // 上传到 Discord
 async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
-    const { env, waitUntil, uploadConfig, formdata, specifiedChannelName } = context;
+    const { env, waitUntil, uploadConfig, url, formdata, specifiedChannelName } = context;
     const db = getDatabase(env);
 
     // 获取 Discord 渠道配置
@@ -568,16 +567,7 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
     }
 
     const file = formdata.get('file');
-    const fileSize = file.size;
     const fileName = metadata.FileName;
-
-    // Discord 文件大小限制：Nitro 会员 25MB，免费用户 10MB
-    const isNitro = discordChannel.isNitro || false;
-    const DISCORD_MAX_SIZE = isNitro ? 25 * 1024 * 1024 : 10 * 1024 * 1024;
-    if (fileSize > DISCORD_MAX_SIZE) {
-        const limitMB = isNitro ? 25 : 10;
-        return createResponse(`Error: File size exceeds Discord limit (${limitMB}MB), please use another channel`, { status: 413 });
-    }
 
     const discordAPI = new DiscordAPI(discordChannel.botToken);
 
@@ -627,14 +617,14 @@ async function uploadFileToDiscord(context, fullId, metadata, returnLink) {
 
     } catch (error) {
         console.error('Discord upload error:', error.message);
-        return createResponse(`Error: Discord upload failed - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(env, error, { pathname: url.pathname });
     }
 }
 
 
 // 上传到 HuggingFace
 async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
-    const { env, waitUntil, uploadConfig, formdata, specifiedChannelName } = context;
+    const { env, waitUntil, uploadConfig, url, formdata, specifiedChannelName } = context;
     const db = getDatabase(env);
     const HUGGINGFACE_DIRECT_THRESHOLD = 20 * 1024 * 1024;
 
@@ -684,6 +674,8 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
         metadata.Channel = "HuggingFace";
         metadata.ChannelName = hfChannel.name || "HuggingFace_env";
         metadata.HfRepo = hfChannel.repo;
+        metadata.HfObjectRepo = hfChannel.repo;
+        metadata.HfObjectPrivate = Boolean(hfChannel.isPrivate);
         metadata.HfFilePath = hfFilePath;
         metadata.HfIsPrivate = hfChannel.isPrivate || false;
         metadata.HfFileUrl = result.fileUrl;
@@ -725,7 +717,7 @@ async function uploadFileToHuggingFace(context, fullId, metadata, returnLink) {
 
     } catch (error) {
         console.error('HuggingFace upload error:', error.message);
-        return createResponse(`Error: HuggingFace upload failed - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(env, error, { pathname: url.pathname });
     }
 }
 
@@ -790,7 +782,7 @@ async function uploadFileToWebDAV(context, fullId, metadata, returnLink) {
         return createUploadJsonResponse(await buildUploadResults(context, returnLink));
     } catch (error) {
         console.error('WebDAV upload error:', error.message);
-        return createResponse(`Error: WebDAV upload failed - ${error.message}`, { status: 500 });
+        return createServerErrorResponse(env, error, { pathname: url.pathname });
     }
 }
 
@@ -799,7 +791,7 @@ async function uploadFileToWebDAV(context, fullId, metadata, returnLink) {
 // 优化：用调度表消除重复 if/else，减少代码体积（影响冷启动解析时间）
 // 优化：基于 uploadConfig 实际配置的渠道构建候选列表，跳过未配置渠道避免无效调用
 async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, fileName, fileType, returnLink) {
-    const { url, uploadConfig } = context;
+    const { url, uploadConfig, env } = context;
 
     const RETRY_DISPATCHERS = {
         'CloudflareR2': (ctx, id, meta, link) => uploadFileToCloudflareR2(ctx, id, meta, link),
@@ -855,5 +847,7 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
         }
     }
 
-    return createResponse(JSON.stringify(errMessages), { status: 500 });
+    return createServerErrorResponse(env, Object.assign(new Error('All configured upload channels failed'), { channels: errMessages }), {
+        pathname: url.pathname,
+    });
 }

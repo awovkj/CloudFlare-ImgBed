@@ -49,8 +49,19 @@ describe('deploy assets', () => {
     });
     it('retains all public standalone pages under the repository ignore policy', () => {
         const ignored = addCommonAssetIgnores(loadAssetIgnore('.'));
-        for (const page of ['index.html', 'music.html', 'video.html', 'chat.html', 'stats.html']) {
+        for (const page of ['index.html', 'music.html', 'video.html', 'chat.html', 'stats.html', 'document-preview.html']) {
             assert.equal(shouldIgnoreAsset(page, ignored), false);
         }
+    });
+    it('deploys local document renderers but excludes credentials, test output and source configuration', () => {
+        fs.copyFileSync('.assetsignore', path.join(root, '.assetsignore'));
+        const included = ['document-preview.html', 'js/document-office-worker.js', 'js/document-docx-frame.js',
+            'js/document-archive-guards.js', 'js/vendor/jszip-3.10.1.min.js', 'js/vendor/xlsx-0.20.3.full.min.js'];
+        const excluded = ['js/vendor/README.md', '.playwright-mcp/preview.png', 'private.pem', 'nested/server.key',
+            'credentials.json', 'tsconfig.audit.json', 'build/main.js', 'dist/main.js', 'coverage/index.html', 'nested/worker.log', 'img/\u6d77\u62a5.png'];
+        for (const name of [...included, ...excluded]) put(name);
+        copyDeployAssets(root);
+        for (const name of included) assert.ok(fs.existsSync(path.join(root, '.wrangler-assets', name)), name);
+        for (const name of excluded) assert.equal(fs.existsSync(path.join(root, '.wrangler-assets', name)), false, name);
     });
 });

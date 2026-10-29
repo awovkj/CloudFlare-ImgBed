@@ -21,6 +21,9 @@ execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-music-admin-pa
 execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-tg-upload-performance.mjs')], {
     stdio: 'inherit'
 });
+execFileSync(process.execPath, [path.join(root, 'scripts', 'patch-hf-multipart-completion.mjs')], {
+    stdio: 'inherit'
+});
 
 const copied = copyDeployAssets(root);
 console.log(`Copied ${copied} entries to ${dest}`);

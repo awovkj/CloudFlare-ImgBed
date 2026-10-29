@@ -75,8 +75,8 @@ export async function resolveHuggingFaceCredentials(db, env, metadata = {}) {
     return {
       source: 'config',
       token: channel.token,
-      repo: channel.repo,
-      isPrivate: channel.isPrivate || false,
+      repo: metadata.HfObjectRepo || metadata.HfRepo || channel.repo,
+      isPrivate: Boolean(metadata.HfObjectPrivate || metadata.HfIsPrivate || channel.isPrivate),
       filePath: metadata.HfFilePath,
     };
   }

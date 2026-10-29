@@ -31,6 +31,9 @@ const CHANNEL_IDENTITY_RULES = {
   ],
   huggingface: [
     [
+      ['repo', 'HfObjectRepo'],
+    ],
+    [
       ['repo', 'HfRepo'],
       ['isPrivate', 'HfIsPrivate'],
     ],

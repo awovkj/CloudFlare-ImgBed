@@ -4,6 +4,7 @@ import {
 } from '../../utils/indexManager.js';
 import { getDatabase } from '../../utils/databaseAdapter.js';
 import { createMetadataViewContext, serializeFileRecordForManagement } from '../../utils/metadata/metadataView.js';
+import { createServerErrorResponse } from '../../utils/response.js';
 
 // CORS 跨域响应头
 const corsHeaders = {
@@ -159,6 +160,9 @@ export async function onRequest(context) {
         // 索引读取失败，直接从 KV 中获取所有文件记录
         if (!result.success) {
             const dbRecords = await getAllFileRecords(context.env, dir);
+            if (dbRecords.error) {
+                throw new Error('Failed to list stored files');
+            }
 
             return new Response(JSON.stringify({
                 files: dbRecords.files,
@@ -196,14 +200,7 @@ export async function onRequest(context) {
         });
 
     } catch (error) {
-        console.error('Error in list-indexed API:', error);
-        return new Response(JSON.stringify({
-            error: 'Internal server error',
-            message: error.message
-        }), {
-            status: 500,
-            headers: { "Content-Type": "application/json", ...corsHeaders }
-        });
+        return createServerErrorResponse(context.env, error, { pathname: url.pathname, headers: corsHeaders });
     }
 }
 
@@ -224,11 +221,13 @@ async function getAllFileRecords(env, dir) {
 
             // 检查响应格式
             if (!response || !response.keys || !Array.isArray(response.keys)) {
-                console.error('Invalid response from database list:', response);
-                break;
+                throw new Error('Invalid database listing');
             }
 
             cursor = response.cursor;
+            if (response.list_complete === false && !cursor) {
+                throw new Error('Incomplete database listing');
+            }
 
             // 过滤后按页批量序列化，避免逐条串行等待
             const pageItems = response.keys.filter(item =>

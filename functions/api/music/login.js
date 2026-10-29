@@ -1,6 +1,7 @@
 import { fetchOthersConfig } from '../../utils/sysConfig.js';
 import { verifyPassword } from '../../utils/auth/passwordHash.js';
 import { createSession } from '../../utils/auth/sessionManager.js';
+import { isRequestBodyTooLargeError, createRequestBodyTooLargeResponse } from '../../utils/requestLimits.js';
 import {
     checkMusicLoginRateLimit,
     clearMusicLoginFailures,
@@ -49,7 +50,8 @@ export async function onRequestPost({ request, env }) {
     let body;
     try {
         body = await request.json();
-    } catch {
+    } catch (error) {
+        if (isRequestBodyTooLargeError(error)) return createRequestBodyTooLargeResponse();
         return json({ error: 'Invalid request body' }, 400);
     }
     if (!body || typeof body.password !== 'string' || body.password.length === 0) {

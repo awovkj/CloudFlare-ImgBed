@@ -1,22 +1,44 @@
 .wrangler/
 docs/*
+!docs/audit-upgrade-2026-10.md
 .wrangler-worker-build/
 .wrangler-assets/
+.wrangler-config/
 .wrangler-pages-func-build/
 .wrangler-pages-dev.log
 wrangler.log
 frontend-dist/
 data/*
 node_modules
+/dist/
+/build/
+/coverage/
+*.tsbuildinfo
+*.log
+/logs/
+/tmp/
 .DS_Store
 
 .kiro/
 .vscode/
+.idea/
+*.suo
+*.user
+Thumbs.db
 .omc/
 .claude/
 .workbuddy/
 .workbuddy-ai/
 .worktrees/
+.playwright-mcp/
+.aws/
+.agents/
+.codex/
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
 
 # 可再生构建产物：预压缩文件与 source map（部署时由 .assetsignore 排除，仓库也不追踪）
 *.gz
@@ -31,3 +53,4 @@ screenshot-home.png
 !.env.example
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
